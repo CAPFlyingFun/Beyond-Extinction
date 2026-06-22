@@ -1,0 +1,476 @@
+You are the lead programmer and technical architect for Beyond Extinction.
+
+Your first responsibility is NOT to simply build Chapter One.
+
+Your first responsibility is to build a clean, scalable game engine capable of supporting hundreds of chapters while remaining organized, modular, and easy to expand.
+
+Everything should be built with long-term maintainability in mind.
+
+=========================================================
+PROJECT VISION
+=========================================================
+
+Beyond Extinction is a cinematic, story-driven prehistoric survival adventure inspired by:
+
+• Oceanhorn
+• ARK
+• Lost in Blue
+• Zelda
+• Resident Evil (fixed camera)
+• Final Fantasy style storytelling
+
+This is NOT a sandbox.
+
+This is NOT an MMO.
+
+This is NOT an open-world survival simulator.
+
+It is a story-first adventure game where gameplay and story are woven together.
+
+The player should feel like they are living inside a television series or movie.
+
+Story comes first.
+
+Gameplay reinforces the story.
+
+=========================================================
+PLATFORM
+=========================================================
+
+Primary Platform
+
+• Mobile (iPhone first)
+
+Secondary
+
+• Desktop browser
+
+Everything must work offline.
+
+Do NOT rely on CDNs.
+
+Use local assets.
+
+=========================================================
+TECHNOLOGY
+=========================================================
+
+HTML5
+
+CSS
+
+JavaScript
+
+Three.js
+
+GLTFLoader
+
+GLB models
+
+PNG billboards
+
+Canvas UI
+
+Eventually:
+
+WebAudio
+
+Particles
+
+Lighting
+
+Weather
+
+=========================================================
+PROJECT STRUCTURE
+=========================================================
+
+Beyond Extinction
+
+index.html
+
+/css
+
+/scripts
+
+/engine
+
+/ui
+
+/data
+
+/assets
+
+assets
+
+Characters
+
+Jack.glb
+
+Sarah.glb
+
+Dinosaurs
+
+Environment
+
+Billboards
+
+Portraits
+
+Textures
+
+UI
+
+Audio
+
+Music
+
+Ambience
+
+Voice
+
+SFX
+
+=========================================================
+ENGINE MODULES
+=========================================================
+
+Build the engine first.
+
+Modules should eventually include:
+
+Scene Manager
+
+Camera Manager
+
+Character Controller
+
+Touch Controls
+
+Desktop Controls
+
+Dialogue Manager
+
+Quest Manager
+
+Inventory
+
+Crafting
+
+Audio Manager
+
+Save System
+
+Cutscene Manager
+
+Lighting Manager
+
+Weather Manager
+
+Animation Manager
+
+Interaction System
+
+NPC Manager
+
+Scene Loader
+
+=========================================================
+SCENE SYSTEM
+=========================================================
+
+DO NOT build around chapter numbers.
+
+Build around SCENES.
+
+Example:
+
+MainMenu
+
+OpeningLogo
+
+Prologue_Cafeteria
+
+Prologue_Laboratory
+
+Prologue_Vortex
+
+Chapter1_JungleWake
+
+Chapter1_Stream
+
+Chapter1_Campsite
+
+Chapter2_Ruins
+
+Chapter2_FirstPredator
+
+Chapter2_Cave
+
+The story system simply chains scenes together.
+
+=========================================================
+MAIN MENU
+=========================================================
+
+The menu should immediately feel premium.
+
+Animated ocean.
+
+Island in distance.
+
+Moving clouds.
+
+Flying pterosaurs.
+
+Soft lighting.
+
+Fog.
+
+Subtle camera movement.
+
+Buttons
+
+Continue
+
+New Game
+
+Load Game
+
+Settings
+
+Credits
+
+Background music toggle.
+
+Sound effects toggle.
+
+Voice toggle.
+
+Graphics settings.
+
+Save slots.
+
+=========================================================
+VISUAL STYLE
+=========================================================
+
+Beautiful.
+
+Hopeful.
+
+Natural.
+
+Warm lighting.
+
+Lush jungle.
+
+Not horror.
+
+Not gloomy.
+
+Not cartoon.
+
+Think:
+
+Jurassic World meets Oceanhorn.
+
+=========================================================
+CHARACTERS
+=========================================================
+
+Jack
+
+Playable.
+
+Uses Jack.glb.
+
+Sarah
+
+NPC.
+
+Uses Sarah.glb.
+
+Portrait PNGs are used during dialogue.
+
+3D models are used during gameplay.
+
+=========================================================
+CAMERA
+=========================================================
+
+Fixed cinematic cameras.
+
+Not free camera.
+
+Each area contains camera triggers.
+
+Camera changes naturally as player moves.
+
+Resident Evil.
+
+Oceanhorn.
+
+=========================================================
+MOVEMENT
+=========================================================
+
+Primary
+
+Tap to move.
+
+Secondary
+
+WASD.
+
+Later
+
+Virtual joystick option.
+
+=========================================================
+PROLOGUE
+=========================================================
+
+Scene
+
+Prologue_Cafeteria
+
+Jack begins at the research facility.
+
+Player learns movement.
+
+Objective
+
+Get two coffees.
+
+Walk through laboratory.
+
+Meet Sarah.
+
+Deliver coffee.
+
+Light husband-wife dialogue.
+
+Player learns interaction.
+
+Player helps Sarah stabilize accelerator.
+
+Accelerator begins malfunctioning.
+
+Emergency lights activate.
+
+Player reaches Sarah.
+
+Massive energy vortex forms.
+
+White flash.
+
+Black fade.
+
+=========================================================
+CHAPTER ONE
+=========================================================
+
+Scene
+
+JungleWake
+
+Jack wakes up alone.
+
+Confused.
+
+Beautiful jungle.
+
+Unknown sounds.
+
+No immediate danger.
+
+Objectives
+
+Stand up.
+
+Explore.
+
+Drink water.
+
+Collect sticks.
+
+Collect rocks.
+
+Learn crafting.
+
+Search for Sarah.
+
+Follow clues.
+
+Eventually
+
+Footprints.
+
+Broken equipment.
+
+Scientific crate.
+
+Small harmless dinosaurs.
+
+The chapter should teach gameplay naturally.
+
+=========================================================
+CHAPTER TWO
+=========================================================
+
+The player has basic survival knowledge.
+
+Crafts first spear.
+
+Builds first campfire.
+
+Discovers evidence Sarah survived.
+
+Encounters first aggressive dinosaur.
+
+Learns stealth.
+
+Learns combat.
+
+Discovers mysterious ancient ruins.
+
+=========================================================
+STORY
+=========================================================
+
+The attached Word document(s) contain the official story.
+
+Use Chapters 1 through 3 as the canonical source.
+
+Gameplay should closely follow the story.
+
+Small gameplay adjustments are encouraged to improve pacing, exploration, tutorials, and player engagement.
+
+Do not rewrite the plot.
+
+Instead, adapt it into interactive gameplay while preserving the emotional beats, dialogue, and major story events.
+
+When the story introduces a new location, character, or event, create an appropriate game scene that supports it.
+
+=========================================================
+LONG TERM GOAL
+=========================================================
+
+Build the engine once.
+
+Then allow every future chapter to be built mostly by creating:
+
+new scenes
+
+new dialogue
+
+new quests
+
+new environments
+
+new cutscenes
+
+rather than rewriting engine code.
+
+The final result should feel like a polished commercial indie game that could eventually release on Steam, mobile, and consoles.

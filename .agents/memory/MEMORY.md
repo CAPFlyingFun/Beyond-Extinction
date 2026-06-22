@@ -1,0 +1,3 @@
+- [WebGL screenshot limitation](webgl-screenshot-limitation.md) — the automated screenshot tool's headless browser has no WebGL; Three.js apps show a boot-error fallback there but render fine in the real preview. Verify via tsc + vite build instead.
+- [No-CDN constraint](no-cdn-constraint.md) — Beyond Extinction forbids external CDNs; fonts must be self-hosted via @fontsource (npm), not Google Fonts links.
+- [Spec-fidelity for game tasks](spec-fidelity-game-tasks.md) — game task specs demand literal UX (named controls, exact log strings), not "cinematic equivalents"; match "Done looks like" verbatim.

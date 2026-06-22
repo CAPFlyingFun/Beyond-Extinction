@@ -1,0 +1,101 @@
+/**
+ * Cinematic full-screen overlays: fade-to-black, white flash, centered
+ * captions, and an on-screen clock used in the prologue.
+ */
+export class Overlays {
+  private fade: HTMLDivElement;
+  private flash: HTMLDivElement;
+  private caption: HTMLDivElement;
+  private clock: HTMLDivElement;
+  private hint: HTMLDivElement;
+  private toast: HTMLDivElement;
+  private toastTimer?: ReturnType<typeof setTimeout>;
+
+  constructor(parent: HTMLElement) {
+    this.fade = this.make(parent, "be-fade");
+    this.flash = this.make(parent, "be-flash");
+    this.caption = this.make(parent, "be-caption");
+    this.clock = this.make(parent, "be-clock");
+    this.hint = this.make(parent, "be-hint");
+    this.toast = this.make(parent, "be-toast");
+  }
+
+  private make(parent: HTMLElement, cls: string): HTMLDivElement {
+    const el = document.createElement("div");
+    el.className = cls;
+    parent.appendChild(el);
+    return el;
+  }
+
+  private wait(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  async fadeToBlack(durationMs = 1000): Promise<void> {
+    this.fade.style.transitionDuration = `${durationMs}ms`;
+    this.fade.classList.add("show");
+    await this.wait(durationMs);
+  }
+
+  async fadeFromBlack(durationMs = 1000): Promise<void> {
+    this.fade.style.transitionDuration = `${durationMs}ms`;
+    this.fade.classList.remove("show");
+    await this.wait(durationMs);
+  }
+
+  setBlackInstant(on: boolean): void {
+    this.fade.style.transitionDuration = "0ms";
+    this.fade.classList.toggle("show", on);
+  }
+
+  async whiteFlash(): Promise<void> {
+    this.flash.classList.remove("be-flash--anim");
+    // Force reflow so the animation restarts.
+    void this.flash.offsetWidth;
+    this.flash.classList.add("be-flash--anim");
+    await this.wait(1400);
+  }
+
+  async showCaption(text: string, holdMs = 2600): Promise<void> {
+    this.caption.textContent = text;
+    this.caption.classList.add("show");
+    await this.wait(holdMs);
+    this.caption.classList.remove("show");
+    await this.wait(1000);
+  }
+
+  showClock(time: string, alarm = false): void {
+    this.clock.textContent = time;
+    this.clock.classList.add("show");
+    this.clock.classList.toggle("alarm", alarm);
+  }
+
+  hideClock(): void {
+    this.clock.classList.remove("show");
+  }
+
+  showHint(text: string): void {
+    this.hint.textContent = text;
+    this.hint.classList.add("show");
+  }
+
+  hideHint(): void {
+    this.hint.classList.remove("show");
+  }
+
+  showToast(text: string, holdMs = 2200): void {
+    this.toast.textContent = text;
+    this.toast.classList.add("show");
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => {
+      this.toast.classList.remove("show");
+    }, holdMs);
+  }
+
+  dispose(): void {
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    [this.fade, this.flash, this.caption, this.clock, this.hint, this.toast].forEach(
+      (e) => e.remove(),
+    );
+  }
+}
