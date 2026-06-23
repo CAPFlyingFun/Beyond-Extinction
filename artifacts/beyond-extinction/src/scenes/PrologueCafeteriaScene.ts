@@ -54,6 +54,8 @@ class PrologueCafeteriaScene implements IScene {
   private vortexUniforms!: { uTime: { value: number } };
   private redLights: THREE.PointLight[] = [];
   private coffees: THREE.Mesh[] = [];
+  // Sarah's coffee (handed to her at the intro) so it can be set on the console.
+  private sarahCup: THREE.Object3D | null = null;
   private mixers: THREE.AnimationMixer[] = [];
 
   private ambient!: THREE.AmbientLight;
@@ -84,6 +86,20 @@ class PrologueCafeteriaScene implements IScene {
   private nearConsole = false;
   private reachSarahZone = new THREE.Vector3(20, 0, -36);
   private reachPromptShown = false;
+  // The console desk sits to the EAST of the central accelerator lane (see
+  // buildConsole), so Jack approaches and operates it here while the lane to
+  // Sarah and the vortex stays clear.
+  private consoleDeskWorld = new THREE.Vector3(30, 0, -28);
+
+  // Solid props the player can't walk through, as world-space XZ boxes already
+  // grown by the player's radius (see buildColliders).
+  private colliders: Array<{
+    minX: number;
+    maxX: number;
+    minZ: number;
+    maxZ: number;
+  }> = [];
+  private static readonly PLAYER_RADIUS = 1.5;
 
   constructor(private ctx: SceneContext) {
     this.camera = new THREE.PerspectiveCamera(
@@ -141,11 +157,24 @@ class PrologueCafeteriaScene implements IScene {
     this.buildConsole();
     this.buildVortex();
     this.buildLabDetails();
+    this.buildColliders();
 
     // ---- Characters ----
     this.jack = await this.buildCharacter("Jack", 0x3a78d0);
-    this.jack.position.set(-22, 0, 14);
+    // Spawn in the open aisle between the cafeteria tables — clear of every
+    // collider grown by PLAYER_RADIUS.
+    this.jack.position.set(-24, 0, 14);
     scene.add(this.jack);
+    // Safety net: with the player radius baked into the colliders, never let
+    // Jack spawn wedged inside one — a future prop/spawn tweak shouldn't be able
+    // to soft-lock the opening. Nudge him toward the open floor until clear.
+    for (
+      let i = 0;
+      i < 40 && this.isBlocked(this.jack.position.x, this.jack.position.z);
+      i++
+    ) {
+      this.jack.position.z -= 1;
+    }
 
     this.sarah = await this.buildCharacter("Sarah", 0x36b27a);
     this.sarah.position.set(20, 0, -18);
@@ -233,6 +262,7 @@ class PrologueCafeteriaScene implements IScene {
       const t = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 0.4, 16), tableMat);
       t.position.set(-30 + (i % 2) * 12, 4, 6 + Math.floor(i / 2) * 12);
       t.castShadow = true;
+      t.userData.solid = true;
       const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 4, 8), tableMat);
       leg.position.copy(t.position);
       leg.position.y = 2;
@@ -289,6 +319,7 @@ class PrologueCafeteriaScene implements IScene {
       pillar.position.set(x, 12, z);
       pillar.castShadow = true;
       pillar.receiveShadow = true;
+      pillar.userData.solid = true;
       scene.add(pillar);
       for (const y of [4, 12, 20]) {
         const band = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.5, 2.4), bandMat);
@@ -364,6 +395,57 @@ class PrologueCafeteriaScene implements IScene {
     scene.add(hazard);
   }
 
+  /**
+   * Collect every mesh tagged `userData.solid` into a flat list of world-space
+   * XZ boxes, each grown by the player's radius, so the movement code can keep
+   * Jack from walking through tables, pillars, and the coffee machine. Boxes
+   * (rather than circles) keep the test to a couple of comparisons per prop —
+   * cheap to run every frame — and squaring off the round tables is invisible
+   * at the game's three-quarter camera distance.
+   */
+  private buildColliders(): void {
+    this.scene.updateMatrixWorld(true);
+    const box = new THREE.Box3();
+    const r = PrologueCafeteriaScene.PLAYER_RADIUS;
+    this.scene.traverse((obj) => {
+      if (!obj.userData || !obj.userData.solid) return;
+      box.setFromObject(obj);
+      if (!isFinite(box.min.x) || !isFinite(box.max.x)) return;
+      this.colliders.push({
+        minX: box.min.x - r,
+        maxX: box.max.x + r,
+        minZ: box.min.z - r,
+        maxZ: box.max.z + r,
+      });
+    });
+  }
+
+  /** True if an XZ point lies inside any solid prop's (player-grown) box. */
+  private isBlocked(x: number, z: number): boolean {
+    for (const c of this.colliders) {
+      if (x > c.minX && x < c.maxX && z > c.minZ && z < c.maxZ) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Step from (curX,curZ) toward (nx,nz) one axis at a time so the player
+   * slides along an obstacle instead of sticking to it, and can always back
+   * out the way they came in.
+   */
+  private resolveMove(
+    curX: number,
+    curZ: number,
+    nx: number,
+    nz: number,
+  ): { x: number; z: number } {
+    let x = curX;
+    let z = curZ;
+    if (!this.isBlocked(nx, z)) x = nx;
+    if (!this.isBlocked(x, nz)) z = nz;
+    return { x, z };
+  }
+
   private buildCoffeeMachine(): void {
     const g = new THREE.Group();
     const body = new THREE.Mesh(
@@ -393,6 +475,7 @@ class PrologueCafeteriaScene implements IScene {
 
     g.add(body, panel, counter);
     g.position.set(-30, 0, -10);
+    g.userData.solid = true;
     this.coffeeMachine = body;
     this.scene.add(g);
 
@@ -455,18 +538,51 @@ class PrologueCafeteriaScene implements IScene {
     await this.tween(cup.position, handWorld, 600);
     if (this.disposed) return;
     this.sarah.attach(cup);
+    this.sarahCup = cup;
+  }
+
+  /**
+   * When Jack works the console, both characters set their coffees down on the
+   * desktop: Jack's carried cup and the one he gave Sarah detach into world
+   * space and glide onto the desk surface.
+   */
+  private async setCoffeesOnConsole(): Promise<void> {
+    const top = 4.94; // desk top (y=4.5) + scaled cup half-height
+    const slots = [
+      new THREE.Vector3(28.8, top, -26.5),
+      new THREE.Vector3(28.8, top, -29.5),
+    ];
+    const cups: THREE.Object3D[] = [];
+    while (this.coffees.length) {
+      const c = this.coffees.pop();
+      if (c) cups.push(c);
+    }
+    if (this.sarahCup) {
+      cups.push(this.sarahCup);
+      this.sarahCup = null;
+    }
+    const tweens = cups.slice(0, slots.length).map((cup, i) => {
+      this.scene.attach(cup);
+      return this.tween(cup.position, slots[i], 450);
+    });
+    await Promise.all(tweens);
   }
 
   private buildConsole(): void {
     const g = new THREE.Group();
+    // The desk is a control bank standing off to the EAST of the central
+    // accelerator lane (long axis along Z), not a wall across it. This keeps the
+    // straight path from the approach point to the accelerator/vortex clear, so
+    // Jack and Sarah walk past the console rather than through it.
     const desk = new THREE.Mesh(
-      new THREE.BoxGeometry(12, 1, 4),
+      new THREE.BoxGeometry(4, 1, 12),
       new THREE.MeshStandardMaterial({ color: 0x2b3a52, roughness: 0.5, metalness: 0.4 }),
     );
-    desk.position.set(0, 4, 0);
+    desk.position.set(10, 4, 0);
     desk.castShadow = true;
     g.add(desk);
-    // Holographic screens
+    // Holographic screens line the desk's west face, angled toward the lane so
+    // the player reads them while operating the console from the west.
     for (let i = -1; i <= 1; i++) {
       const screen = new THREE.Mesh(
         new THREE.PlaneGeometry(3.4, 2.2),
@@ -478,11 +594,12 @@ class PrologueCafeteriaScene implements IScene {
           opacity: 0.92,
         }),
       );
-      screen.position.set(i * 4, 7, -0.5);
-      screen.rotation.x = -0.18;
+      screen.position.set(7.8, 7, i * 4);
+      screen.rotation.y = -Math.PI / 2;
+      screen.rotation.x = -0.12;
       g.add(screen);
     }
-    // Accelerator ring behind the console
+    // Accelerator ring — centered in the lane behind the approach point.
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(9, 0.7, 16, 60),
       new THREE.MeshStandardMaterial({
@@ -500,6 +617,9 @@ class PrologueCafeteriaScene implements IScene {
     g.position.set(20, 0, -28);
     this.console = g;
     desk.userData.kind = "console";
+    // Permanently solid: it sits beside the lane, so it never needs to be
+    // dropped for the finale.
+    desk.userData.solid = true;
     this.scene.add(g);
     this.interactables.push(desk);
   }
@@ -611,14 +731,41 @@ class PrologueCafeteriaScene implements IScene {
     this.groundAndScale(model, PrologueCafeteriaScene.CHARACTER_HEIGHT);
     if (model.animations && model.animations.length > 0) {
       const mixer = new THREE.AnimationMixer(model);
-      const idle =
-        THREE.AnimationClip.findByName(model.animations, "Idle") ??
-        model.animations.find((c) => /idle/i.test(c.name)) ??
-        model.animations[0];
-      mixer.clipAction(idle).play();
+      const clips = model.animations;
+      const byRe = (re: RegExp) => clips.find((c) => re.test(c.name));
+      const idleClip =
+        THREE.AnimationClip.findByName(clips, "Idle") ??
+        byRe(/idle/i) ??
+        clips[0];
+      // Prefer a plain walk; fall back to any walk/run-style locomotion clip so
+      // every rig (Jack: Walking, Sarah: Walking/Casual_Walk) animates on move.
+      const walkClip =
+        byRe(/^walking$/i) ??
+        byRe(/walk/i) ??
+        byRe(/^running$/i) ??
+        byRe(/run/i) ??
+        null;
+
+      // Both clips run continuously; locomotion is a weighted crossfade between
+      // them (see applyLocomotion), so movement reads as walking and stopping
+      // settles back to idle without a pop.
+      const idleAction = mixer.clipAction(idleClip);
+      idleAction.play();
+      const actions: {
+        idle: THREE.AnimationAction;
+        walk?: THREE.AnimationAction;
+      } = { idle: idleAction };
+      if (walkClip && walkClip !== idleClip) {
+        const walkAction = mixer.clipAction(walkClip);
+        walkAction.play();
+        walkAction.setEffectiveWeight(0);
+        actions.walk = walkAction;
+      }
+
       this.mixers.push(mixer);
       group.userData.mixer = mixer;
-      group.userData.clips = model.animations; // for later walk/idle switching
+      group.userData.actions = actions;
+      group.userData.walkBlend = 0;
     }
     group.userData.name = name;
     return group;
@@ -633,6 +780,33 @@ class PrologueCafeteriaScene implements IScene {
     }
     const grounded = new THREE.Box3().setFromObject(model);
     model.position.y -= grounded.min.y;
+  }
+
+  /**
+   * Crossfade a character between its idle and walk clips by easing the two
+   * action weights toward the movement state every frame. Both clips always
+   * play; only the weights change, which sidesteps the timing pitfalls of
+   * scheduled crossfades and reads as a smooth walk<->idle transition.
+   */
+  private applyLocomotion(
+    group: THREE.Group,
+    moving: boolean,
+    dt: number,
+  ): void {
+    const actions = group.userData.actions as
+      | { idle: THREE.AnimationAction; walk?: THREE.AnimationAction }
+      | undefined;
+    if (!actions || !actions.walk) return;
+    const target = moving ? 1 : 0;
+    const k = 1 - Math.pow(0.0015, dt); // ~0.15s ease, frame-rate independent
+    const blend = THREE.MathUtils.lerp(
+      (group.userData.walkBlend as number) ?? 0,
+      target,
+      k,
+    );
+    group.userData.walkBlend = blend;
+    actions.walk.setEffectiveWeight(blend);
+    actions.idle.setEffectiveWeight(1 - blend);
   }
 
   // ---------- Interaction & phases ----------
@@ -709,9 +883,11 @@ class PrologueCafeteriaScene implements IScene {
   }
 
   private updateConsolePrompt(eEdge: boolean): void {
-    const consoleFront = this.console.position
+    // Approach point is just west of the desk (in the lane), since the desk now
+    // sits to the east.
+    const consoleFront = this.consoleDeskWorld
       .clone()
-      .add(new THREE.Vector3(0, 0, 8));
+      .add(new THREE.Vector3(-6, 0, 0));
     const near = this.jack.position.distanceTo(consoleFront) < 7;
     if (near !== this.nearConsole) {
       this.nearConsole = near;
@@ -740,8 +916,8 @@ class PrologueCafeteriaScene implements IScene {
     this.phase = "to-console";
     this.ctx.quest.setObjective("Follow Sarah to the accelerator console.");
     this.ctx.overlays.showHint("Walk to the console");
-    // Sarah walks to the console.
-    this.sarahTarget = new THREE.Vector3(20, 0, -24);
+    // Sarah walks to the console, beside Jack on the west side of the desk.
+    this.sarahTarget = new THREE.Vector3(24, 0, -26);
   }
 
   private async triggerConsoleDialogue(): Promise<void> {
@@ -749,7 +925,10 @@ class PrologueCafeteriaScene implements IScene {
     this.nearConsole = false;
     this.ctx.input.setEnabled(false);
     this.ctx.overlays.hideHint();
-    this.faceTowards(this.jack, this.console.position);
+    this.faceTowards(this.jack, this.consoleDeskWorld);
+    // Both characters set their coffees down on the desk before working it.
+    await this.setCoffeesOnConsole();
+    if (this.disposed) return;
     this.ctx.overlays.showClock("11:46 PM");
     await this.ctx.dialogue.play(consoleBeat);
     if (this.disposed) return;
@@ -769,7 +948,8 @@ class PrologueCafeteriaScene implements IScene {
     this.ctx.overlays.showClock("11:47 PM", true);
     // Emergency lights were created up-front (see buildRedLights); the pulse in
     // update() ramps their intensity now that the cascade is active.
-    // Sarah runs to the accelerator; the player must reach her there.
+    // Sarah runs down the now-clear lane to the accelerator; the player follows.
+    // The console sits to the east of the lane, so nothing needs to be dropped.
     this.sarahTarget = this.reachSarahZone.clone();
     this.phase = "reach-sarah";
     this.reachPromptShown = false;
@@ -958,16 +1138,35 @@ class PrologueCafeteriaScene implements IScene {
       this.phase === "to-sarah" ||
       this.phase === "to-console" ||
       this.phase === "reach-sarah";
+    let jackMoving = false;
     if (freeRoam) {
       const speed = 16;
       const mv = this.ctx.input.getMoveVector();
       if (mv.lengthSq() > 0) {
         // Keyboard movement cancels any pending click destination.
         this.clickTarget = null;
-        this.jack.position.x += mv.x * speed * dt;
-        this.jack.position.z += mv.y * speed * dt;
-        this.jack.position.x = THREE.MathUtils.clamp(this.jack.position.x, -55, 55);
-        this.jack.position.z = THREE.MathUtils.clamp(this.jack.position.z, -38, 40);
+        const nx = THREE.MathUtils.clamp(
+          this.jack.position.x + mv.x * speed * dt,
+          -55,
+          55,
+        );
+        const nz = THREE.MathUtils.clamp(
+          this.jack.position.z + mv.y * speed * dt,
+          -38,
+          40,
+        );
+        const r = this.resolveMove(
+          this.jack.position.x,
+          this.jack.position.z,
+          nx,
+          nz,
+        );
+        // Only animate the walk if a collider didn't fully cancel the step.
+        jackMoving =
+          Math.hypot(r.x - this.jack.position.x, r.z - this.jack.position.z) >
+          1e-3;
+        this.jack.position.x = r.x;
+        this.jack.position.z = r.z;
         this.jack.rotation.y = Math.atan2(mv.x, mv.y);
       } else if (this.clickTarget) {
         // Click-to-move: walk toward the clicked floor point.
@@ -975,13 +1174,40 @@ class PrologueCafeteriaScene implements IScene {
         to.y = 0;
         if (to.length() > 0.6) {
           to.normalize();
-          this.jack.position.addScaledVector(to, speed * dt);
+          const step = speed * dt;
+          const nx = THREE.MathUtils.clamp(
+            this.jack.position.x + to.x * step,
+            -55,
+            55,
+          );
+          const nz = THREE.MathUtils.clamp(
+            this.jack.position.z + to.z * step,
+            -38,
+            40,
+          );
+          const r = this.resolveMove(
+            this.jack.position.x,
+            this.jack.position.z,
+            nx,
+            nz,
+          );
+          const moved = Math.hypot(
+            r.x - this.jack.position.x,
+            r.z - this.jack.position.z,
+          );
+          this.jack.position.x = r.x;
+          this.jack.position.z = r.z;
           this.jack.rotation.y = Math.atan2(to.x, to.z);
+          jackMoving = moved > step * 0.05;
+          // A prop fully blocks the straight path — abandon the click target
+          // rather than grinding against it forever.
+          if (moved < step * 0.05) this.clickTarget = null;
         } else {
           this.clickTarget = null;
         }
       }
     }
+    this.applyLocomotion(this.jack, jackMoving, dt);
 
     // Coffee pickup: proximity prompt + E to collect.
     if (this.phase === "coffee") {
@@ -992,6 +1218,7 @@ class PrologueCafeteriaScene implements IScene {
     }
 
     // Sarah walks to her target if set.
+    let sarahMoving = false;
     if (this.sarahTarget) {
       const toT = new THREE.Vector3().subVectors(this.sarahTarget, this.sarah.position);
       toT.y = 0;
@@ -999,10 +1226,12 @@ class PrologueCafeteriaScene implements IScene {
         toT.normalize();
         this.sarah.position.addScaledVector(toT, 10 * dt);
         this.sarah.rotation.y = Math.atan2(toT.x, toT.z);
+        sarahMoving = true;
       } else {
         this.sarahTarget = null;
       }
     }
+    this.applyLocomotion(this.sarah, sarahMoving, dt);
 
     // Proximity trigger: meeting Sarah starts the intro exchange.
     if (this.phase === "to-sarah") {
