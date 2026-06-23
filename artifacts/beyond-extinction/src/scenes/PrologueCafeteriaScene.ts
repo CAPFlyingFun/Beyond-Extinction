@@ -54,6 +54,8 @@ class PrologueCafeteriaScene implements IScene {
   private vortexUniforms!: { uTime: { value: number } };
   private redLights: THREE.PointLight[] = [];
   private coffees: THREE.Mesh[] = [];
+  // Sarah's coffee (handed to her at the intro) so it can be set on the console.
+  private sarahCup: THREE.Object3D | null = null;
   private mixers: THREE.AnimationMixer[] = [];
 
   private ambient!: THREE.AmbientLight;
@@ -84,11 +86,13 @@ class PrologueCafeteriaScene implements IScene {
   private nearConsole = false;
   private reachSarahZone = new THREE.Vector3(20, 0, -36);
   private reachPromptShown = false;
+  // The console desk sits to the EAST of the central accelerator lane (see
+  // buildConsole), so Jack approaches and operates it here while the lane to
+  // Sarah and the vortex stays clear.
+  private consoleDeskWorld = new THREE.Vector3(30, 0, -28);
 
   // Solid props the player can't walk through, as world-space XZ boxes already
-  // grown by the player's radius (see buildColliders). The console desk is
-  // included during exploration but dropped for the finale (see
-  // excludeConsoleSolid) so Jack can pass behind it to reach Sarah.
+  // grown by the player's radius (see buildColliders).
   private colliders: Array<{
     minX: number;
     maxX: number;
@@ -96,9 +100,6 @@ class PrologueCafeteriaScene implements IScene {
     maxZ: number;
   }> = [];
   private static readonly PLAYER_RADIUS = 1.5;
-  // Once the finale begins, Jack must walk behind the console to reach Sarah,
-  // so the console's collider is dropped from that point on.
-  private excludeConsoleSolid = false;
 
   constructor(private ctx: SceneContext) {
     this.camera = new THREE.PerspectiveCamera(
@@ -408,7 +409,6 @@ class PrologueCafeteriaScene implements IScene {
     const r = PrologueCafeteriaScene.PLAYER_RADIUS;
     this.scene.traverse((obj) => {
       if (!obj.userData || !obj.userData.solid) return;
-      if (obj.userData.isConsole && this.excludeConsoleSolid) return;
       box.setFromObject(obj);
       if (!isFinite(box.min.x) || !isFinite(box.max.x)) return;
       this.colliders.push({
@@ -418,13 +418,6 @@ class PrologueCafeteriaScene implements IScene {
         maxZ: box.max.z + r,
       });
     });
-  }
-
-  /** Rebuild the collider list from scratch — used after toggling a prop's
-   * solidity for a story beat (e.g. dropping the console for the finale). */
-  private rebuildColliders(): void {
-    this.colliders.length = 0;
-    this.buildColliders();
   }
 
   /** True if an XZ point lies inside any solid prop's (player-grown) box. */
@@ -545,18 +538,51 @@ class PrologueCafeteriaScene implements IScene {
     await this.tween(cup.position, handWorld, 600);
     if (this.disposed) return;
     this.sarah.attach(cup);
+    this.sarahCup = cup;
+  }
+
+  /**
+   * When Jack works the console, both characters set their coffees down on the
+   * desktop: Jack's carried cup and the one he gave Sarah detach into world
+   * space and glide onto the desk surface.
+   */
+  private async setCoffeesOnConsole(): Promise<void> {
+    const top = 4.94; // desk top (y=4.5) + scaled cup half-height
+    const slots = [
+      new THREE.Vector3(28.8, top, -26.5),
+      new THREE.Vector3(28.8, top, -29.5),
+    ];
+    const cups: THREE.Object3D[] = [];
+    while (this.coffees.length) {
+      const c = this.coffees.pop();
+      if (c) cups.push(c);
+    }
+    if (this.sarahCup) {
+      cups.push(this.sarahCup);
+      this.sarahCup = null;
+    }
+    const tweens = cups.slice(0, slots.length).map((cup, i) => {
+      this.scene.attach(cup);
+      return this.tween(cup.position, slots[i], 450);
+    });
+    await Promise.all(tweens);
   }
 
   private buildConsole(): void {
     const g = new THREE.Group();
+    // The desk is a control bank standing off to the EAST of the central
+    // accelerator lane (long axis along Z), not a wall across it. This keeps the
+    // straight path from the approach point to the accelerator/vortex clear, so
+    // Jack and Sarah walk past the console rather than through it.
     const desk = new THREE.Mesh(
-      new THREE.BoxGeometry(12, 1, 4),
+      new THREE.BoxGeometry(4, 1, 12),
       new THREE.MeshStandardMaterial({ color: 0x2b3a52, roughness: 0.5, metalness: 0.4 }),
     );
-    desk.position.set(0, 4, 0);
+    desk.position.set(10, 4, 0);
     desk.castShadow = true;
     g.add(desk);
-    // Holographic screens
+    // Holographic screens line the desk's west face, angled toward the lane so
+    // the player reads them while operating the console from the west.
     for (let i = -1; i <= 1; i++) {
       const screen = new THREE.Mesh(
         new THREE.PlaneGeometry(3.4, 2.2),
@@ -568,11 +594,12 @@ class PrologueCafeteriaScene implements IScene {
           opacity: 0.92,
         }),
       );
-      screen.position.set(i * 4, 7, -0.5);
-      screen.rotation.x = -0.18;
+      screen.position.set(7.8, 7, i * 4);
+      screen.rotation.y = -Math.PI / 2;
+      screen.rotation.x = -0.12;
       g.add(screen);
     }
-    // Accelerator ring behind the console
+    // Accelerator ring — centered in the lane behind the approach point.
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(9, 0.7, 16, 60),
       new THREE.MeshStandardMaterial({
@@ -590,11 +617,9 @@ class PrologueCafeteriaScene implements IScene {
     g.position.set(20, 0, -28);
     this.console = g;
     desk.userData.kind = "console";
-    // The console blocks the player during exploration; its collider is dropped
-    // once the finale needs Jack to pass behind it to reach Sarah (see
-    // activateAlarm -> rebuildColliders).
+    // Permanently solid: it sits beside the lane, so it never needs to be
+    // dropped for the finale.
     desk.userData.solid = true;
-    desk.userData.isConsole = true;
     this.scene.add(g);
     this.interactables.push(desk);
   }
@@ -858,9 +883,11 @@ class PrologueCafeteriaScene implements IScene {
   }
 
   private updateConsolePrompt(eEdge: boolean): void {
-    const consoleFront = this.console.position
+    // Approach point is just west of the desk (in the lane), since the desk now
+    // sits to the east.
+    const consoleFront = this.consoleDeskWorld
       .clone()
-      .add(new THREE.Vector3(0, 0, 8));
+      .add(new THREE.Vector3(-6, 0, 0));
     const near = this.jack.position.distanceTo(consoleFront) < 7;
     if (near !== this.nearConsole) {
       this.nearConsole = near;
@@ -889,8 +916,8 @@ class PrologueCafeteriaScene implements IScene {
     this.phase = "to-console";
     this.ctx.quest.setObjective("Follow Sarah to the accelerator console.");
     this.ctx.overlays.showHint("Walk to the console");
-    // Sarah walks to the console.
-    this.sarahTarget = new THREE.Vector3(20, 0, -24);
+    // Sarah walks to the console, beside Jack on the west side of the desk.
+    this.sarahTarget = new THREE.Vector3(24, 0, -26);
   }
 
   private async triggerConsoleDialogue(): Promise<void> {
@@ -898,7 +925,10 @@ class PrologueCafeteriaScene implements IScene {
     this.nearConsole = false;
     this.ctx.input.setEnabled(false);
     this.ctx.overlays.hideHint();
-    this.faceTowards(this.jack, this.console.position);
+    this.faceTowards(this.jack, this.consoleDeskWorld);
+    // Both characters set their coffees down on the desk before working it.
+    await this.setCoffeesOnConsole();
+    if (this.disposed) return;
     this.ctx.overlays.showClock("11:46 PM");
     await this.ctx.dialogue.play(consoleBeat);
     if (this.disposed) return;
@@ -918,11 +948,8 @@ class PrologueCafeteriaScene implements IScene {
     this.ctx.overlays.showClock("11:47 PM", true);
     // Emergency lights were created up-front (see buildRedLights); the pulse in
     // update() ramps their intensity now that the cascade is active.
-    // Sarah runs to the accelerator; the player must reach her there. Drop the
-    // console collider so Jack can pass behind the desk to reach Sarah without
-    // getting wedged on it.
-    this.excludeConsoleSolid = true;
-    this.rebuildColliders();
+    // Sarah runs down the now-clear lane to the accelerator; the player follows.
+    // The console sits to the east of the lane, so nothing needs to be dropped.
     this.sarahTarget = this.reachSarahZone.clone();
     this.phase = "reach-sarah";
     this.reachPromptShown = false;
