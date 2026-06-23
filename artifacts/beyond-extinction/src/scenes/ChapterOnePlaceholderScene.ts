@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { CameraManager } from "../engine/CameraManager";
+import { loadTexture } from "../engine/assets";
+import { createBillboard, updateBillboardsYAxis } from "../engine/Billboard";
 
 /**
  * Chapter One opening: Jack wakes on a sunlit beach beneath an impossibly blue,
@@ -19,6 +21,7 @@ class ChapterOnePlaceholderScene implements IScene {
   private oceanUniforms!: { uTime: { value: number } };
   private ocean!: THREE.Mesh;
   private dodo!: THREE.Group;
+  private billboards: THREE.Mesh[] = [];
   private hissDone = false;
   private startTime = 0;
   private disposed = false;
@@ -73,22 +76,8 @@ class ChapterOnePlaceholderScene implements IScene {
     this.ocean.position.set(0, -0.5, -260);
     scene.add(this.ocean);
 
-    // Palms along the treeline
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2b, roughness: 1 });
-    const leafMat = new THREE.MeshStandardMaterial({ color: 0x2f7a34, roughness: 0.9, flatShading: true });
-    for (let i = 0; i < 16; i++) {
-      const tree = new THREE.Group();
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 1.2, 12, 6), trunkMat);
-      trunk.position.y = 6;
-      trunk.castShadow = true;
-      const canopy = new THREE.Mesh(new THREE.IcosahedronGeometry(4, 0), leafMat);
-      canopy.position.y = 13;
-      canopy.castShadow = true;
-      tree.add(trunk, canopy);
-      tree.position.set(-120 + i * 16 + Math.random() * 6, 0, 60 + Math.random() * 30);
-      tree.scale.setScalar(0.9 + Math.random() * 0.6);
-      scene.add(tree);
-    }
+    await this.buildJungle();
+    if (this.disposed) return;
 
     // Jack lying on the sand (placeholder capsule).
     const jack = new THREE.Group();
@@ -114,6 +103,89 @@ class ChapterOnePlaceholderScene implements IScene {
 
     this.startTime = performance.now();
     this.runIntro();
+  }
+
+  /**
+   * Billboard jungle dressing along the treeline: a wide distant backdrop
+   * layer, a mid layer of trees, and foreground vegetation/rock/log scatter
+   * between the player and the treeline. All cutout planes (see
+   * engine/Billboard.ts) — far cheaper than full GLB foliage, especially on
+   * phones, and easy to swap for real geometry later.
+   */
+  private async buildJungle(): Promise<void> {
+    const [backdrop, palm, jungleTree, vine, bush, fern, grass, rock, log] =
+      await Promise.all([
+        loadTexture("assets/billboards/billboard_jungle_background_layer_01.png"),
+        loadTexture("assets/billboards/billboard_palm_tree_01.png"),
+        loadTexture("assets/billboards/billboard_jungle_tree_01.png"),
+        loadTexture("assets/billboards/billboard_vine_cluster_01.png"),
+        loadTexture("assets/billboards/billboard_bush_01.png"),
+        loadTexture("assets/billboards/billboard_fern_01.png"),
+        loadTexture("assets/billboards/billboard_grass_clump_01.png"),
+        loadTexture("assets/billboards/billboard_rock_01.png"),
+        loadTexture("assets/billboards/billboard_fallen_log_01.png"),
+      ]);
+    if (this.disposed) return;
+    const scene = this.scene;
+
+    // Distant backdrop wall — a few overlapping wide copies so there's no
+    // visible seam between them.
+    if (backdrop) {
+      for (let i = -2; i <= 2; i++) {
+        const b = createBillboard(backdrop, 70);
+        b.position.set(i * 95, 0, 115 + Math.random() * 15);
+        scene.add(b);
+        this.billboards.push(b);
+      }
+    }
+
+    // Treeline — alternating palms and jungle trees.
+    const treeTextures = [palm, jungleTree].filter((t): t is THREE.Texture => !!t);
+    if (treeTextures.length) {
+      for (let i = 0; i < 16; i++) {
+        const tex = treeTextures[i % treeTextures.length];
+        const height = 16 + Math.random() * 8;
+        const tree = createBillboard(tex, height);
+        tree.position.set(-120 + i * 16 + Math.random() * 6, 0, 60 + Math.random() * 30);
+        scene.add(tree);
+        this.billboards.push(tree);
+      }
+    }
+
+    // Vine clusters hanging near a few of the trees.
+    if (vine) {
+      for (let i = 0; i < 4; i++) {
+        const v = createBillboard(vine, 8 + Math.random() * 4);
+        v.position.set(-90 + i * 55 + Math.random() * 10, 6, 58 + Math.random() * 15);
+        scene.add(v);
+        this.billboards.push(v);
+      }
+    }
+
+    // Foreground scatter between the player and the treeline.
+    const scatterTextures = [bush, fern, grass, rock].filter(
+      (t): t is THREE.Texture => !!t,
+    );
+    if (scatterTextures.length) {
+      for (let i = 0; i < 14; i++) {
+        const tex = scatterTextures[i % scatterTextures.length];
+        const height = 2.5 + Math.random() * 2.5;
+        const s = createBillboard(tex, height);
+        s.position.set(-60 + Math.random() * 120, 0, 18 + Math.random() * 28);
+        scene.add(s);
+        this.billboards.push(s);
+      }
+    }
+
+    // A couple of fallen logs near the sand/jungle boundary.
+    if (log) {
+      for (let i = 0; i < 2; i++) {
+        const l = createBillboard(log, 3);
+        l.position.set(-30 + i * 60 + Math.random() * 10, 0, 40 + Math.random() * 10);
+        scene.add(l);
+        this.billboards.push(l);
+      }
+    }
   }
 
   private buildDodo(): THREE.Group {
@@ -145,6 +217,14 @@ class ChapterOnePlaceholderScene implements IScene {
     await new Promise((r) => setTimeout(r, 1400));
     if (this.disposed) return;
     await this.ctx.overlays.showCaption("Chapter One", 2400);
+    if (this.disposed) return;
+    // The prologue's cutscene leaves the screen manually blacked out
+    // (setBlackInstant + goTo(..., fade: false)) so its own white-flash/black
+    // beat isn't interrupted by SceneManager's crossfade. Nothing clears that
+    // black overlay once we're entered, so reveal the beach here — otherwise
+    // the rest of this intro (including the dialogue box) plays out fully
+    // hidden behind it.
+    await this.ctx.overlays.fadeFromBlack(900);
     if (this.disposed) return;
     await this.ctx.overlays.showCaption(
       "The sky was the wrong shade of blue. Too bright. Too much air.",
@@ -211,6 +291,7 @@ class ChapterOnePlaceholderScene implements IScene {
   update(dt: number, elapsed: number): void {
     this.oceanUniforms.uTime.value = elapsed;
     this.cam.update(dt, elapsed);
+    updateBillboardsYAxis(this.billboards, this.camera.position);
     // Dodo bobs and waddles.
     if (this.dodo) {
       this.dodo.position.y = Math.abs(Math.sin(elapsed * 4)) * 0.3;
