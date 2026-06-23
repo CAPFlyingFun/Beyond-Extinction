@@ -91,8 +91,11 @@ self.addEventListener("fetch", (event) => {
       (async () => {
         try {
           const fresh = await fetch(req);
-          const cache = await caches.open(CACHE);
-          cache.put(BASE + "index.html", fresh.clone());
+          // Only cache a genuine shell response — never an error/redirect page.
+          if (fresh && fresh.ok && fresh.type === "basic") {
+            const cache = await caches.open(CACHE);
+            cache.put(BASE + "index.html", fresh.clone());
+          }
           return fresh;
         } catch {
           const cache = await caches.open(CACHE);
