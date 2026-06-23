@@ -14,6 +14,14 @@ import {
 } from "../engine/Settings";
 import { autoFramingScale } from "../engine/cameraFraming";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
+import {
+  createEquipmentPanelTexture,
+  createFloorTexture,
+  createHazardStripeTexture,
+  createWallTexture,
+  FLOOR_TEXTURE_WORLD_SIZE,
+  WALL_TEXTURE_WORLD_SIZE,
+} from "../engine/proceduralTextures";
 
 type Phase =
   | "coffee"
@@ -36,6 +44,7 @@ class PrologueCafeteriaScene implements IScene {
   readonly name = "prologue-cafeteria";
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
+  private viewportHeight = window.innerHeight;
 
   private jack!: THREE.Group;
   private sarah!: THREE.Group;
@@ -101,18 +110,37 @@ class PrologueCafeteriaScene implements IScene {
     key.shadow.mapSize.set(1024, 1024);
     scene.add(key);
     this.mainLights.push(key);
-    // Ceiling fill lights (cool clinical glow).
+    // Ceiling fill lights (cool clinical glow), each with a visible fixture
+    // housing so the light source reads as part of the room, not floating.
+    const fixtureMat = new THREE.MeshStandardMaterial({
+      color: 0xe7f3ff,
+      emissive: 0xbfe0ff,
+      emissiveIntensity: 1.2,
+      roughness: 0.4,
+    });
+    const fixtureHousingMat = new THREE.MeshStandardMaterial({
+      color: 0x2a3650,
+      roughness: 0.6,
+      metalness: 0.3,
+    });
     for (let i = -2; i <= 2; i++) {
       const strip = new THREE.PointLight(0xcfe4ff, 12, 60, 2);
       strip.position.set(i * 12, 14, 0);
       scene.add(strip);
       this.mainLights.push(strip);
+
+      const fixture = new THREE.Mesh(new THREE.BoxGeometry(5, 0.4, 1.6), fixtureMat);
+      const housing = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.3, 2), fixtureHousingMat);
+      fixture.position.set(i * 12, 13.6, 0);
+      housing.position.set(i * 12, 13.95, 0);
+      scene.add(fixture, housing);
     }
 
     this.buildRoom();
     this.buildCoffeeMachine();
     this.buildConsole();
     this.buildVortex();
+    this.buildLabDetails();
 
     // ---- Characters ----
     this.jack = await this.buildCharacter("Jack", 0x3a78d0);
@@ -167,25 +195,28 @@ class PrologueCafeteriaScene implements IScene {
 
   private buildRoom(): void {
     const scene = this.scene;
+    const floorTex = createFloorTexture();
+    const floorRepeat = 120 / FLOOR_TEXTURE_WORLD_SIZE;
+    floorTex.repeat.set(floorRepeat, floorRepeat);
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(120, 120),
-      new THREE.MeshStandardMaterial({ color: 0x1b2738, roughness: 0.7, metalness: 0.2 }),
+      new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.75, metalness: 0.15 }),
     );
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
     scene.add(floor);
     this.floor = floor;
 
-    // Grid sheen lines on floor
-    const grid = new THREE.GridHelper(120, 40, 0x2a3c55, 0x223046);
-    (grid.material as THREE.Material).opacity = 0.35;
-    (grid.material as THREE.Material).transparent = true;
-    grid.position.y = 0.02;
-    scene.add(grid);
-
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x202d40, roughness: 0.85 });
+    // Each wall clones the base wall texture so it can carry its own repeat
+    // (whole tiles only — no stretching) without affecting the other walls.
+    const wallTexBase = createWallTexture();
     const mkWall = (w: number, h: number, x: number, y: number, z: number, ry: number) => {
-      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.6), wallMat);
+      const tex = wallTexBase.clone();
+      tex.repeat.set(w / WALL_TEXTURE_WORLD_SIZE.width, h / WALL_TEXTURE_WORLD_SIZE.height);
+      const wall = new THREE.Mesh(
+        new THREE.BoxGeometry(w, h, 0.6),
+        new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 }),
+      );
       wall.position.set(x, y, z);
       wall.rotation.y = ry;
       wall.receiveShadow = true;
@@ -227,6 +258,110 @@ class PrologueCafeteriaScene implements IScene {
     );
     sign.position.set(20, 16, -44.6);
     scene.add(sign);
+  }
+
+  /** Set dressing that sells "research facility" beyond bare walls/floor: support
+   * pillars, ceiling ducting, wall equipment racks, and a floor hazard stripe
+   * marking the boundary between the cafeteria and the lab-proper beyond it. */
+  private buildLabDetails(): void {
+    const scene = this.scene;
+
+    const pillarMat = new THREE.MeshStandardMaterial({
+      color: 0x283450,
+      roughness: 0.6,
+      metalness: 0.4,
+    });
+    const bandMat = new THREE.MeshStandardMaterial({
+      color: 0x1a2438,
+      roughness: 0.5,
+      metalness: 0.5,
+    });
+    const pillarPositions: Array<[number, number]> = [
+      [-55, -40],
+      [55, -40],
+      [-55, 40],
+      [55, 40],
+      [-55, 0],
+      [55, 0],
+    ];
+    for (const [x, z] of pillarPositions) {
+      const pillar = new THREE.Mesh(new THREE.BoxGeometry(2, 24, 2), pillarMat);
+      pillar.position.set(x, 12, z);
+      pillar.castShadow = true;
+      pillar.receiveShadow = true;
+      scene.add(pillar);
+      for (const y of [4, 12, 20]) {
+        const band = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.5, 2.4), bandMat);
+        band.position.set(x, y, z);
+        scene.add(band);
+      }
+    }
+
+    // Ceiling pipe ducts running the length of the room, with collar joints.
+    const pipeMat = new THREE.MeshStandardMaterial({
+      color: 0x4a5568,
+      roughness: 0.4,
+      metalness: 0.7,
+    });
+    const collarMat = new THREE.MeshStandardMaterial({
+      color: 0xc9a227,
+      roughness: 0.5,
+      metalness: 0.5,
+    });
+    const pipeRuns = [
+      { x: -40, z0: -42, z1: 42 },
+      { x: 40, z0: -42, z1: 42 },
+    ];
+    for (const run of pipeRuns) {
+      const length = run.z1 - run.z0;
+      const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, length, 12), pipeMat);
+      pipe.rotation.x = Math.PI / 2;
+      pipe.position.set(run.x, 21.5, (run.z0 + run.z1) / 2);
+      scene.add(pipe);
+      const collars = Math.floor(length / 12);
+      for (let i = 0; i <= collars; i++) {
+        const collar = new THREE.Mesh(new THREE.TorusGeometry(0.8, 0.18, 8, 16), collarMat);
+        collar.rotation.x = Math.PI / 2;
+        collar.position.set(run.x, 21.5, run.z0 + i * 12);
+        scene.add(collar);
+      }
+    }
+
+    // Wall-mounted equipment racks — blinking-LED decal on a recessed panel.
+    const equipTex = createEquipmentPanelTexture();
+    const equipBodyMat = new THREE.MeshStandardMaterial({
+      color: 0x222d40,
+      roughness: 0.5,
+      metalness: 0.4,
+    });
+    const equipScreenMat = new THREE.MeshBasicMaterial({ map: equipTex });
+    const equipSpots = [
+      { x: -58.6, y: 6, z: -10, faceSign: 1 },
+      { x: -58.6, y: 6, z: 4, faceSign: 1 },
+      { x: 58.6, y: 6, z: -30, faceSign: -1 },
+    ];
+    for (const spot of equipSpots) {
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.4, 3, 4), equipBodyMat);
+      body.position.set(spot.x, spot.y, spot.z);
+      body.castShadow = true;
+      scene.add(body);
+      const screen = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 2.6), equipScreenMat);
+      screen.position.set(spot.x + spot.faceSign * 0.21, spot.y, spot.z);
+      screen.rotation.y = spot.faceSign > 0 ? Math.PI / 2 : -Math.PI / 2;
+      scene.add(screen);
+    }
+
+    // Floor hazard stripe marking the boundary between the cafeteria and the
+    // lab-proper area where the console and vortex live.
+    const hazardTex = createHazardStripeTexture();
+    hazardTex.repeat.set(6, 1);
+    const hazard = new THREE.Mesh(
+      new THREE.PlaneGeometry(48, 1.6),
+      new THREE.MeshStandardMaterial({ map: hazardTex, roughness: 0.7 }),
+    );
+    hazard.rotation.x = -Math.PI / 2;
+    hazard.position.set(-5, 0.03, -2);
+    scene.add(hazard);
   }
 
   private buildCoffeeMachine(): void {
@@ -759,7 +894,7 @@ class PrologueCafeteriaScene implements IScene {
    */
   private framingScale(): number {
     // Higher zoom = closer, so divide the per-viewport framing offset by it.
-    return autoFramingScale(this.camera.aspect) / this.settings.zoom;
+    return autoFramingScale(this.camera.aspect, this.viewportHeight) / this.settings.zoom;
   }
 
   /** Mount the in-game gear button that opens the camera settings panel. */
@@ -919,6 +1054,7 @@ class PrologueCafeteriaScene implements IScene {
 
   resize(width: number, height: number): void {
     this.camera.aspect = width / height;
+    this.viewportHeight = height;
     this.camera.updateProjectionMatrix();
   }
 
