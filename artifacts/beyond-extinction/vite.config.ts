@@ -1,36 +1,22 @@
 import { defineConfig } from "vite";
 import path from "path";
-import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 
-const rawPort = process.env.PORT;
+// Replit provides PORT/BASE_PATH, while GitHub Pages serves this repo from
+// /Beyond-Extinction/.  Local development should work without either env var.
+const port = Number(process.env.PORT ?? 5173);
+const isGitHubPages = process.env.GITHUB_PAGES === "true";
+const basePath = process.env.BASE_PATH ?? (isGitHubPages ? "/Beyond-Extinction/" : "/");
+const enableReplitPlugins =
+  process.env.NODE_ENV !== "production" && process.env.REPL_ID !== undefined;
 
-if (!rawPort) {
-  throw new Error(
-    "PORT environment variable is required but was not provided.",
-  );
-}
-
-const port = Number(rawPort);
-
-if (Number.isNaN(port) || port <= 0) {
-  throw new Error(`Invalid PORT value: "${rawPort}"`);
-}
-
-const basePath = process.env.BASE_PATH;
-
-if (!basePath) {
-  throw new Error(
-    "BASE_PATH environment variable is required but was not provided.",
-  );
-}
-
-export default defineConfig({
+export default defineConfig(async () => ({
   base: basePath,
   plugins: [
-    runtimeErrorOverlay(),
-    ...(process.env.NODE_ENV !== "production" &&
-    process.env.REPL_ID !== undefined
+    ...(enableReplitPlugins
       ? [
+          await import("@replit/vite-plugin-runtime-error-modal").then((m) =>
+            m.default(),
+          ),
           await import("@replit/vite-plugin-cartographer").then((m) =>
             m.cartographer({
               root: path.resolve(import.meta.dirname, ".."),
@@ -48,13 +34,14 @@ export default defineConfig({
     },
   },
   root: path.resolve(import.meta.dirname),
+  publicDir: path.resolve(import.meta.dirname, "public"),
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
   },
   server: {
     port,
-    strictPort: true,
+    strictPort: false,
     host: "0.0.0.0",
     allowedHosts: true,
     fs: {
@@ -66,4 +53,4 @@ export default defineConfig({
     host: "0.0.0.0",
     allowedHosts: true,
   },
-});
+}));
