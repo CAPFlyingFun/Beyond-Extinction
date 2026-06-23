@@ -47,3 +47,7 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Large 3D models — hosted on Google Drive, not in Git (too large for GitHub / Pages)
+*.glb
+*.gltf
