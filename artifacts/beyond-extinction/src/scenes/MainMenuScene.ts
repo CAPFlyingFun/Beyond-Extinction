@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { CameraManager } from "../engine/CameraManager";
 import { createPrologueScene } from "./PrologueCafeteriaScene";
+import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 
 /**
  * Cinematic title screen: a warm, hopeful prehistoric vista — an island rising
@@ -204,7 +205,7 @@ class MainMenuScene implements IScene {
       this.startNewGame();
     });
 
-    for (const action of ["continue", "load", "settings"]) {
+    for (const action of ["continue", "load"]) {
       el.querySelector(`[data-action="${action}"]`)?.addEventListener(
         "click",
         () => {
@@ -219,6 +220,11 @@ class MainMenuScene implements IScene {
     el.querySelector('[data-action="credits"]')?.addEventListener("click", () => {
       this.ctx.audio.playSfx("ui-select");
       this.showCredits();
+    });
+
+    el.querySelector('[data-action="settings"]')?.addEventListener("click", () => {
+      this.ctx.audio.playSfx("ui-select");
+      openSettingsPanel({ parent: this.ctx.uiLayer, audio: this.ctx.audio });
     });
   }
 
@@ -304,6 +310,7 @@ class MainMenuScene implements IScene {
   }
 
   dispose(): void {
+    closeSettingsPanel();
     this.menuEl?.remove();
     this.creditsEl?.remove();
     this.scene.traverse((o) => {
