@@ -20,13 +20,14 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Beyond Extinction" />
     <meta name="twitter:description" content="A cinematic story-driven prehistoric survival adventure." />
-    <!-- Vite replaces %BASE_URL%, so these work on Replit, local dev, and GitHub Pages. -->
+    <!-- Vite replaces %BASE_URL%, so these public assets work on Replit, local dev, and GitHub Pages. -->
     <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
     <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
     <link rel="apple-touch-icon" href="%BASE_URL%icons/apple-touch-icon.png" />
   </head>
   <body>
     <div id="game-root"></div>
-    <script type="module" src="%BASE_URL%src/main.ts"></script>
+    <!-- Keep source entry absolute to the Vite project root. Vite applies the deployed base path after bundling. -->
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
