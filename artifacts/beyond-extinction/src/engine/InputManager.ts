@@ -62,6 +62,11 @@ export class InputManager {
     this.touchRoot?.classList.toggle("be-touch--off", !enabled);
   }
 
+  /** Whether input is currently accepted (false while menus/cutscenes gate it). */
+  get inputEnabled(): boolean {
+    return this.enabled;
+  }
+
   isDown(...codes: string[]): boolean {
     return codes.some((c) => this.keys.has(c));
   }
