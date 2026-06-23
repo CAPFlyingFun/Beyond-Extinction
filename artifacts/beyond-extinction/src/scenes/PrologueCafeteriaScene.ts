@@ -420,6 +420,21 @@ class PrologueCafeteriaScene implements IScene {
     });
   }
 
+  /** Push Jack and Sarah apart on the XZ plane if their bodies overlap. */
+  private resolveCharacterOverlap(): void {
+    const dx = this.jack.position.x - this.sarah.position.x;
+    const dz = this.jack.position.z - this.sarah.position.z;
+    const minDist = PrologueCafeteriaScene.PLAYER_RADIUS * 2;
+    const distSq = dx * dx + dz * dz;
+    if (distSq >= minDist * minDist || distSq < 1e-6) return;
+    const dist = Math.sqrt(distSq);
+    const push = (minDist - dist) / dist / 2;
+    this.jack.position.x += dx * push;
+    this.jack.position.z += dz * push;
+    this.sarah.position.x -= dx * push;
+    this.sarah.position.z -= dz * push;
+  }
+
   /** True if an XZ point lies inside any solid prop's (player-grown) box. */
   private isBlocked(x: number, z: number): boolean {
     for (const c of this.colliders) {
@@ -1232,6 +1247,9 @@ class PrologueCafeteriaScene implements IScene {
       }
     }
     this.applyLocomotion(this.sarah, sarahMoving, dt);
+    // Keep Jack and Sarah from standing inside one another — split the push
+    // evenly so neither character's deliberate movement "wins" outright.
+    this.resolveCharacterOverlap();
 
     // Proximity trigger: meeting Sarah starts the intro exchange.
     if (this.phase === "to-sarah") {
