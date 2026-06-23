@@ -85,15 +85,6 @@ class PrologueCafeteriaScene implements IScene {
   private reachSarahZone = new THREE.Vector3(20, 0, -36);
   private reachPromptShown = false;
 
-  // Circular (XZ-plane) colliders for solid scene furniture — tables and the
-  // console desk — so Jack/Sarah stop at their edges instead of clipping
-  // through. Kept as plain {x,z,radius} records rather than full physics
-  // bodies since everything here is static and axis-aligned-ish enough that
-  // a circle approximation reads fine at this camera angle.
-  private staticColliders: { x: number; z: number; radius: number }[] = [];
-  private static readonly JACK_RADIUS = 1.3;
-  private static readonly SARAH_RADIUS = 1.3;
-
   constructor(private ctx: SceneContext) {
     this.camera = new THREE.PerspectiveCamera(
       55,
@@ -246,7 +237,6 @@ class PrologueCafeteriaScene implements IScene {
       leg.position.copy(t.position);
       leg.position.y = 2;
       scene.add(t, leg);
-      this.staticColliders.push({ x: t.position.x, z: t.position.z, radius: 3.3 });
     }
 
     // Sign hint at the far side: "LAB SEVEN"
@@ -512,10 +502,6 @@ class PrologueCafeteriaScene implements IScene {
     desk.userData.kind = "console";
     this.scene.add(g);
     this.interactables.push(desk);
-    // The interaction point (consoleFront, 8 units toward the player) sits
-    // well outside this radius, so the "near" prompt still triggers before
-    // anyone is blocked from reaching it.
-    this.staticColliders.push({ x: g.position.x, z: g.position.z, radius: 6.5 });
   }
 
   private buildVortex(): void {
@@ -936,39 +922,6 @@ class PrologueCafeteriaScene implements IScene {
     this.gearEl = btn;
   }
 
-  /** Push `position` back out of any static collider it's overlapping. */
-  private resolveStaticCollisions(position: THREE.Vector3, selfRadius: number): void {
-    for (const c of this.staticColliders) {
-      const dx = position.x - c.x;
-      const dz = position.z - c.z;
-      const minDist = c.radius + selfRadius;
-      const distSq = dx * dx + dz * dz;
-      if (distSq < minDist * minDist && distSq > 1e-6) {
-        const dist = Math.sqrt(distSq);
-        const push = (minDist - dist) / dist;
-        position.x += dx * push;
-        position.z += dz * push;
-      }
-    }
-  }
-
-  /** Keep Jack and Sarah from overlapping by splitting the push evenly. */
-  private resolveMutualCollision(): void {
-    const dx = this.jack.position.x - this.sarah.position.x;
-    const dz = this.jack.position.z - this.sarah.position.z;
-    const minDist =
-      PrologueCafeteriaScene.JACK_RADIUS + PrologueCafeteriaScene.SARAH_RADIUS;
-    const distSq = dx * dx + dz * dz;
-    if (distSq < minDist * minDist && distSq > 1e-6) {
-      const dist = Math.sqrt(distSq);
-      const push = (minDist - dist) / dist / 2;
-      this.jack.position.x += dx * push;
-      this.jack.position.z += dz * push;
-      this.sarah.position.x -= dx * push;
-      this.sarah.position.z -= dz * push;
-    }
-  }
-
   private updateCamera(snap = false): void {
     // Fixed-angle 2.5D camera: a constant world-space offset (no rotation with
     // Jack) so the view stays a stable three-quarter diorama as he moves.
@@ -1028,8 +981,6 @@ class PrologueCafeteriaScene implements IScene {
           this.clickTarget = null;
         }
       }
-      this.resolveStaticCollisions(this.jack.position, PrologueCafeteriaScene.JACK_RADIUS);
-      this.resolveMutualCollision();
     }
 
     // Coffee pickup: proximity prompt + E to collect.
@@ -1048,7 +999,6 @@ class PrologueCafeteriaScene implements IScene {
         toT.normalize();
         this.sarah.position.addScaledVector(toT, 10 * dt);
         this.sarah.rotation.y = Math.atan2(toT.x, toT.z);
-        this.resolveStaticCollisions(this.sarah.position, PrologueCafeteriaScene.SARAH_RADIUS);
       } else {
         this.sarahTarget = null;
       }
