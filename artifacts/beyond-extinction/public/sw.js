@@ -18,7 +18,7 @@
  *
  * Bump VERSION whenever the caching logic changes to retire old caches.
  */
-const VERSION = "v1";
+const VERSION = "v2";
 const CACHE = `beyond-extinction-${VERSION}`;
 
 // Base path this SW is served from, e.g. "/Beyond-Extinction/" or "/".
@@ -42,9 +42,6 @@ const OPTIONAL = [
   BASE + "assets/models/Jack.glb",
   BASE + "assets/models/Sarah.glb",
   BASE + "opengraph.jpg",
-  BASE + "draco/draco_decoder.js",
-  BASE + "draco/draco_decoder.wasm",
-  BASE + "draco/draco_wasm_wrapper.js",
 ];
 
 self.addEventListener("install", (event) => {
