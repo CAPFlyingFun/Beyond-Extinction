@@ -86,15 +86,19 @@ class PrologueCafeteriaScene implements IScene {
   private reachPromptShown = false;
 
   // Solid props the player can't walk through, as world-space XZ boxes already
-  // grown by the player's radius (see buildColliders). Deliberately excludes
-  // the console desk and accelerator, which sit on Sarah's reach path.
+  // grown by the player's radius (see buildColliders). The console desk is
+  // included during exploration but dropped for the finale (see
+  // excludeConsoleSolid) so Jack can pass behind it to reach Sarah.
   private colliders: Array<{
     minX: number;
     maxX: number;
     minZ: number;
     maxZ: number;
   }> = [];
-  private static readonly PLAYER_RADIUS = 0.8;
+  private static readonly PLAYER_RADIUS = 1.5;
+  // Once the finale begins, Jack must walk behind the console to reach Sarah,
+  // so the console's collider is dropped from that point on.
+  private excludeConsoleSolid = false;
 
   constructor(private ctx: SceneContext) {
     this.camera = new THREE.PerspectiveCamera(
@@ -156,8 +160,20 @@ class PrologueCafeteriaScene implements IScene {
 
     // ---- Characters ----
     this.jack = await this.buildCharacter("Jack", 0x3a78d0);
-    this.jack.position.set(-22, 0, 14);
+    // Spawn in the open aisle between the cafeteria tables — clear of every
+    // collider grown by PLAYER_RADIUS.
+    this.jack.position.set(-24, 0, 14);
     scene.add(this.jack);
+    // Safety net: with the player radius baked into the colliders, never let
+    // Jack spawn wedged inside one — a future prop/spawn tweak shouldn't be able
+    // to soft-lock the opening. Nudge him toward the open floor until clear.
+    for (
+      let i = 0;
+      i < 40 && this.isBlocked(this.jack.position.x, this.jack.position.z);
+      i++
+    ) {
+      this.jack.position.z -= 1;
+    }
 
     this.sarah = await this.buildCharacter("Sarah", 0x36b27a);
     this.sarah.position.set(20, 0, -18);
@@ -392,6 +408,7 @@ class PrologueCafeteriaScene implements IScene {
     const r = PrologueCafeteriaScene.PLAYER_RADIUS;
     this.scene.traverse((obj) => {
       if (!obj.userData || !obj.userData.solid) return;
+      if (obj.userData.isConsole && this.excludeConsoleSolid) return;
       box.setFromObject(obj);
       if (!isFinite(box.min.x) || !isFinite(box.max.x)) return;
       this.colliders.push({
@@ -401,6 +418,13 @@ class PrologueCafeteriaScene implements IScene {
         maxZ: box.max.z + r,
       });
     });
+  }
+
+  /** Rebuild the collider list from scratch — used after toggling a prop's
+   * solidity for a story beat (e.g. dropping the console for the finale). */
+  private rebuildColliders(): void {
+    this.colliders.length = 0;
+    this.buildColliders();
   }
 
   /** True if an XZ point lies inside any solid prop's (player-grown) box. */
@@ -566,6 +590,11 @@ class PrologueCafeteriaScene implements IScene {
     g.position.set(20, 0, -28);
     this.console = g;
     desk.userData.kind = "console";
+    // The console blocks the player during exploration; its collider is dropped
+    // once the finale needs Jack to pass behind it to reach Sarah (see
+    // activateAlarm -> rebuildColliders).
+    desk.userData.solid = true;
+    desk.userData.isConsole = true;
     this.scene.add(g);
     this.interactables.push(desk);
   }
@@ -677,14 +706,41 @@ class PrologueCafeteriaScene implements IScene {
     this.groundAndScale(model, PrologueCafeteriaScene.CHARACTER_HEIGHT);
     if (model.animations && model.animations.length > 0) {
       const mixer = new THREE.AnimationMixer(model);
-      const idle =
-        THREE.AnimationClip.findByName(model.animations, "Idle") ??
-        model.animations.find((c) => /idle/i.test(c.name)) ??
-        model.animations[0];
-      mixer.clipAction(idle).play();
+      const clips = model.animations;
+      const byRe = (re: RegExp) => clips.find((c) => re.test(c.name));
+      const idleClip =
+        THREE.AnimationClip.findByName(clips, "Idle") ??
+        byRe(/idle/i) ??
+        clips[0];
+      // Prefer a plain walk; fall back to any walk/run-style locomotion clip so
+      // every rig (Jack: Walking, Sarah: Walking/Casual_Walk) animates on move.
+      const walkClip =
+        byRe(/^walking$/i) ??
+        byRe(/walk/i) ??
+        byRe(/^running$/i) ??
+        byRe(/run/i) ??
+        null;
+
+      // Both clips run continuously; locomotion is a weighted crossfade between
+      // them (see applyLocomotion), so movement reads as walking and stopping
+      // settles back to idle without a pop.
+      const idleAction = mixer.clipAction(idleClip);
+      idleAction.play();
+      const actions: {
+        idle: THREE.AnimationAction;
+        walk?: THREE.AnimationAction;
+      } = { idle: idleAction };
+      if (walkClip && walkClip !== idleClip) {
+        const walkAction = mixer.clipAction(walkClip);
+        walkAction.play();
+        walkAction.setEffectiveWeight(0);
+        actions.walk = walkAction;
+      }
+
       this.mixers.push(mixer);
       group.userData.mixer = mixer;
-      group.userData.clips = model.animations; // for later walk/idle switching
+      group.userData.actions = actions;
+      group.userData.walkBlend = 0;
     }
     group.userData.name = name;
     return group;
@@ -699,6 +755,33 @@ class PrologueCafeteriaScene implements IScene {
     }
     const grounded = new THREE.Box3().setFromObject(model);
     model.position.y -= grounded.min.y;
+  }
+
+  /**
+   * Crossfade a character between its idle and walk clips by easing the two
+   * action weights toward the movement state every frame. Both clips always
+   * play; only the weights change, which sidesteps the timing pitfalls of
+   * scheduled crossfades and reads as a smooth walk<->idle transition.
+   */
+  private applyLocomotion(
+    group: THREE.Group,
+    moving: boolean,
+    dt: number,
+  ): void {
+    const actions = group.userData.actions as
+      | { idle: THREE.AnimationAction; walk?: THREE.AnimationAction }
+      | undefined;
+    if (!actions || !actions.walk) return;
+    const target = moving ? 1 : 0;
+    const k = 1 - Math.pow(0.0015, dt); // ~0.15s ease, frame-rate independent
+    const blend = THREE.MathUtils.lerp(
+      (group.userData.walkBlend as number) ?? 0,
+      target,
+      k,
+    );
+    group.userData.walkBlend = blend;
+    actions.walk.setEffectiveWeight(blend);
+    actions.idle.setEffectiveWeight(1 - blend);
   }
 
   // ---------- Interaction & phases ----------
@@ -835,7 +918,11 @@ class PrologueCafeteriaScene implements IScene {
     this.ctx.overlays.showClock("11:47 PM", true);
     // Emergency lights were created up-front (see buildRedLights); the pulse in
     // update() ramps their intensity now that the cascade is active.
-    // Sarah runs to the accelerator; the player must reach her there.
+    // Sarah runs to the accelerator; the player must reach her there. Drop the
+    // console collider so Jack can pass behind the desk to reach Sarah without
+    // getting wedged on it.
+    this.excludeConsoleSolid = true;
+    this.rebuildColliders();
     this.sarahTarget = this.reachSarahZone.clone();
     this.phase = "reach-sarah";
     this.reachPromptShown = false;
@@ -1024,6 +1111,7 @@ class PrologueCafeteriaScene implements IScene {
       this.phase === "to-sarah" ||
       this.phase === "to-console" ||
       this.phase === "reach-sarah";
+    let jackMoving = false;
     if (freeRoam) {
       const speed = 16;
       const mv = this.ctx.input.getMoveVector();
@@ -1046,6 +1134,10 @@ class PrologueCafeteriaScene implements IScene {
           nx,
           nz,
         );
+        // Only animate the walk if a collider didn't fully cancel the step.
+        jackMoving =
+          Math.hypot(r.x - this.jack.position.x, r.z - this.jack.position.z) >
+          1e-3;
         this.jack.position.x = r.x;
         this.jack.position.z = r.z;
         this.jack.rotation.y = Math.atan2(mv.x, mv.y);
@@ -1079,6 +1171,7 @@ class PrologueCafeteriaScene implements IScene {
           this.jack.position.x = r.x;
           this.jack.position.z = r.z;
           this.jack.rotation.y = Math.atan2(to.x, to.z);
+          jackMoving = moved > step * 0.05;
           // A prop fully blocks the straight path — abandon the click target
           // rather than grinding against it forever.
           if (moved < step * 0.05) this.clickTarget = null;
@@ -1087,6 +1180,7 @@ class PrologueCafeteriaScene implements IScene {
         }
       }
     }
+    this.applyLocomotion(this.jack, jackMoving, dt);
 
     // Coffee pickup: proximity prompt + E to collect.
     if (this.phase === "coffee") {
@@ -1097,6 +1191,7 @@ class PrologueCafeteriaScene implements IScene {
     }
 
     // Sarah walks to her target if set.
+    let sarahMoving = false;
     if (this.sarahTarget) {
       const toT = new THREE.Vector3().subVectors(this.sarahTarget, this.sarah.position);
       toT.y = 0;
@@ -1104,10 +1199,12 @@ class PrologueCafeteriaScene implements IScene {
         toT.normalize();
         this.sarah.position.addScaledVector(toT, 10 * dt);
         this.sarah.rotation.y = Math.atan2(toT.x, toT.z);
+        sarahMoving = true;
       } else {
         this.sarahTarget = null;
       }
     }
+    this.applyLocomotion(this.sarah, sarahMoving, dt);
 
     // Proximity trigger: meeting Sarah starts the intro exchange.
     if (this.phase === "to-sarah") {
