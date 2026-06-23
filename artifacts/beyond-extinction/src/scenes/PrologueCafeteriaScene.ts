@@ -85,6 +85,17 @@ class PrologueCafeteriaScene implements IScene {
   private reachSarahZone = new THREE.Vector3(20, 0, -36);
   private reachPromptShown = false;
 
+  // Solid props the player can't walk through, as world-space XZ boxes already
+  // grown by the player's radius (see buildColliders). Deliberately excludes
+  // the console desk and accelerator, which sit on Sarah's reach path.
+  private colliders: Array<{
+    minX: number;
+    maxX: number;
+    minZ: number;
+    maxZ: number;
+  }> = [];
+  private static readonly PLAYER_RADIUS = 0.8;
+
   constructor(private ctx: SceneContext) {
     this.camera = new THREE.PerspectiveCamera(
       55,
@@ -141,6 +152,7 @@ class PrologueCafeteriaScene implements IScene {
     this.buildConsole();
     this.buildVortex();
     this.buildLabDetails();
+    this.buildColliders();
 
     // ---- Characters ----
     this.jack = await this.buildCharacter("Jack", 0x3a78d0);
@@ -233,6 +245,7 @@ class PrologueCafeteriaScene implements IScene {
       const t = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 0.4, 16), tableMat);
       t.position.set(-30 + (i % 2) * 12, 4, 6 + Math.floor(i / 2) * 12);
       t.castShadow = true;
+      t.userData.solid = true;
       const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 4, 8), tableMat);
       leg.position.copy(t.position);
       leg.position.y = 2;
@@ -289,6 +302,7 @@ class PrologueCafeteriaScene implements IScene {
       pillar.position.set(x, 12, z);
       pillar.castShadow = true;
       pillar.receiveShadow = true;
+      pillar.userData.solid = true;
       scene.add(pillar);
       for (const y of [4, 12, 20]) {
         const band = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.5, 2.4), bandMat);
@@ -364,6 +378,57 @@ class PrologueCafeteriaScene implements IScene {
     scene.add(hazard);
   }
 
+  /**
+   * Collect every mesh tagged `userData.solid` into a flat list of world-space
+   * XZ boxes, each grown by the player's radius, so the movement code can keep
+   * Jack from walking through tables, pillars, and the coffee machine. Boxes
+   * (rather than circles) keep the test to a couple of comparisons per prop —
+   * cheap to run every frame — and squaring off the round tables is invisible
+   * at the game's three-quarter camera distance.
+   */
+  private buildColliders(): void {
+    this.scene.updateMatrixWorld(true);
+    const box = new THREE.Box3();
+    const r = PrologueCafeteriaScene.PLAYER_RADIUS;
+    this.scene.traverse((obj) => {
+      if (!obj.userData || !obj.userData.solid) return;
+      box.setFromObject(obj);
+      if (!isFinite(box.min.x) || !isFinite(box.max.x)) return;
+      this.colliders.push({
+        minX: box.min.x - r,
+        maxX: box.max.x + r,
+        minZ: box.min.z - r,
+        maxZ: box.max.z + r,
+      });
+    });
+  }
+
+  /** True if an XZ point lies inside any solid prop's (player-grown) box. */
+  private isBlocked(x: number, z: number): boolean {
+    for (const c of this.colliders) {
+      if (x > c.minX && x < c.maxX && z > c.minZ && z < c.maxZ) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Step from (curX,curZ) toward (nx,nz) one axis at a time so the player
+   * slides along an obstacle instead of sticking to it, and can always back
+   * out the way they came in.
+   */
+  private resolveMove(
+    curX: number,
+    curZ: number,
+    nx: number,
+    nz: number,
+  ): { x: number; z: number } {
+    let x = curX;
+    let z = curZ;
+    if (!this.isBlocked(nx, z)) x = nx;
+    if (!this.isBlocked(x, nz)) z = nz;
+    return { x, z };
+  }
+
   private buildCoffeeMachine(): void {
     const g = new THREE.Group();
     const body = new THREE.Mesh(
@@ -393,6 +458,7 @@ class PrologueCafeteriaScene implements IScene {
 
     g.add(body, panel, counter);
     g.position.set(-30, 0, -10);
+    g.userData.solid = true;
     this.coffeeMachine = body;
     this.scene.add(g);
 
@@ -964,10 +1030,24 @@ class PrologueCafeteriaScene implements IScene {
       if (mv.lengthSq() > 0) {
         // Keyboard movement cancels any pending click destination.
         this.clickTarget = null;
-        this.jack.position.x += mv.x * speed * dt;
-        this.jack.position.z += mv.y * speed * dt;
-        this.jack.position.x = THREE.MathUtils.clamp(this.jack.position.x, -55, 55);
-        this.jack.position.z = THREE.MathUtils.clamp(this.jack.position.z, -38, 40);
+        const nx = THREE.MathUtils.clamp(
+          this.jack.position.x + mv.x * speed * dt,
+          -55,
+          55,
+        );
+        const nz = THREE.MathUtils.clamp(
+          this.jack.position.z + mv.y * speed * dt,
+          -38,
+          40,
+        );
+        const r = this.resolveMove(
+          this.jack.position.x,
+          this.jack.position.z,
+          nx,
+          nz,
+        );
+        this.jack.position.x = r.x;
+        this.jack.position.z = r.z;
         this.jack.rotation.y = Math.atan2(mv.x, mv.y);
       } else if (this.clickTarget) {
         // Click-to-move: walk toward the clicked floor point.
@@ -975,8 +1055,33 @@ class PrologueCafeteriaScene implements IScene {
         to.y = 0;
         if (to.length() > 0.6) {
           to.normalize();
-          this.jack.position.addScaledVector(to, speed * dt);
+          const step = speed * dt;
+          const nx = THREE.MathUtils.clamp(
+            this.jack.position.x + to.x * step,
+            -55,
+            55,
+          );
+          const nz = THREE.MathUtils.clamp(
+            this.jack.position.z + to.z * step,
+            -38,
+            40,
+          );
+          const r = this.resolveMove(
+            this.jack.position.x,
+            this.jack.position.z,
+            nx,
+            nz,
+          );
+          const moved = Math.hypot(
+            r.x - this.jack.position.x,
+            r.z - this.jack.position.z,
+          );
+          this.jack.position.x = r.x;
+          this.jack.position.z = r.z;
           this.jack.rotation.y = Math.atan2(to.x, to.z);
+          // A prop fully blocks the straight path — abandon the click target
+          // rather than grinding against it forever.
+          if (moved < step * 0.05) this.clickTarget = null;
         } else {
           this.clickTarget = null;
         }
