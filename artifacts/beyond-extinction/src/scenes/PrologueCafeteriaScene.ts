@@ -7,6 +7,13 @@ import {
   vortexBeat,
 } from "../data/dialogue";
 import { createChapterOneScene } from "./ChapterOnePlaceholderScene";
+import {
+  getSettings,
+  subscribeSettings,
+  type GameplaySettings,
+} from "../engine/Settings";
+import { autoFramingScale } from "../engine/cameraFraming";
+import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 
 type Phase =
   | "coffee"
@@ -51,6 +58,9 @@ class PrologueCafeteriaScene implements IScene {
   // Fixed 2.5D view: a high, angled camera that tracks Jack's position but
   // never rotates with him, giving a diorama / three-quarter look.
   private camOffset = new THREE.Vector3(0, 17, 22);
+  // Every character GLB is normalized to this world height so the camera
+  // framing is correct regardless of how a given model was exported.
+  private static readonly CHARACTER_HEIGHT = 7.2;
   private cascadeTimer = 0;
   private alarmOn = false;
 
@@ -113,8 +123,27 @@ class PrologueCafeteriaScene implements IScene {
     this.sarah.rotation.y = Math.PI;
     scene.add(this.sarah);
 
+    // Emergency lights exist from the start (dark) so the alarm never changes
+    // the scene's light count mid-play, which would otherwise recompile every
+    // material at the climax — a crash-prone moment on mobile (a fresh compile
+    // while the GL context is momentarily lost, e.g. across an orientation
+    // change, throws "createShader returned null").
+    this.buildRedLights();
+
     // Camera behind Jack.
     this.updateCamera(true);
+
+    // With the camera in position and all lights present, warm up every shader
+    // program now while the context is healthy. The vortex is briefly made
+    // visible (and is never frustum-culled, see buildVortex) so its custom
+    // ShaderMaterial is compiled here rather than for the first time at the
+    // climax.
+    this.vortex.visible = true;
+    try {
+      this.ctx.renderer.precompile(this.scene, this.camera);
+    } finally {
+      this.vortex.visible = false;
+    }
 
     // Interaction.
     this.unsubClick = this.ctx.input.onClick(() => this.handleClick());
@@ -122,6 +151,15 @@ class PrologueCafeteriaScene implements IScene {
     this.phase = "coffee";
     this.ctx.quest.setObjective("Get two coffees from the counter.");
     this.ctx.overlays.showHint("WASD / Arrows or click to walk · E to interact");
+
+    // Camera settings: apply persisted prefs, react to live slider changes, and
+    // mount the in-game gear that opens the panel.
+    this.applyFov();
+    this.unsubSettings = subscribeSettings((s) => {
+      this.settings = s;
+      this.applyFov();
+    });
+    this.buildSettingsButton();
   }
 
   // ---------- World building ----------
@@ -229,6 +267,7 @@ class PrologueCafeteriaScene implements IScene {
     ];
     cupPositions.forEach((pos, i) => {
       const cup = this.makeCup();
+      cup.scale.setScalar(0.7);
       cup.position.copy(pos);
       cup.userData.kind = "coffee";
       cup.userData.index = i;
@@ -257,9 +296,29 @@ class PrologueCafeteriaScene implements IScene {
     const cup = this.makeCup();
     cup.scale.setScalar(0.8);
     this.coffees.push(cup as unknown as THREE.Mesh);
-    // Float near Jack as "carried".
+    // Carried in Jack's hands — one at each side, at hand height and slightly
+    // forward, so two cups read as "holding coffees" rather than floating at
+    // chest centre.
     this.jack.add(cup);
-    cup.position.set(index === 0 ? -1 : 1, 4.4, 1.4);
+    cup.position.set(index === 0 ? -1.9 : 1.9, 3.1, 1.0);
+  }
+
+  /**
+   * Jack hands one of his two coffees to Sarah when they meet: the cup detaches
+   * into world space (keeping its on-screen position), glides across to her, and
+   * is then parented to her hand so it stays with her for the rest of the scene.
+   */
+  private async handCoffeeToSarah(): Promise<void> {
+    const cup = this.coffees.pop();
+    if (!cup) return;
+    this.scene.attach(cup);
+    this.sarah.updateMatrixWorld(true);
+    const handWorld = new THREE.Vector3(-1.4, 3.1, 1.1).applyMatrix4(
+      this.sarah.matrixWorld,
+    );
+    await this.tween(cup.position, handWorld, 600);
+    if (this.disposed) return;
+    this.sarah.attach(cup);
   }
 
   private buildConsole(): void {
@@ -343,6 +402,9 @@ class PrologueCafeteriaScene implements IScene {
         }`,
     });
     const disc = new THREE.Mesh(geo, mat);
+    // The vortex is a focal climax effect; never cull it, so its custom shader
+    // is reliably included when we pre-warm shader programs at scene start.
+    disc.frustumCulled = false;
     g.add(disc);
 
     // Faint outer distortion shell
@@ -355,6 +417,7 @@ class PrologueCafeteriaScene implements IScene {
         side: THREE.BackSide,
       }),
     );
+    shell.frustumCulled = false;
     g.add(shell);
 
     g.position.set(20, 9, -40);
@@ -363,6 +426,22 @@ class PrologueCafeteriaScene implements IScene {
     g.scale.setScalar(0.01);
     this.vortex = g;
     this.scene.add(g);
+  }
+
+  /**
+   * Emergency lights are created up-front at zero intensity (not when the alarm
+   * fires) so the scene's light count — and therefore every material's compiled
+   * shader program — is final from the start. Adding lights mid-scene would
+   * force a shader recompile at the dramatic moment, which on mobile is exactly
+   * where the resonance-cascade beat could crash.
+   */
+  private buildRedLights(): void {
+    for (let i = 0; i < 4; i++) {
+      const rl = new THREE.PointLight(0xff2d22, 0, 80);
+      rl.position.set(20 + (i % 2 ? 18 : -18), 16, -28 + (i < 2 ? 14 : -14));
+      this.scene.add(rl);
+      this.redLights.push(rl);
+    }
   }
 
   private async buildCharacter(
@@ -389,8 +468,24 @@ class PrologueCafeteriaScene implements IScene {
       return ph;
     });
     group.add(model);
+    // GLB exports vary wildly in scale and origin, so normalize the loaded
+    // model to a consistent on-screen height and plant its feet on the floor.
+    // This keeps the camera framing correct and makes future (animated) model
+    // swaps drop-in without re-tuning.
+    this.groundAndScale(model, PrologueCafeteriaScene.CHARACTER_HEIGHT);
     group.userData.name = name;
     return group;
+  }
+
+  /** Scale a model to `targetHeight` world units and sit its feet at y=0. */
+  private groundAndScale(model: THREE.Object3D, targetHeight: number): void {
+    const size = new THREE.Vector3();
+    new THREE.Box3().setFromObject(model).getSize(size);
+    if (size.y > 1e-3) {
+      model.scale.multiplyScalar(targetHeight / size.y);
+    }
+    const grounded = new THREE.Box3().setFromObject(model);
+    model.position.y -= grounded.min.y;
   }
 
   // ---------- Interaction & phases ----------
@@ -486,8 +581,12 @@ class PrologueCafeteriaScene implements IScene {
     this.phase = "intro-dialogue";
     this.ctx.input.setEnabled(false);
     this.ctx.overlays.hideHint();
-    // Jack faces Sarah.
+    // Jack and Sarah turn to face each other for the exchange.
     this.faceTowards(this.jack, this.sarah.position);
+    this.faceTowards(this.sarah, this.jack.position);
+    // Jack hands Sarah one of the two coffees before they talk.
+    await this.handCoffeeToSarah();
+    if (this.disposed) return;
     await this.ctx.dialogue.play(cafeteriaIntro);
     if (this.disposed) return;
     this.ctx.input.setEnabled(true);
@@ -521,13 +620,8 @@ class PrologueCafeteriaScene implements IScene {
     this.alarmOn = true;
     this.ctx.audio.playSfx("alarm");
     this.ctx.overlays.showClock("11:47 PM", true);
-    // Red emergency lights around the lab.
-    for (let i = 0; i < 4; i++) {
-      const rl = new THREE.PointLight(0xff2d22, 0, 80);
-      rl.position.set(20 + (i % 2 ? 18 : -18), 16, -28 + (i < 2 ? 14 : -14));
-      this.scene.add(rl);
-      this.redLights.push(rl);
-    }
+    // Emergency lights were created up-front (see buildRedLights); the pulse in
+    // update() ramps their intensity now that the cascade is active.
     // Sarah runs to the accelerator; the player must reach her there.
     this.sarahTarget = this.reachSarahZone.clone();
     this.phase = "reach-sarah";
@@ -636,10 +730,57 @@ class PrologueCafeteriaScene implements IScene {
     });
   }
 
+  private settings: GameplaySettings = getSettings();
+  private unsubSettings?: () => void;
+  private gearEl?: HTMLButtonElement;
+
+  /** Push the current FOV preference onto the live gameplay camera. */
+  private applyFov(): void {
+    this.camera.fov = this.settings.fov;
+    this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * Effective camera-distance multiplier applied to every camera offset:
+   * the player's distance preference times the automatic per-viewport framing
+   * (which dollies in on both narrow portrait and very wide landscape phones).
+   */
+  private framingScale(): number {
+    // Higher zoom = closer, so divide the per-viewport framing offset by it.
+    return autoFramingScale(this.camera.aspect) / this.settings.zoom;
+  }
+
+  /** Mount the in-game gear button that opens the camera settings panel. */
+  private buildSettingsButton(): void {
+    const btn = document.createElement("button");
+    btn.className = "be-gear";
+    btn.type = "button";
+    btn.setAttribute("aria-label", "Settings");
+    btn.textContent = "\u2699";
+    btn.addEventListener("click", () => {
+      this.ctx.audio.playSfx("ui-select");
+      // Freeze controls while the panel is open, then restore whatever state
+      // they were in (a cutscene may have already disabled them).
+      const wasEnabled = this.ctx.input.inputEnabled;
+      this.ctx.input.setEnabled(false);
+      openSettingsPanel({
+        parent: this.ctx.uiLayer,
+        audio: this.ctx.audio,
+        onClose: () => {
+          if (!this.disposed) this.ctx.input.setEnabled(wasEnabled);
+        },
+      });
+    });
+    this.ctx.uiLayer.appendChild(btn);
+    this.gearEl = btn;
+  }
+
   private updateCamera(snap = false): void {
     // Fixed-angle 2.5D camera: a constant world-space offset (no rotation with
     // Jack) so the view stays a stable three-quarter diorama as he moves.
-    const desired = this.jack.position.clone().add(this.camOffset);
+    const desired = this.jack.position
+      .clone()
+      .add(this.camOffset.clone().multiplyScalar(this.framingScale()));
     if (snap) {
       this.camera.position.copy(desired);
     } else {
@@ -750,7 +891,9 @@ class PrologueCafeteriaScene implements IScene {
       this.phase === "cutscene"
     ) {
       const focus = this.vortex.position.clone();
-      const camPos = focus.clone().add(new THREE.Vector3(0, 6, 26));
+      const camPos = focus
+        .clone()
+        .add(new THREE.Vector3(0, 6, 26).multiplyScalar(this.framingScale()));
       this.camera.position.lerp(camPos, 0.04);
       const mid = this.jack.position.clone().lerp(focus, 0.5);
       mid.y += 4;
@@ -768,6 +911,9 @@ class PrologueCafeteriaScene implements IScene {
   dispose(): void {
     this.disposed = true;
     this.unsubClick?.();
+    this.unsubSettings?.();
+    closeSettingsPanel();
+    this.gearEl?.remove();
     this.ctx.overlays.hideClock();
     this.ctx.input.setEnabled(true);
     this.scene.traverse((o) => {
