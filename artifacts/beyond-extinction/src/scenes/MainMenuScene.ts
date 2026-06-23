@@ -6,7 +6,7 @@ import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 
 /**
  * Cinematic title screen: a warm, hopeful prehistoric vista — an island rising
- * from a sunlit, animated ocean with pterosaurs tracing figure-eights overhead
+ * from a sunlit, animated ocean with pterosaur silhouettes circling overhead
  * and a slowly drifting camera.
  */
 class MainMenuScene implements IScene {
@@ -21,6 +21,7 @@ class MainMenuScene implements IScene {
   private oceanUniforms!: { uTime: { value: number } };
   private pterosaurs: THREE.Group[] = [];
   private menuEl?: HTMLDivElement;
+  private creditsEl?: HTMLDivElement;
 
   constructor(private ctx: SceneContext) {
     this.cam = new CameraManager(50, 0.1, 3000);
@@ -33,7 +34,6 @@ class MainMenuScene implements IScene {
 
     this.ctx.audio.playMusic("main-theme");
 
-    // ---- Lighting: warm golden-hour key + soft sky fill ----
     const hemi = new THREE.HemisphereLight(0xdff1ff, 0x4a6a55, 0.9);
     scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xffe7c2, 2.1);
@@ -43,7 +43,6 @@ class MainMenuScene implements IScene {
     sun.shadow.camera.far = 800;
     scene.add(sun);
 
-    // ---- Animated ocean ----
     this.oceanUniforms = { uTime: { value: 0 } };
     const oceanGeo = new THREE.PlaneGeometry(4000, 4000, 220, 220);
     const oceanMat = new THREE.MeshStandardMaterial({
@@ -70,10 +69,8 @@ class MainMenuScene implements IScene {
     this.ocean.receiveShadow = true;
     scene.add(this.ocean);
 
-    // ---- Island ----
     scene.add(this.buildIsland());
 
-    // ---- Pterosaurs flying figure-eights ----
     for (let i = 0; i < 5; i++) {
       const p = this.buildPterosaur();
       p.userData.phase = (i / 5) * Math.PI * 2;
@@ -84,7 +81,6 @@ class MainMenuScene implements IScene {
       scene.add(p);
     }
 
-    // ---- Camera ----
     this.cam.place({ x: 0, y: 38, z: 210 }, { x: 0, y: 24, z: 0 });
     this.cam.setDrift(2.2, 0.12);
 
@@ -94,7 +90,6 @@ class MainMenuScene implements IScene {
   private buildIsland(): THREE.Group {
     const g = new THREE.Group();
 
-    // Base landmass
     const landMat = new THREE.MeshStandardMaterial({
       color: 0x6f8a4e,
       roughness: 0.95,
@@ -115,7 +110,6 @@ class MainMenuScene implements IScene {
     land.castShadow = true;
     g.add(land);
 
-    // Central mountain
     const mountain = new THREE.Mesh(
       new THREE.ConeGeometry(70, 130, 8),
       new THREE.MeshStandardMaterial({ color: 0x5b6e4a, roughness: 1, flatShading: true }),
@@ -124,7 +118,6 @@ class MainMenuScene implements IScene {
     mountain.castShadow = true;
     g.add(mountain);
 
-    // Snow cap
     const cap = new THREE.Mesh(
       new THREE.ConeGeometry(26, 34, 8),
       new THREE.MeshStandardMaterial({ color: 0xeef3f7, roughness: 0.8, flatShading: true }),
@@ -132,7 +125,6 @@ class MainMenuScene implements IScene {
     cap.position.y = 130;
     g.add(cap);
 
-    // Scattered trees (palm-ish: trunk + canopy)
     const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2b, roughness: 1 });
     const leafMat = new THREE.MeshStandardMaterial({ color: 0x3f7a3a, roughness: 0.9, flatShading: true });
     for (let i = 0; i < 28; i++) {
@@ -155,25 +147,46 @@ class MainMenuScene implements IScene {
   }
 
   private buildPterosaur(): THREE.Group {
+    // Stylized 2.5D silhouette rather than the old geometry birds. This reads
+    // cleaner on phones and keeps the menu cinematic instead of toy-like.
     const g = new THREE.Group();
-    const mat = new THREE.MeshStandardMaterial({ color: 0x4a3b33, roughness: 0.8, flatShading: true });
-    const body = new THREE.Mesh(new THREE.ConeGeometry(1.2, 8, 6), mat);
-    body.rotation.x = Math.PI / 2;
-    g.add(body);
-    const wingGeo = new THREE.PlaneGeometry(14, 4);
-    const wingMat = new THREE.MeshStandardMaterial({
-      color: 0x5a4438,
-      roughness: 0.9,
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x2b221e,
       side: THREE.DoubleSide,
-      flatShading: true,
+      transparent: true,
+      opacity: 0.82,
+      depthWrite: false,
     });
-    const left = new THREE.Mesh(wingGeo, wingMat);
-    left.position.x = -7;
-    const right = new THREE.Mesh(wingGeo, wingMat);
-    right.position.x = 7;
-    g.add(left, right);
+
+    const makeWing = (side: -1 | 1) => {
+      const shape = new THREE.Shape();
+      shape.moveTo(0, 0);
+      shape.lineTo(side * 7.5, 1.9);
+      shape.lineTo(side * 15.5, -0.3);
+      shape.lineTo(side * 8.2, -1.8);
+      shape.lineTo(side * 2.0, -0.65);
+      shape.lineTo(0, 0);
+      return new THREE.Mesh(new THREE.ShapeGeometry(shape), mat);
+    };
+
+    const bodyShape = new THREE.Shape();
+    bodyShape.moveTo(-0.9, 0.35);
+    bodyShape.lineTo(3.9, 0.15);
+    bodyShape.lineTo(6.2, 0.95);
+    bodyShape.lineTo(5.3, 0.05);
+    bodyShape.lineTo(6.4, -0.7);
+    bodyShape.lineTo(3.2, -0.2);
+    bodyShape.lineTo(-4.4, -0.55);
+    bodyShape.lineTo(-2.2, 0.05);
+    bodyShape.lineTo(-4.6, 0.6);
+    bodyShape.lineTo(-0.9, 0.35);
+
+    const body = new THREE.Mesh(new THREE.ShapeGeometry(bodyShape), mat);
+    const left = makeWing(-1);
+    const right = makeWing(1);
+    g.add(left, right, body);
+    g.scale.setScalar(1.75);
     g.userData.wings = [left, right];
-    g.scale.setScalar(1.4);
     return g;
   }
 
@@ -193,8 +206,8 @@ class MainMenuScene implements IScene {
         <button class="be-btn" data-action="credits">Credits</button>
       </div>
       <div class="be-menu__footer">
-        <span>Vertical Slice · Prologue</span>
-        <span>Built with Three.js</span>
+        <span>PWA Engine · Prologue</span>
+        <span>Three.js · GitHub Pages Ready</span>
       </div>`;
     this.ctx.uiLayer.appendChild(el);
     this.menuEl = el;
@@ -206,15 +219,10 @@ class MainMenuScene implements IScene {
     });
 
     for (const action of ["continue", "load"]) {
-      el.querySelector(`[data-action="${action}"]`)?.addEventListener(
-        "click",
-        () => {
-          this.ctx.audio.playSfx("ui-select");
-          this.ctx.overlays.showToast(
-            `${this.label(action)} — Coming Soon`,
-          );
-        },
-      );
+      el.querySelector(`[data-action="${action}"]`)?.addEventListener("click", () => {
+        this.ctx.audio.playSfx("ui-select");
+        this.ctx.overlays.showToast(`${this.label(action)} — Coming Soon`);
+      });
     }
 
     el.querySelector('[data-action="credits"]')?.addEventListener("click", () => {
@@ -241,8 +249,6 @@ class MainMenuScene implements IScene {
     }
   }
 
-  private creditsEl?: HTMLDivElement;
-
   private showCredits(): void {
     if (this.creditsEl) return;
     const el = document.createElement("div");
@@ -255,6 +261,7 @@ class MainMenuScene implements IScene {
           <p><span>Concept &amp; Story</span>CAPFlyingFun</p>
           <p><span>Engine &amp; Code</span>Built with Three.js + Vite</p>
           <p><span>Vertical Slice</span>Main Menu &amp; Prologue</p>
+          <p><span>PWA Direction</span>Installable, offline-capable web app</p>
         </div>
         <button class="be-btn be-btn--primary" data-action="close">Close</button>
       </div>`;
@@ -287,21 +294,20 @@ class MainMenuScene implements IScene {
 
     for (const p of this.pterosaurs) {
       const t = elapsed * p.userData.speed + p.userData.phase;
-      // Lemniscate (figure-eight) path.
       const r = p.userData.scaleR;
       const denom = 1 + Math.sin(t) * Math.sin(t);
       const x = (r * Math.cos(t)) / denom;
       const z = (r * Math.sin(t) * Math.cos(t)) / denom;
       p.position.set(x, p.userData.height + Math.sin(t * 2) * 4, z);
-      // Face direction of travel.
+
       const nx = (r * Math.cos(t + 0.01)) / (1 + Math.sin(t + 0.01) ** 2);
       const nz = (r * Math.sin(t + 0.01) * Math.cos(t + 0.01)) / (1 + Math.sin(t + 0.01) ** 2);
       p.lookAt(nx, p.position.y, nz);
-      // Wing flap.
-      const flap = Math.sin(elapsed * 6 + p.userData.phase) * 0.5;
+
+      const flap = 1 + Math.sin(elapsed * 6 + p.userData.phase) * 0.18;
       const [lw, rw] = p.userData.wings as THREE.Mesh[];
-      lw.rotation.z = flap;
-      rw.rotation.z = -flap;
+      lw.scale.y = flap;
+      rw.scale.y = flap;
     }
   }
 
