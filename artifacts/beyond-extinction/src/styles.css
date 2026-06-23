@@ -204,11 +204,13 @@ body {
 }
 .be-dialogue__portrait {
   flex: 0 0 auto;
-  width: 110px;
-  height: 110px;
+  width: 112px;
+  height: 150px;
   border-radius: 8px;
   border: 1px solid rgba(243, 200, 127, 0.4);
-  background: #0a1320 center / cover no-repeat;
+  /* Portraits are tall full-body renders; anchor to the top so the face is
+     shown instead of cropping to the torso. */
+  background: #0a1320 top center / cover no-repeat;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 .be-dialogue__box {
@@ -585,4 +587,140 @@ body {
 .be-touch-action.is-down {
   transform: scale(0.9);
   filter: brightness(1.3);
+}
+
+/* ---------- In-game settings gear ---------- */
+.be-gear {
+  position: absolute;
+  top: max(env(safe-area-inset-top, 0px), 14px);
+  right: max(env(safe-area-inset-right, 0px), 14px);
+  z-index: 47;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: #f3e7cf;
+  background: rgba(10, 18, 30, 0.5);
+  border: 1px solid rgba(243, 200, 127, 0.3);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+.be-gear:hover {
+  background: rgba(243, 200, 127, 0.18);
+  border-color: rgba(243, 200, 127, 0.6);
+  transform: rotate(45deg);
+}
+
+/* ---------- Settings modal ---------- */
+.be-settings {
+  position: fixed;
+  inset: 0;
+  z-index: 49;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background: rgba(6, 11, 20, 0.55);
+  backdrop-filter: blur(10px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+.be-settings.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+.be-settings__panel {
+  max-width: 420px;
+  width: 100%;
+  padding: 2.2rem 2.2rem 1.8rem;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(18, 28, 44, 0.94), rgba(10, 16, 28, 0.94));
+  border: 1px solid rgba(243, 200, 127, 0.22);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  transform: translateY(12px);
+  transition: transform 0.3s ease;
+}
+.be-settings.show .be-settings__panel {
+  transform: translateY(0);
+}
+.be-settings h2 {
+  font-family: "Cinzel", serif;
+  font-size: 1.6rem;
+  letter-spacing: 0.08em;
+  color: #f5ecd8;
+  margin: 0 0 0.3rem;
+}
+.be-settings__hint {
+  font-family: "Inter", sans-serif;
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  color: rgba(220, 230, 245, 0.55);
+  margin: 0 0 1.6rem;
+}
+.be-field {
+  display: block;
+  margin-bottom: 1.5rem;
+}
+.be-field__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: "Inter", sans-serif;
+  font-size: 0.8rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(220, 230, 245, 0.7);
+  margin-bottom: 0.6rem;
+}
+.be-field__row b {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #f3c87f;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+.be-field input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(243, 200, 127, 0.25);
+  outline: none;
+  cursor: pointer;
+}
+.be-field input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #f3c87f, #e7a556);
+  border: 2px solid rgba(28, 18, 6, 0.5);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+.be-field input[type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #f3c87f, #e7a556);
+  border: 2px solid rgba(28, 18, 6, 0.5);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+.be-settings__actions {
+  display: flex;
+  gap: 0.8rem;
+  margin-top: 0.4rem;
+}
+.be-settings__actions .be-btn {
+  flex: 1;
+  text-align: center;
 }
