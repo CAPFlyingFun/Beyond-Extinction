@@ -1,6 +1,10 @@
 import "./styles.css";
 import { Game } from "./engine/Game";
 import { createMainMenuScene } from "./scenes/MainMenuScene";
+import { registerServiceWorker } from "./pwa";
+
+// Make the game installable and offline-capable (production builds only).
+registerServiceWorker();
 
 const root = document.getElementById("game-root");
 if (!root) {
