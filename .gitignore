@@ -48,6 +48,10 @@ Thumbs.db
 .cache/
 .local/
 
-# Large 3D models — hosted on Google Drive, not in Git (too large for GitHub / Pages)
+# Large 3D models are ignored by default (too large for most repos), but
+# Beyond Extinction's character models are compressed and committed
+# same-origin so the GitHub Pages build can ship and the SW can cache them.
 *.glb
 *.gltf
+!artifacts/beyond-extinction/public/assets/models/Jack.glb
+!artifacts/beyond-extinction/public/assets/models/Sarah.glb

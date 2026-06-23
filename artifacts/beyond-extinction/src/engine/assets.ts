@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 
 /**
  * Resolve a relative asset path (e.g. "assets/models/Jack.glb") against the
@@ -11,13 +13,23 @@ export function assetUrl(relativePath: string): string {
   return `${base}${clean}`;
 }
 
+// Self-hosted Draco decoder (NO CDN). The files live in public/draco/ — copy
+// them from three/examples/jsm/libs/draco/ whenever the three.js version bumps.
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath(assetUrl("draco/"));
+
 const gltfLoader = new GLTFLoader();
+gltfLoader.setDRACOLoader(dracoLoader);
+gltfLoader.setMeshoptDecoder(MeshoptDecoder); // harmless if GLB isn't meshopt-packed
+
 const textureLoader = new THREE.TextureLoader();
 
 /**
  * Load a GLB model. On any failure (missing file, parse error) this logs a
  * clear error to the console and returns the provided placeholder mesh so the
- * scene keeps working with an obvious stand-in.
+ * scene keeps working with an obvious stand-in. Baked animation clips are
+ * attached to the returned object as `.animations` (a standard Object3D
+ * field) so callers can drive them with an AnimationMixer.
  */
 export async function loadModel(
   relativePath: string,
@@ -34,7 +46,10 @@ export async function loadModel(
         mesh.receiveShadow = true;
       }
     });
-    console.info(`[Beyond Extinction] Loaded model: ${url}`);
+    root.animations = gltf.animations ?? [];
+    console.info(
+      `[Beyond Extinction] Loaded model: ${url} (${root.animations.length} clip(s))`,
+    );
     return root;
   } catch (err) {
     const fileName = relativePath.split("/").pop() ?? relativePath;
@@ -45,6 +60,7 @@ export async function loadModel(
     );
     const placeholder = placeholderFactory();
     placeholder.userData.isPlaceholder = true;
+    placeholder.animations = [];
     return placeholder;
   }
 }

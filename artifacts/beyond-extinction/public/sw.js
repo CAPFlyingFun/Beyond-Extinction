@@ -42,6 +42,9 @@ const OPTIONAL = [
   BASE + "assets/models/Jack.glb",
   BASE + "assets/models/Sarah.glb",
   BASE + "opengraph.jpg",
+  BASE + "draco/draco_decoder.js",
+  BASE + "draco/draco_decoder.wasm",
+  BASE + "draco/draco_wasm_wrapper.js",
 ];
 
 self.addEventListener("install", (event) => {

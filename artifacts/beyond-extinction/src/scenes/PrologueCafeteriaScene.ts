@@ -45,6 +45,7 @@ class PrologueCafeteriaScene implements IScene {
   private vortexUniforms!: { uTime: { value: number } };
   private redLights: THREE.PointLight[] = [];
   private coffees: THREE.Mesh[] = [];
+  private mixers: THREE.AnimationMixer[] = [];
 
   private ambient!: THREE.AmbientLight;
   private mainLights: THREE.Light[] = [];
@@ -473,6 +474,17 @@ class PrologueCafeteriaScene implements IScene {
     // This keeps the camera framing correct and makes future (animated) model
     // swaps drop-in without re-tuning.
     this.groundAndScale(model, PrologueCafeteriaScene.CHARACTER_HEIGHT);
+    if (model.animations && model.animations.length > 0) {
+      const mixer = new THREE.AnimationMixer(model);
+      const idle =
+        THREE.AnimationClip.findByName(model.animations, "Idle") ??
+        model.animations.find((c) => /idle/i.test(c.name)) ??
+        model.animations[0];
+      mixer.clipAction(idle).play();
+      this.mixers.push(mixer);
+      group.userData.mixer = mixer;
+      group.userData.clips = model.animations; // for later walk/idle switching
+    }
     group.userData.name = name;
     return group;
   }
@@ -794,6 +806,8 @@ class PrologueCafeteriaScene implements IScene {
   // ---------- Update loop ----------
 
   update(dt: number, elapsed: number): void {
+    for (const m of this.mixers) m.update(dt);
+
     this.vortexUniforms.uTime.value = elapsed;
     this.vortex.rotation.z += dt * 0.6;
 
@@ -910,6 +924,8 @@ class PrologueCafeteriaScene implements IScene {
 
   dispose(): void {
     this.disposed = true;
+    for (const m of this.mixers) m.stopAllAction();
+    this.mixers = [];
     this.unsubClick?.();
     this.unsubSettings?.();
     closeSettingsPanel();
