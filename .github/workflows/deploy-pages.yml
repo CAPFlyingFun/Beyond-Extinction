@@ -39,7 +39,7 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build Beyond Extinction for GitHub Pages
         run: pnpm --filter @workspace/beyond-extinction build:github
