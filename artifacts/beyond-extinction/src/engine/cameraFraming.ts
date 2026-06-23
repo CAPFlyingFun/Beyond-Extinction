@@ -17,18 +17,43 @@ const ULTRAWIDE = 2.6; // wide, short landscape phone
 const PORTRAIT_MIN = 0.55;
 const WIDE_MIN = 0.8;
 
+// A phone rotated sideways often reports an aspect ratio that falls inside
+// the "comfortable desktop/tablet" band above (browser chrome eats vertical
+// space, landing around 1.7-2.0), even though it has just as little vertical
+// room as a desktop window would never have. Aspect alone can't tell a phone
+// landscape view apart from a desktop one, so fall back to viewport height:
+// below this, dolly in the same way portrait does, scaled by how cramped it
+// is, so "max zoom" feels equally close after rotating either way.
+const PHONE_LANDSCAPE_HEIGHT_LO = 320; // very short (e.g. a phone in landscape)
+const PHONE_LANDSCAPE_HEIGHT_HI = 500; // taller phones / small tablets in landscape
+const PHONE_LANDSCAPE_MIN = 0.6;
+
 function clamp01(t: number): number {
   return Math.min(Math.max(t, 0), 1);
 }
 
-export function autoFramingScale(aspect: number): number {
+export function autoFramingScale(aspect: number, viewportHeight = Infinity): number {
   if (aspect < BAND_LO) {
     const t = clamp01((aspect - NARROW) / (BAND_LO - NARROW));
     return PORTRAIT_MIN + (1 - PORTRAIT_MIN) * t;
   }
+
+  let scale = 1;
   if (aspect > BAND_HI) {
     const t = clamp01((aspect - BAND_HI) / (ULTRAWIDE - BAND_HI));
-    return 1 - (1 - WIDE_MIN) * t;
+    scale = 1 - (1 - WIDE_MIN) * t;
   }
-  return 1;
+
+  // Whatever the aspect-only curve above produced, a short viewport (any
+  // landscape phone, "comfortable" aspect or ultrawide) needs at least as
+  // much dolly-in — take whichever compensation is stronger.
+  if (viewportHeight < PHONE_LANDSCAPE_HEIGHT_HI) {
+    const t = clamp01(
+      (viewportHeight - PHONE_LANDSCAPE_HEIGHT_LO) /
+        (PHONE_LANDSCAPE_HEIGHT_HI - PHONE_LANDSCAPE_HEIGHT_LO),
+    );
+    const heightScale = PHONE_LANDSCAPE_MIN + (1 - PHONE_LANDSCAPE_MIN) * t;
+    scale = Math.min(scale, heightScale);
+  }
+  return scale;
 }
