@@ -882,7 +882,7 @@ class PrologueCafeteriaScene implements IScene {
     const direction = handWorld.clone().sub(foreArmWorld);
     if (direction.lengthSq() < 1e-8) return handWorld;
     direction.normalize();
-    return handWorld.add(direction.multiplyScalar(0.4));
+    return handWorld.add(direction.multiplyScalar(0.15));
   }
 
   /** Scale a model to `targetHeight` world units and sit its feet at y=0. */
