@@ -8,9 +8,13 @@ export class CameraManager {
   readonly camera: THREE.PerspectiveCamera;
 
   private basePosition = new THREE.Vector3();
-  private lookTarget = new THREE.Vector3();
   private desiredPosition = new THREE.Vector3();
   private desiredLook = new THREE.Vector3();
+  // Settled (pre-drift) lerp state. Drift is applied on top of these each
+  // frame but must never feed back into them, or the lerp below would chase
+  // its own drifted output and the camera position would run away over time.
+  private currentPosition = new THREE.Vector3();
+  private currentLook = new THREE.Vector3();
   private lerpSpeed = 1.5;
   private driftAmplitude = 0;
   private driftSpeed = 0.25;
@@ -33,10 +37,11 @@ export class CameraManager {
   place(position: THREE.Vector3Like, target: THREE.Vector3Like): void {
     this.basePosition.set(position.x, position.y, position.z);
     this.desiredPosition.copy(this.basePosition);
+    this.currentPosition.copy(this.basePosition);
     this.camera.position.copy(this.basePosition);
-    this.lookTarget.set(target.x, target.y, target.z);
-    this.desiredLook.copy(this.lookTarget);
-    this.camera.lookAt(this.lookTarget);
+    this.desiredLook.set(target.x, target.y, target.z);
+    this.currentLook.copy(this.desiredLook);
+    this.camera.lookAt(this.desiredLook);
   }
 
   /** Smoothly move toward a new position/target over subsequent updates. */
@@ -47,8 +52,7 @@ export class CameraManager {
   ): void {
     this.basePosition.set(position.x, position.y, position.z);
     this.desiredPosition.copy(this.basePosition);
-    this.lookTarget.set(target.x, target.y, target.z);
-    this.desiredLook.copy(this.lookTarget);
+    this.desiredLook.set(target.x, target.y, target.z);
     this.lerpSpeed = lerpSpeed;
   }
 
@@ -59,9 +63,10 @@ export class CameraManager {
 
   update(dt: number, elapsed: number): void {
     const t = 1 - Math.exp(-this.lerpSpeed * dt);
-    this.camera.position.lerp(this.desiredPosition, t);
-    this.lookTarget.lerp(this.desiredLook, t);
+    this.currentPosition.lerp(this.desiredPosition, t);
+    this.currentLook.lerp(this.desiredLook, t);
 
+    this.camera.position.copy(this.currentPosition);
     if (this.driftAmplitude > 0) {
       const dx = Math.sin(elapsed * this.driftSpeed) * this.driftAmplitude;
       const dy =
@@ -70,6 +75,6 @@ export class CameraManager {
       this.camera.position.y += dy;
     }
 
-    this.camera.lookAt(this.lookTarget);
+    this.camera.lookAt(this.currentLook);
   }
 }

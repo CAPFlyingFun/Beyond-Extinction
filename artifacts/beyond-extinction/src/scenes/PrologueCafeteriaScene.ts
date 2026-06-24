@@ -112,15 +112,15 @@ class PrologueCafeteriaScene implements IScene {
 
   async enter(): Promise<void> {
     const scene = this.scene;
-    scene.background = new THREE.Color(0x0c1320);
-    scene.fog = new THREE.Fog(0x0c1320, 30, 120);
+    scene.background = new THREE.Color(0x223450);
+    scene.fog = new THREE.Fog(0x223450, 45, 150);
 
     this.ctx.audio.playMusic("lab-ambient");
 
-    // ---- Lab lighting (calm, clinical, slightly warm) ----
-    this.ambient = new THREE.AmbientLight(0x35506b, 0.7);
+    // ---- Lab lighting (clinical, brightly lit — a real lab, not a cave) ----
+    this.ambient = new THREE.AmbientLight(0x5a7aa0, 1.3);
     scene.add(this.ambient);
-    const key = new THREE.DirectionalLight(0xdfe9ff, 1.1);
+    const key = new THREE.DirectionalLight(0xdfe9ff, 1.7);
     key.position.set(20, 40, 20);
     key.castShadow = true;
     key.shadow.mapSize.set(1024, 1024);
@@ -140,7 +140,7 @@ class PrologueCafeteriaScene implements IScene {
       metalness: 0.3,
     });
     for (let i = -2; i <= 2; i++) {
-      const strip = new THREE.PointLight(0xcfe4ff, 12, 60, 2);
+      const strip = new THREE.PointLight(0xcfe4ff, 22, 75, 2);
       strip.position.set(i * 12, 14, 0);
       scene.add(strip);
       this.mainLights.push(strip);
@@ -777,6 +777,11 @@ class PrologueCafeteriaScene implements IScene {
         actions.walk = walkAction;
       }
 
+      // Force the idle pose onto the skeleton immediately so the very first
+      // rendered frame never shows the raw bind pose (which can look like
+      // limbs clipping through the body) before the game loop's first tick.
+      mixer.update(0);
+
       this.mixers.push(mixer);
       group.userData.mixer = mixer;
       group.userData.actions = actions;
@@ -1264,7 +1269,7 @@ class PrologueCafeteriaScene implements IScene {
       this.cascadeTimer += dt;
       const pulse = (Math.sin(elapsed * 8) * 0.5 + 0.5) * 6;
       for (const rl of this.redLights) rl.intensity = pulse;
-      this.ambient.intensity = 0.7 - Math.min(this.cascadeTimer / 4, 0.5);
+      this.ambient.intensity = 1.3 - Math.min(this.cascadeTimer / 4, 1.0);
       // Console ring glows hot.
       const ring = (this.console.userData as { ring?: THREE.Mesh }).ring;
       if (ring) {

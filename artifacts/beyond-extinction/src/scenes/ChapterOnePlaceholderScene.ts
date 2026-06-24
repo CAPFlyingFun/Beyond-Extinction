@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { CameraManager } from "../engine/CameraManager";
-import { loadTexture } from "../engine/assets";
+import { loadModel, loadTexture } from "../engine/assets";
 import { createBillboard, updateBillboardsYAxis } from "../engine/Billboard";
 
 /**
@@ -21,10 +21,13 @@ class ChapterOnePlaceholderScene implements IScene {
   private oceanUniforms!: { uTime: { value: number } };
   private ocean!: THREE.Mesh;
   private dodo!: THREE.Group;
+  private jackMixer?: THREE.AnimationMixer;
   private billboards: THREE.Mesh[] = [];
   private hissDone = false;
   private startTime = 0;
   private disposed = false;
+
+  private static readonly JACK_HEIGHT = 6.4;
 
   constructor(private ctx: SceneContext) {
     this.cam = new CameraManager(52, 0.1, 3000);
@@ -79,16 +82,9 @@ class ChapterOnePlaceholderScene implements IScene {
     await this.buildJungle();
     if (this.disposed) return;
 
-    // Jack lying on the sand (placeholder capsule).
-    const jack = new THREE.Group();
-    const body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(1.1, 3.2, 6, 14),
-      new THREE.MeshStandardMaterial({ color: 0x3a78d0, roughness: 0.6 }),
-    );
-    body.rotation.z = Math.PI / 2;
-    body.position.y = 1.2;
-    body.castShadow = true;
-    jack.add(body);
+    // Jack, washed up on the sand.
+    const jack = await this.buildJack();
+    if (this.disposed) return;
     jack.position.set(0, 0, 6);
     scene.add(jack);
 
@@ -186,6 +182,52 @@ class ChapterOnePlaceholderScene implements IScene {
         this.billboards.push(l);
       }
     }
+  }
+
+  /**
+   * Loads the real Jack model (falling back to a capsule placeholder if the
+   * GLB is missing). No lying-down clip exists yet, so he's tipped onto his
+   * back via rotation rather than animated — standing geometry, prone pose.
+   */
+  private async buildJack(): Promise<THREE.Group> {
+    const group = new THREE.Group();
+    const model = await loadModel("assets/models/Jack.glb", () => {
+      const ph = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.CapsuleGeometry(1.1, 3.2, 6, 14),
+        new THREE.MeshStandardMaterial({ color: 0x3a78d0, roughness: 0.6 }),
+      );
+      body.position.y = 3;
+      body.castShadow = true;
+      ph.add(body);
+      return ph;
+    });
+    group.add(model);
+    const size = new THREE.Vector3();
+    new THREE.Box3().setFromObject(model).getSize(size);
+    if (size.y > 1e-3) {
+      model.scale.multiplyScalar(ChapterOnePlaceholderScene.JACK_HEIGHT / size.y);
+    }
+    // Tip him onto his back (rotation applied to the model, not the group),
+    // then re-measure the now-lying bounding box so his back rests on the
+    // sand instead of clipping through it.
+    model.rotation.z = Math.PI / 2;
+    const grounded = new THREE.Box3().setFromObject(model);
+    model.position.y -= grounded.min.y;
+
+    if (model.animations && model.animations.length > 0) {
+      const mixer = new THREE.AnimationMixer(model);
+      const clips = model.animations;
+      const idleClip =
+        THREE.AnimationClip.findByName(clips, "Idle") ??
+        clips.find((c) => /idle/i.test(c.name)) ??
+        clips[0];
+      mixer.clipAction(idleClip).play();
+      mixer.update(0);
+      this.jackMixer = mixer;
+    }
+
+    return group;
   }
 
   private buildDodo(): THREE.Group {
@@ -291,6 +333,7 @@ class ChapterOnePlaceholderScene implements IScene {
   update(dt: number, elapsed: number): void {
     this.oceanUniforms.uTime.value = elapsed;
     this.cam.update(dt, elapsed);
+    this.jackMixer?.update(dt);
     updateBillboardsYAxis(this.billboards, this.camera.position);
     // Dodo bobs and waddles.
     if (this.dodo) {

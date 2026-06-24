@@ -34,14 +34,14 @@ function finish(canvas: HTMLCanvasElement): THREE.CanvasTexture {
 export function createFloorTexture(): THREE.CanvasTexture {
   const tile = 128;
   const { canvas, ctx } = makeCanvas(tile * 2, tile * 2);
-  const shades = ["#1b2738", "#1d2a3c", "#192536", "#1c2940"];
+  const shades = ["#3c5470", "#41597a", "#385069", "#3e5876"];
   for (let ty = 0; ty < 2; ty++) {
     for (let tx = 0; tx < 2; tx++) {
       ctx.fillStyle = shades[(tx + ty * 2) % shades.length];
       ctx.fillRect(tx * tile, ty * tile, tile, tile);
     }
   }
-  ctx.strokeStyle = "#0e1825";
+  ctx.strokeStyle = "#28394e";
   ctx.lineWidth = 4;
   ctx.beginPath();
   ctx.moveTo(tile, 0);
@@ -71,10 +71,10 @@ export function createWallTexture(): THREE.CanvasTexture {
   const w = 256;
   const h = 256;
   const { canvas, ctx } = makeCanvas(w, h);
-  ctx.fillStyle = "#202d40";
+  ctx.fillStyle = "#5a7290";
   ctx.fillRect(0, 0, w, h);
 
-  ctx.strokeStyle = "#141b29";
+  ctx.strokeStyle = "#3c5168";
   ctx.lineWidth = 3;
   ctx.beginPath();
   ctx.moveTo(w / 2, 0);
@@ -82,7 +82,7 @@ export function createWallTexture(): THREE.CanvasTexture {
   ctx.stroke();
   ctx.strokeRect(2, 2, w - 4, h - 4);
 
-  ctx.fillStyle = "#0e1420";
+  ctx.fillStyle = "#2c3c50";
   const rivetR = 3;
   for (const [x, y] of [
     [10, 10],
