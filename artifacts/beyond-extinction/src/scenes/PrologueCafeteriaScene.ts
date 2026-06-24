@@ -34,6 +34,10 @@ type Phase =
   | "cutscene"
   | "done";
 
+// The three distinct hand/character situations a coffee cup gets gripped in,
+// each with its own tuned offset (see gripOffsets).
+type GripContext = "jackRight" | "jackLeft" | "sarahRight";
+
 /**
  * The Prologue: a single continuous scene that moves Jack from the Level B
  * cafeteria coffee machine, to Sarah at the Lab Seven accelerator console,
@@ -104,18 +108,27 @@ class PrologueCafeteriaScene implements IScene {
   }> = [];
   private static readonly PLAYER_RADIUS = 1.5;
 
-  // Live-tunable cup grip offset, expressed in an arm-relative basis (see
-  // gripPoint()). Exposed via an on-screen panel behind ?tune=1 (buildGripTuner)
-  // so it can be dialed in visually without a rebuild, even on the deployed site.
-  private gripOffset = { along: 0.45, up: 0, side: 0 };
+  // Live-tunable cup grip offsets, one per hand/character context, expressed
+  // in an arm-relative basis (see gripPoint()). Exposed via an on-screen
+  // panel behind ?tune=1 (buildGripTuner) so each can be dialed in visually
+  // without a rebuild, even on the deployed site. Values below are the
+  // final ones dialed in via the tuner.
+  private gripOffsets: Record<GripContext, { along: number; up: number; side: number }> = {
+    jackRight: { along: 0.51, up: 0.08, side: -0.31 },
+    jackLeft: { along: 0.51, up: -0.12, side: 0.24 },
+    sarahRight: { along: 0.46, up: -0.09, side: 0.18 },
+  };
   // Cups currently riding a hand bone via the grip point, so the tuner panel
   // can reposition them live as its sliders move.
   private activeGrips: Array<{
     cup: THREE.Object3D;
     hand: THREE.Object3D;
     foreArm: THREE.Object3D | null;
+    context: GripContext;
   }> = [];
   private gripTunerEl: HTMLElement | null = null;
+  private unbindTunerGesture: (() => void) | null = null;
+  private static readonly TUNER_STORAGE_KEY = "be-dev-tuner";
 
   constructor(private ctx: SceneContext) {
     this.camera = new THREE.PerspectiveCamera(
@@ -238,7 +251,18 @@ class PrologueCafeteriaScene implements IScene {
     // Visible in any build (including the deployed GitHub Pages site) via
     // ?tune=1, not just `pnpm dev` — DEV-only code is stripped from
     // production bundles, which would make the panel unreachable there.
-    if (new URLSearchParams(location.search).has("tune")) this.buildGripTuner();
+    // ?tune=1 also flips a persistent "developer mode" flag (localStorage),
+    // so once enabled the panel keeps showing on later visits without the
+    // query param, and can be toggled by triple-tapping anywhere on screen —
+    // handy for ongoing tuning during early development without needing to
+    // re-type the URL each time.
+    if (new URLSearchParams(location.search).has("tune")) {
+      localStorage.setItem(PrologueCafeteriaScene.TUNER_STORAGE_KEY, "1");
+    }
+    if (localStorage.getItem(PrologueCafeteriaScene.TUNER_STORAGE_KEY) === "1") {
+      this.buildGripTuner();
+    }
+    this.bindTunerGesture();
   }
 
   // ---------- World building ----------
@@ -558,12 +582,13 @@ class PrologueCafeteriaScene implements IScene {
     cup: THREE.Object3D,
     hand: THREE.Object3D,
     foreArm: THREE.Object3D | null,
+    context: GripContext,
   ): void {
-    const gripWorld = this.gripPoint(hand, foreArm);
+    const gripWorld = this.gripPoint(hand, foreArm, context);
     this.scene.attach(cup);
     cup.position.copy(gripWorld);
     hand.attach(cup);
-    this.activeGrips.push({ cup, hand, foreArm });
+    this.activeGrips.push({ cup, hand, foreArm, context });
   }
 
   private spawnCoffee(index: number): void {
@@ -576,7 +601,12 @@ class PrologueCafeteriaScene implements IScene {
     const side = index === 0 ? "right" : "left";
     const hand = this.handBone(this.jack, side);
     if (hand) {
-      this.attachCupToHand(cup, hand, this.foreArmBone(this.jack, side));
+      this.attachCupToHand(
+        cup,
+        hand,
+        this.foreArmBone(this.jack, side),
+        side === "right" ? "jackRight" : "jackLeft",
+      );
     } else {
       // Placeholder capsule has no rig — fall back to a static offset.
       this.scene.remove(cup);
@@ -598,12 +628,12 @@ class PrologueCafeteriaScene implements IScene {
     this.scene.attach(cup);
     const hand = this.handBone(this.sarah, "right") ?? this.sarah;
     const foreArm = this.foreArmBone(this.sarah, "right");
-    const gripWorld = this.gripPoint(hand, foreArm);
+    const gripWorld = this.gripPoint(hand, foreArm, "sarahRight");
     await this.tween(cup.position, gripWorld, 600);
     if (this.disposed) return;
     hand.attach(cup);
     this.sarahCup = cup;
-    this.activeGrips.push({ cup, hand, foreArm });
+    this.activeGrips.push({ cup, hand, foreArm, context: "sarahRight" });
   }
 
   /**
@@ -890,11 +920,15 @@ class PrologueCafeteriaScene implements IScene {
    * of the palm), `up`/`side` perpendicular to it (world-up and left/right
    * relative to the arm). The rig has no finger bones, so this approximates
    * where a closed hand would actually hold an object. Values live in
-   * `gripOffset`, tunable at runtime via the ?tune=1 panel (buildGripTuner).
-   * Falls back to the wrist position itself if there's no forearm bone to
-   * derive a direction from.
+   * `gripOffsets`, keyed by which hand/character is gripping, tunable at
+   * runtime via the ?tune=1 panel (buildGripTuner). Falls back to the wrist
+   * position itself if there's no forearm bone to derive a direction from.
    */
-  private gripPoint(hand: THREE.Object3D, foreArm: THREE.Object3D | null): THREE.Vector3 {
+  private gripPoint(
+    hand: THREE.Object3D,
+    foreArm: THREE.Object3D | null,
+    context: GripContext,
+  ): THREE.Vector3 {
     hand.updateMatrixWorld(true);
     const handWorld = new THREE.Vector3();
     hand.getWorldPosition(handWorld);
@@ -910,25 +944,55 @@ class PrologueCafeteriaScene implements IScene {
     if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
     side.normalize();
     const up = side.clone().cross(along).normalize();
+    const offset = this.gripOffsets[context];
     return handWorld
-      .add(along.multiplyScalar(this.gripOffset.along))
-      .add(up.multiplyScalar(this.gripOffset.up))
-      .add(side.multiplyScalar(this.gripOffset.side));
+      .add(along.multiplyScalar(offset.along))
+      .add(up.multiplyScalar(offset.up))
+      .add(side.multiplyScalar(offset.side));
   }
 
-  /** Recomputes every held cup's local position from the current gripOffset. */
+  /** Recomputes every held cup's local position from the current gripOffsets. */
   private regripAll(): void {
-    for (const { cup, hand, foreArm } of this.activeGrips) {
-      const gripWorld = this.gripPoint(hand, foreArm);
+    for (const { cup, hand, foreArm, context } of this.activeGrips) {
+      const gripWorld = this.gripPoint(hand, foreArm, context);
       cup.position.copy(hand.worldToLocal(gripWorld));
     }
   }
 
   /**
-   * Panel (behind ?tune=1) with sliders for each gripOffset axis plus a
-   * "Copy values" button, so the final offset can be dialed in visually on
-   * any build — including the deployed site — and pasted back into
-   * gripOffset's initializer above.
+   * Lets three quick taps/clicks anywhere on screen show or hide the grip
+   * tuner panel and flip the persisted developer-mode flag, so it can be
+   * reached again later without re-adding ?tune=1 to the URL.
+   */
+  private bindTunerGesture(): void {
+    let tapTimes: number[] = [];
+    const onTap = () => {
+      const now = performance.now();
+      tapTimes = tapTimes.filter((t) => now - t < 600);
+      tapTimes.push(now);
+      if (tapTimes.length < 3) return;
+      tapTimes = [];
+      if (this.gripTunerEl) {
+        this.gripTunerEl.remove();
+        this.gripTunerEl = null;
+        localStorage.setItem(PrologueCafeteriaScene.TUNER_STORAGE_KEY, "0");
+      } else {
+        localStorage.setItem(PrologueCafeteriaScene.TUNER_STORAGE_KEY, "1");
+        this.buildGripTuner();
+      }
+    };
+    window.addEventListener("pointerdown", onTap);
+    this.unbindTunerGesture = () => window.removeEventListener("pointerdown", onTap);
+  }
+
+  /**
+   * Panel (behind ?tune=1, persisted developer mode, or a triple-tap — see
+   * bindTunerGesture) with a context switcher (Jack R / Jack L / Sarah R),
+   * sliders for the selected context's gripOffsets axes, and a "Copy all"
+   * button that dumps every context's tuned values at once, so they can be
+   * pasted back into gripOffsets' initializer above. Re-tuning later (e.g.
+   * if Jack's or Sarah's model is swapped) just means revisiting this panel
+   * — the offsets are per hand/character, not hardcoded geometry.
    */
   private buildGripTuner(): void {
     const el = document.createElement("div");
@@ -942,6 +1006,37 @@ class PrologueCafeteriaScene implements IScene {
     title.style.fontWeight = "bold";
     el.appendChild(title);
 
+    const contexts: Array<{ key: GripContext; label: string }> = [
+      { key: "jackRight", label: "Jack R" },
+      { key: "jackLeft", label: "Jack L" },
+      { key: "sarahRight", label: "Sarah R" },
+    ];
+    let current: GripContext = "jackRight";
+
+    const tabRow = document.createElement("div");
+    tabRow.style.cssText = "display:flex;gap:4px;";
+    const tabButtons = new Map<GripContext, HTMLButtonElement>();
+
+    const slidersBox = document.createElement("div");
+    slidersBox.style.cssText = "display:flex;flex-direction:column;gap:6px;";
+
+    const sliderInputs: Array<{
+      key: "along" | "up" | "side";
+      input: HTMLInputElement;
+      val: HTMLElement;
+    }> = [];
+
+    const refreshSliders = () => {
+      const offset = this.gripOffsets[current];
+      for (const { key, input, val } of sliderInputs) {
+        input.value = String(offset[key]);
+        val.textContent = offset[key].toFixed(2);
+      }
+      for (const [key, btn] of tabButtons) {
+        btn.style.background = key === current ? "#3d6fb5" : "#2a3650";
+      }
+    };
+
     const slider = (label: string, key: "along" | "up" | "side") => {
       const row = document.createElement("label");
       row.style.cssText = "display:flex;flex-direction:column;gap:2px;";
@@ -950,35 +1045,51 @@ class PrologueCafeteriaScene implements IScene {
       const name = document.createElement("span");
       name.textContent = label;
       const val = document.createElement("b");
-      val.textContent = this.gripOffset[key].toFixed(2);
       top.append(name, val);
       const input = document.createElement("input");
       input.type = "range";
       input.min = "-0.6";
       input.max = "0.8";
       input.step = "0.01";
-      input.value = String(this.gripOffset[key]);
       input.addEventListener("input", () => {
-        this.gripOffset[key] = parseFloat(input.value);
-        val.textContent = this.gripOffset[key].toFixed(2);
+        this.gripOffsets[current][key] = parseFloat(input.value);
+        val.textContent = this.gripOffsets[current][key].toFixed(2);
         this.regripAll();
       });
       row.append(top, input);
-      el.appendChild(row);
+      slidersBox.appendChild(row);
+      sliderInputs.push({ key, input, val });
     };
     slider("Along arm", "along");
     slider("Up / down", "up");
     slider("Left / right", "side");
 
+    for (const { key, label } of contexts) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = label;
+      btn.style.cssText =
+        "flex:1;background:#2a3650;color:#dfe9ff;border:1px solid #4a5b7a;border-radius:4px;" +
+        "padding:4px;cursor:pointer;font:11px monospace;";
+      btn.addEventListener("click", () => {
+        current = key;
+        refreshSliders();
+      });
+      tabButtons.set(key, btn);
+      tabRow.appendChild(btn);
+    }
+    el.append(tabRow, slidersBox);
+    refreshSliders();
+
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
-    copyBtn.textContent = "Copy values";
+    copyBtn.textContent = "Copy all";
     copyBtn.style.cssText =
       "background:#2a3650;color:#dfe9ff;border:1px solid #4a5b7a;border-radius:4px;padding:4px;cursor:pointer;";
     const log = document.createElement("pre");
     log.style.cssText = "white-space:pre-wrap;font-size:10px;opacity:.8;margin:0;";
     copyBtn.addEventListener("click", async () => {
-      const text = JSON.stringify(this.gripOffset, null, 2);
+      const text = JSON.stringify(this.gripOffsets, null, 2);
       log.textContent = text;
       try {
         await navigator.clipboard.writeText(text);
@@ -986,7 +1097,7 @@ class PrologueCafeteriaScene implements IScene {
       } catch {
         copyBtn.textContent = "Copy failed — see below";
       }
-      setTimeout(() => (copyBtn.textContent = "Copy values"), 1200);
+      setTimeout(() => (copyBtn.textContent = "Copy all"), 1200);
     });
     el.append(copyBtn, log);
 
@@ -1612,6 +1723,7 @@ class PrologueCafeteriaScene implements IScene {
     closeSettingsPanel();
     this.gearEl?.remove();
     this.gripTunerEl?.remove();
+    this.unbindTunerGesture?.();
     this.ctx.overlays.hideClock();
     this.ctx.input.setEnabled(true);
     this.scene.traverse((o) => {
