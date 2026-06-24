@@ -34,7 +34,6 @@ export class Game {
     container.appendChild(this.uiLayer);
 
     this.input = new InputManager(this.renderer.domElement);
-    this.input.mountTouchControls(this.uiLayer);
     this.dialogue = new DialogueManager(this.uiLayer);
     this.quest = new QuestManager(this.uiLayer);
     this.audio = new AudioManager();
@@ -76,7 +75,6 @@ export class Game {
     this.lastTime = now;
     this.elapsed += dt;
     const elapsed = this.elapsed;
-    this.input.setDialogueHidesTouch(this.dialogue.isActive);
     this.scenes.update(dt, elapsed);
     const active = this.scenes.active;
     if (active) {

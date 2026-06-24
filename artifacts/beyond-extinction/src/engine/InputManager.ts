@@ -3,10 +3,11 @@ import * as THREE from "three";
 type ClickHandler = (pointer: THREE.Vector2, event: PointerEvent) => void;
 
 /**
- * Tracks keyboard (WASD / arrows), pointer, and on-screen touch input, and
- * exposes raycasting helpers for click-to-interact behaviour. On touch / small
- * screens it mounts a virtual joystick and an action button that feed the same
- * movement and interaction queries the keyboard does.
+ * Tracks keyboard (WASD / arrows) and pointer input, and exposes raycasting
+ * helpers for click/tap-to-interact behaviour. Movement and interaction are
+ * unified across desktop and touch: WASD/arrows walk on desktop, and tapping
+ * the floor (to walk) or a tagged object (to interact) drives everything else
+ * on every platform.
  */
 export class InputManager {
   private readonly dom: HTMLElement;
@@ -16,12 +17,6 @@ export class InputManager {
   private clickHandlers = new Set<ClickHandler>();
   private enabled = true;
 
-  // On-screen touch controls.
-  private readonly touch = new THREE.Vector2();
-  private actionLatched = false;
-  private touchRoot: HTMLElement | null = null;
-  private resetStick: (() => void) | null = null;
-  private dialogueHidesTouch = false;
   readonly isTouch: boolean =
     window.matchMedia("(pointer: coarse)").matches ||
     navigator.maxTouchPoints > 0 ||
@@ -58,34 +53,7 @@ export class InputManager {
 
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
-    if (!enabled) {
-      this.keys.clear();
-      this.actionLatched = false;
-      this.touch.set(0, 0);
-      this.resetStick?.();
-    }
-    this.updateTouchVisibility();
-  }
-
-  /**
-   * Hides the on-screen joystick/action button while a dialogue line is on
-   * screen — the player isn't walking mid-conversation, and the bottom-anchored
-   * dialogue box would otherwise compete with them for the same screen space.
-   * Independent of setEnabled() so scenes that don't explicitly gate input
-   * around a dialogue.play() call (e.g. a cutscene with no movement at all)
-   * still get the controls hidden for free.
-   */
-  setDialogueHidesTouch(hidden: boolean): void {
-    if (this.dialogueHidesTouch === hidden) return;
-    this.dialogueHidesTouch = hidden;
-    this.updateTouchVisibility();
-  }
-
-  private updateTouchVisibility(): void {
-    this.touchRoot?.classList.toggle(
-      "be-touch--off",
-      !this.enabled || this.dialogueHidesTouch,
-    );
+    if (!enabled) this.keys.clear();
   }
 
   /** Whether input is currently accepted (false while menus/cutscenes gate it). */
@@ -97,18 +65,7 @@ export class InputManager {
     return codes.some((c) => this.keys.has(c));
   }
 
-  /**
-   * Returns true once per press of the on-screen action button, then clears the
-   * latch. This guarantees a quick tap is never lost between animation frames,
-   * unlike polling current key state.
-   */
-  consumeActionPress(): boolean {
-    if (!this.actionLatched) return false;
-    this.actionLatched = false;
-    return true;
-  }
-
-  /** Normalised movement vector on the XZ plane from keys and/or joystick. */
+  /** Normalised movement vector on the XZ plane from the keyboard. */
   getMoveVector(): THREE.Vector2 {
     const x =
       (this.isDown("KeyD", "ArrowRight") ? 1 : 0) -
@@ -117,7 +74,6 @@ export class InputManager {
       (this.isDown("KeyS", "ArrowDown") ? 1 : 0) -
       (this.isDown("KeyW", "ArrowUp") ? 1 : 0);
     const v = new THREE.Vector2(x, y);
-    if (this.touch.lengthSq() > 0.0004) v.add(this.touch);
     if (v.lengthSq() > 1) v.normalize();
     return v;
   }
@@ -141,98 +97,11 @@ export class InputManager {
     this.clickHandlers.clear();
   }
 
-  /**
-   * Builds the on-screen joystick + action button into the given UI layer when
-   * the device is touch-capable or the viewport is narrow. Safe to call once.
-   */
-  mountTouchControls(layer: HTMLElement): void {
-    if (this.touchRoot) return;
-    if (!this.isTouch) return;
-
-    const root = document.createElement("div");
-    root.className = "be-touch";
-
-    // ---- Virtual joystick (left) ----
-    const stick = document.createElement("div");
-    stick.className = "be-touch-stick";
-    const knob = document.createElement("div");
-    knob.className = "be-touch-stick__knob";
-    stick.appendChild(knob);
-    root.appendChild(stick);
-
-    const radius = 52;
-    let stickId = -1;
-    const resetStick = () => {
-      stickId = -1;
-      this.touch.set(0, 0);
-      knob.style.transform = "translate(-50%, -50%)";
-    };
-    this.resetStick = resetStick;
-
-    const moveStick = (e: PointerEvent) => {
-      const r = stick.getBoundingClientRect();
-      const cx = r.left + r.width / 2;
-      const cy = r.top + r.height / 2;
-      let dx = e.clientX - cx;
-      let dy = e.clientY - cy;
-      const len = Math.hypot(dx, dy);
-      if (len > radius) {
-        dx = (dx / len) * radius;
-        dy = (dy / len) * radius;
-      }
-      knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
-      this.touch.set(dx / radius, dy / radius);
-    };
-
-    stick.addEventListener("pointerdown", (e) => {
-      e.preventDefault();
-      stickId = e.pointerId;
-      stick.setPointerCapture(stickId);
-      moveStick(e);
-    });
-    stick.addEventListener("pointermove", (e) => {
-      if (e.pointerId !== stickId) return;
-      moveStick(e);
-    });
-    const endStick = (e: PointerEvent) => {
-      if (e.pointerId !== stickId) return;
-      resetStick();
-    };
-    stick.addEventListener("pointerup", endStick);
-    stick.addEventListener("pointercancel", endStick);
-
-    // ---- Action button (right) → behaves like the E key ----
-    const action = document.createElement("button");
-    action.className = "be-touch-action";
-    action.type = "button";
-    action.textContent = "E";
-    action.setAttribute("aria-label", "Interact");
-    const pressAction = (e: PointerEvent) => {
-      e.preventDefault();
-      if (!this.enabled) return;
-      this.actionLatched = true;
-      action.classList.add("is-down");
-    };
-    const releaseAction = () => {
-      action.classList.remove("is-down");
-    };
-    action.addEventListener("pointerdown", pressAction);
-    action.addEventListener("pointerup", releaseAction);
-    action.addEventListener("pointercancel", releaseAction);
-    action.addEventListener("pointerleave", releaseAction);
-    root.appendChild(action);
-
-    layer.appendChild(root);
-    this.touchRoot = root;
-  }
-
   dispose(): void {
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
     this.dom.removeEventListener("pointerdown", this.onPointerDown);
     this.dom.removeEventListener("pointermove", this.onPointerMove);
     this.clickHandlers.clear();
-    this.touchRoot?.remove();
-    this.touchRoot = null;
   }
 }

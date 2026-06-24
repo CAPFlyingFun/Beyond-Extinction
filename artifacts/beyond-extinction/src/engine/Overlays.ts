@@ -10,6 +10,9 @@ export class Overlays {
   private hint: HTMLDivElement;
   private toast: HTMLDivElement;
   private toastTimer?: ReturnType<typeof setTimeout>;
+  private confirm: HTMLDivElement;
+  private confirmText: HTMLDivElement;
+  private confirmResolve: ((value: boolean) => void) | null = null;
 
   constructor(parent: HTMLElement) {
     this.fade = this.make(parent, "be-fade");
@@ -18,6 +21,27 @@ export class Overlays {
     this.clock = this.make(parent, "be-clock");
     this.hint = this.make(parent, "be-hint");
     this.toast = this.make(parent, "be-toast");
+
+    this.confirm = this.make(parent, "be-confirm");
+    const panel = document.createElement("div");
+    panel.className = "be-confirm__panel";
+    this.confirmText = document.createElement("div");
+    this.confirmText.className = "be-confirm__text";
+    const actions = document.createElement("div");
+    actions.className = "be-confirm__actions";
+    const noBtn = document.createElement("button");
+    noBtn.type = "button";
+    noBtn.className = "be-confirm__btn";
+    noBtn.textContent = "No";
+    noBtn.addEventListener("click", () => this.resolveConfirm(false));
+    const yesBtn = document.createElement("button");
+    yesBtn.type = "button";
+    yesBtn.className = "be-confirm__btn be-confirm__btn--yes";
+    yesBtn.textContent = "Yes";
+    yesBtn.addEventListener("click", () => this.resolveConfirm(true));
+    actions.append(noBtn, yesBtn);
+    panel.append(this.confirmText, actions);
+    this.confirm.appendChild(panel);
   }
 
   private make(parent: HTMLElement, cls: string): HTMLDivElement {
@@ -92,10 +116,33 @@ export class Overlays {
     }, holdMs);
   }
 
+  /** Shows a Yes/No prompt and resolves once the player picks one. */
+  showConfirm(message: string): Promise<boolean> {
+    this.confirmText.textContent = message;
+    this.confirm.classList.add("show");
+    return new Promise((resolve) => {
+      this.confirmResolve = resolve;
+    });
+  }
+
+  private resolveConfirm(value: boolean): void {
+    this.confirm.classList.remove("show");
+    const resolve = this.confirmResolve;
+    this.confirmResolve = null;
+    resolve?.(value);
+  }
+
   dispose(): void {
     if (this.toastTimer) clearTimeout(this.toastTimer);
-    [this.fade, this.flash, this.caption, this.clock, this.hint, this.toast].forEach(
-      (e) => e.remove(),
-    );
+    this.resolveConfirm(false);
+    [
+      this.fade,
+      this.flash,
+      this.caption,
+      this.clock,
+      this.hint,
+      this.toast,
+      this.confirm,
+    ].forEach((e) => e.remove());
   }
 }

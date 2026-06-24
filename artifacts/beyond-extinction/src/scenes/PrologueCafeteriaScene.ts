@@ -80,10 +80,13 @@ class PrologueCafeteriaScene implements IScene {
   private coffeeStations: THREE.Object3D[] = [];
   private floor!: THREE.Mesh;
   private clickTarget: THREE.Vector3 | null = null;
-  private ePrev = false;
   private nearStation: THREE.Object3D | null = null;
   private readonly pickupRadius = 6;
   private nearConsole = false;
+  private nearSarah = false;
+  // True while a tap-to-confirm prompt is on screen — guards against stacking
+  // a second prompt from another tap before the player answers the first.
+  private confirmOpen = false;
   private reachSarahZone = new THREE.Vector3(20, 0, -36);
   private reachPromptShown = false;
   // The console desk sits to the EAST of the central accelerator lane (see
@@ -179,6 +182,7 @@ class PrologueCafeteriaScene implements IScene {
     this.sarah = await this.buildCharacter("Sarah", 0x36b27a);
     this.sarah.position.set(20, 0, -18);
     this.sarah.rotation.y = Math.PI;
+    this.sarah.userData.kind = "sarah";
     scene.add(this.sarah);
 
     // Emergency lights exist from the start (dark) so the alarm never changes
@@ -526,33 +530,59 @@ class PrologueCafeteriaScene implements IScene {
     return cup;
   }
 
+  /**
+   * Places a carried cup at a hand bone's current world position (plus a
+   * small lift so it nestles into the palm rather than the wrist pivot), then
+   * reparents it onto the bone with attach() so the cup's local transform is
+   * computed to keep that exact spot — from then on it rides the bone through
+   * every animated pose instead of drifting from a static offset.
+   */
+  private attachCupToHand(cup: THREE.Object3D, hand: THREE.Object3D): void {
+    hand.updateMatrixWorld(true);
+    const gripWorld = new THREE.Vector3();
+    hand.getWorldPosition(gripWorld);
+    gripWorld.y += 0.18;
+    this.scene.attach(cup);
+    cup.position.copy(gripWorld);
+    hand.attach(cup);
+  }
+
   private spawnCoffee(index: number): void {
     const cup = this.makeCup();
     cup.scale.setScalar(0.8);
     this.coffees.push(cup as unknown as THREE.Mesh);
-    // Carried in Jack's hands — one at each side, at hand height and slightly
-    // forward, so two cups read as "holding coffees" rather than floating at
-    // chest centre.
-    this.jack.add(cup);
-    cup.position.set(index === 0 ? -1.9 : 1.9, 3.1, 1.0);
+    this.scene.add(cup);
+    // index 0 sits on Jack's right side, index 1 on his left, matching the two
+    // counter cups' relative positions.
+    const hand = this.handBone(this.jack, index === 0 ? "right" : "left");
+    if (hand) {
+      this.attachCupToHand(cup, hand);
+    } else {
+      // Placeholder capsule has no rig — fall back to a static offset.
+      this.scene.remove(cup);
+      this.jack.add(cup);
+      cup.position.set(index === 0 ? -1.9 : 1.9, 3.1, 1.0);
+    }
   }
 
   /**
    * Jack hands one of his two coffees to Sarah when they meet: the cup detaches
-   * into world space (keeping its on-screen position), glides across to her, and
-   * is then parented to her hand so it stays with her for the rest of the scene.
+   * into world space (keeping its on-screen position), glides across to her
+   * hand's current world position, and is then parented to that hand bone so
+   * it keeps tracking her pose for the rest of the scene.
    */
   private async handCoffeeToSarah(): Promise<void> {
     const cup = this.coffees.pop();
     if (!cup) return;
     this.scene.attach(cup);
-    this.sarah.updateMatrixWorld(true);
-    const handWorld = new THREE.Vector3(-1.4, 3.1, 1.1).applyMatrix4(
-      this.sarah.matrixWorld,
-    );
+    const hand = this.handBone(this.sarah, "right") ?? this.sarah;
+    hand.updateMatrixWorld(true);
+    const handWorld = new THREE.Vector3();
+    hand.getWorldPosition(handWorld);
+    handWorld.y += 0.18;
     await this.tween(cup.position, handWorld, 600);
     if (this.disposed) return;
-    this.sarah.attach(cup);
+    hand.attach(cup);
     this.sarahCup = cup;
   }
 
@@ -787,8 +817,32 @@ class PrologueCafeteriaScene implements IScene {
       group.userData.actions = actions;
       group.userData.walkBlend = 0;
     }
+    // Cache the rig's hand bones (Mixamo-style naming) so carried props can be
+    // parented directly to them — that way a held cup tracks the actual
+    // animated hand pose instead of a static offset from the character root,
+    // which used to drift away from the hand mid-gesture.
+    let leftHand: THREE.Object3D | null = null;
+    let rightHand: THREE.Object3D | null = null;
+    model.traverse((obj) => {
+      if ((obj as THREE.Bone).isBone) {
+        if (obj.name === "LeftHand") leftHand = obj;
+        else if (obj.name === "RightHand") rightHand = obj;
+      }
+    });
+    group.userData.leftHand = leftHand;
+    group.userData.rightHand = rightHand;
     group.userData.name = name;
     return group;
+  }
+
+  /** The rig's left/right hand bone, or null for the capsule placeholder. */
+  private handBone(
+    character: THREE.Group,
+    side: "left" | "right",
+  ): THREE.Object3D | null {
+    return (character.userData[side === "left" ? "leftHand" : "rightHand"] as
+      | THREE.Object3D
+      | undefined) ?? null;
   }
 
   /** Scale a model to `targetHeight` world units and sit its feet at y=0. */
@@ -831,9 +885,44 @@ class PrologueCafeteriaScene implements IScene {
 
   // ---------- Interaction & phases ----------
 
+  /** Tap/click targets worth raycasting against in the current phase. */
+  private tapTargets(): THREE.Object3D[] {
+    if (this.phase === "coffee") return this.coffeeStations;
+    if (this.phase === "to-sarah") return [this.sarah];
+    if (this.phase === "to-console") return this.interactables;
+    return [];
+  }
+
+  /** Walk up from a raycast hit (often a deep mesh) to its tagged ancestor. */
+  private resolveInteractable(obj: THREE.Object3D): THREE.Object3D | null {
+    let cur: THREE.Object3D | null = obj;
+    while (cur) {
+      if (cur.userData.kind) return cur;
+      cur = cur.parent;
+    }
+    return null;
+  }
+
+  /** How close Jack must be to act on a tagged object, and the point to measure from. */
+  private interactionRange(target: THREE.Object3D): {
+    anchor: THREE.Vector3;
+    radius: number;
+  } {
+    if (target.userData.kind === "console") {
+      return {
+        anchor: this.consoleDeskWorld.clone().add(new THREE.Vector3(-6, 0, 0)),
+        radius: 7,
+      };
+    }
+    if (target.userData.kind === "sarah") {
+      return { anchor: target.position, radius: 7 };
+    }
+    return { anchor: target.position, radius: this.pickupRadius };
+  }
+
   private handleClick(): void {
-    if (this.ctx.dialogue.isActive) return;
-    // Click-to-move: only during free-roam phases, raycast onto the floor.
+    if (this.ctx.dialogue.isActive || this.confirmOpen) return;
+    // Click-to-move / tap-to-interact: only during free-roam phases.
     if (
       this.phase !== "coffee" &&
       this.phase !== "to-sarah" &&
@@ -842,6 +931,29 @@ class PrologueCafeteriaScene implements IScene {
     ) {
       return;
     }
+
+    const targets = this.tapTargets();
+    if (targets.length > 0) {
+      const hits = this.ctx.input.intersect(this.camera, targets);
+      if (hits.length > 0) {
+        const interactable = this.resolveInteractable(hits[0].object);
+        if (interactable) {
+          const { anchor, radius } = this.interactionRange(interactable);
+          if (this.jack.position.distanceTo(anchor) <= radius) {
+            this.tryInteract(interactable);
+            return;
+          }
+          // Too far to act on it yet — walk toward where it was tapped.
+          const p = hits[0].point.clone();
+          p.x = THREE.MathUtils.clamp(p.x, -55, 55);
+          p.z = THREE.MathUtils.clamp(p.z, -38, 40);
+          p.y = 0;
+          this.clickTarget = p;
+          return;
+        }
+      }
+    }
+
     const hits = this.ctx.input.intersect(this.camera, [this.floor]);
     if (hits.length === 0) return;
     const p = hits[0].point.clone();
@@ -849,6 +961,33 @@ class PrologueCafeteriaScene implements IScene {
     p.z = THREE.MathUtils.clamp(p.z, -38, 40);
     p.y = 0;
     this.clickTarget = p;
+  }
+
+  /** Opens a Yes/No prompt for a tapped, in-range object and acts on "Yes". */
+  private async tryInteract(target: THREE.Object3D): Promise<void> {
+    const kind = target.userData.kind as string | undefined;
+    let message: string;
+    let onYes: () => void;
+    if (kind === "coffee" && this.phase === "coffee") {
+      message = "Pick up coffee cup?";
+      onYes = () => this.pickUpCoffee(target);
+    } else if (kind === "sarah" && this.phase === "to-sarah") {
+      message = "Deliver the coffee to Sarah?";
+      onYes = () => this.triggerIntroDialogue();
+    } else if (kind === "console" && this.phase === "to-console") {
+      message = "Stabilise the accelerator?";
+      onYes = () => this.triggerConsoleDialogue();
+    } else {
+      return;
+    }
+
+    this.confirmOpen = true;
+    this.ctx.input.setEnabled(false);
+    const yes = await this.ctx.overlays.showConfirm(message);
+    if (this.disposed) return;
+    this.confirmOpen = false;
+    this.ctx.input.setEnabled(true);
+    if (yes) onYes();
   }
 
   private pickUpCoffee(station: THREE.Object3D): void {
@@ -874,7 +1013,7 @@ class PrologueCafeteriaScene implements IScene {
     }
   }
 
-  private updateCoffeePrompt(eEdge: boolean): void {
+  private updateCoffeePrompt(): void {
     // Find the nearest uncollected cup within reach.
     let nearest: THREE.Object3D | null = null;
     let bestDist = Infinity;
@@ -888,21 +1027,13 @@ class PrologueCafeteriaScene implements IScene {
 
     if (nearest !== this.nearStation) {
       this.nearStation = nearest;
-      if (nearest) {
-        this.ctx.overlays.showHint(
-          this.ctx.input.isTouch ? "Pick Up" : "Press E to pick up",
-        );
-      } else {
-        this.ctx.overlays.showHint(this.walkHint);
-      }
-    }
-
-    if (eEdge && this.nearStation) {
-      this.pickUpCoffee(this.nearStation);
+      this.ctx.overlays.showHint(
+        nearest ? `${this.actionWord} the coffee cup` : this.walkHint,
+      );
     }
   }
 
-  private updateConsolePrompt(eEdge: boolean): void {
+  private updateConsolePrompt(): void {
     // Approach point is just west of the desk (in the lane), since the desk now
     // sits to the east.
     const consoleFront = this.consoleDeskWorld
@@ -912,15 +1043,18 @@ class PrologueCafeteriaScene implements IScene {
     if (near !== this.nearConsole) {
       this.nearConsole = near;
       this.ctx.overlays.showHint(
-        near
-          ? this.ctx.input.isTouch
-            ? "Stabilise"
-            : "Press E to stabilise the accelerator"
-          : "Walk to the console",
+        near ? `${this.actionWord} the console to stabilise it` : "Walk to the console",
       );
     }
-    if (eEdge && near) {
-      this.triggerConsoleDialogue();
+  }
+
+  private updateSarahPrompt(): void {
+    const near = this.jack.position.distanceTo(this.sarah.position) < 7;
+    if (near !== this.nearSarah) {
+      this.nearSarah = near;
+      this.ctx.overlays.showHint(
+        near ? `${this.actionWord} Sarah to deliver the coffee` : "Walk to Sarah",
+      );
     }
   }
 
@@ -1096,11 +1230,16 @@ class PrologueCafeteriaScene implements IScene {
     this.camera.updateProjectionMatrix();
   }
 
+  /** "Tap" on touch, "Click" with a mouse — used to phrase interaction hints. */
+  private get actionWord(): string {
+    return this.ctx.input.isTouch ? "Tap" : "Click";
+  }
+
   /** Generic "nothing nearby" hint, phrased for whichever input the player is using. */
   private get walkHint(): string {
     return this.ctx.input.isTouch
-      ? "Use the joystick to walk · tap the button to interact"
-      : "WASD / Arrows or click to walk · E to interact";
+      ? "Tap the floor to walk · tap an object to interact"
+      : "WASD / Arrows or click to walk · click an object to interact";
   }
 
   /**
@@ -1161,12 +1300,6 @@ class PrologueCafeteriaScene implements IScene {
 
     this.vortexUniforms.uTime.value = elapsed;
     this.vortex.rotation.z += dt * 0.6;
-
-    // Edge-detect the E key once per frame so one press = one interaction. The
-    // on-screen action button latches its own edge so a quick tap is never lost.
-    const eDown = this.ctx.input.isDown("KeyE");
-    const eEdge = (eDown && !this.ePrev) || this.ctx.input.consumeActionPress();
-    this.ePrev = eDown;
 
     // Player movement during free-roam phases.
     const freeRoam =
@@ -1245,12 +1378,14 @@ class PrologueCafeteriaScene implements IScene {
     }
     this.applyLocomotion(this.jack, jackMoving, dt);
 
-    // Coffee pickup: proximity prompt + E to collect.
+    // Proximity hints: the actual pickup/delivery/console action happens by
+    // tapping the object itself (see tryInteract(), called from handleClick()).
     if (this.phase === "coffee") {
-      this.updateCoffeePrompt(eEdge);
+      this.updateCoffeePrompt();
     } else if (this.phase === "to-console") {
-      // Console: proximity prompt + explicit E to stabilise the accelerator.
-      this.updateConsolePrompt(eEdge);
+      this.updateConsolePrompt();
+    } else if (this.phase === "to-sarah") {
+      this.updateSarahPrompt();
     }
 
     // Sarah walks to her target if set.
@@ -1271,13 +1406,6 @@ class PrologueCafeteriaScene implements IScene {
     // Keep Jack and Sarah from standing inside one another — split the push
     // evenly so neither character's deliberate movement "wins" outright.
     this.resolveCharacterOverlap();
-
-    // Proximity trigger: meeting Sarah starts the intro exchange.
-    if (this.phase === "to-sarah") {
-      if (this.jack.position.distanceTo(this.sarah.position) < 7) {
-        this.triggerIntroDialogue();
-      }
-    }
 
     // Alarm pulse: once the cascade is active, the red emergency lights pulse
     // and the warm ambient drains. Runs through the reach-sarah and vortex beats.
