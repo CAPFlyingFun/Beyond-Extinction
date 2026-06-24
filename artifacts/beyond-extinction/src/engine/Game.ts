@@ -76,6 +76,7 @@ export class Game {
     this.lastTime = now;
     this.elapsed += dt;
     const elapsed = this.elapsed;
+    this.input.setDialogueHidesTouch(this.dialogue.isActive);
     this.scenes.update(dt, elapsed);
     const active = this.scenes.active;
     if (active) {

@@ -12,7 +12,7 @@ import {
   subscribeSettings,
   type GameplaySettings,
 } from "../engine/Settings";
-import { autoFramingScale } from "../engine/cameraFraming";
+import { autoFramingScale, portraitFovBoost } from "../engine/cameraFraming";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 import {
   createEquipmentPanelTexture,
@@ -208,7 +208,7 @@ class PrologueCafeteriaScene implements IScene {
 
     this.phase = "coffee";
     this.ctx.quest.setObjective("Get two coffees from the counter.");
-    this.ctx.overlays.showHint("WASD / Arrows or click to walk · E to interact");
+    this.ctx.overlays.showHint(this.walkHint);
 
     // Camera settings: apply persisted prefs, react to live slider changes, and
     // mount the in-game gear that opens the panel.
@@ -889,11 +889,11 @@ class PrologueCafeteriaScene implements IScene {
     if (nearest !== this.nearStation) {
       this.nearStation = nearest;
       if (nearest) {
-        this.ctx.overlays.showHint("Press E to pick up");
-      } else {
         this.ctx.overlays.showHint(
-          "WASD / Arrows or click to walk · E to interact",
+          this.ctx.input.isTouch ? "Pick Up" : "Press E to pick up",
         );
+      } else {
+        this.ctx.overlays.showHint(this.walkHint);
       }
     }
 
@@ -912,7 +912,11 @@ class PrologueCafeteriaScene implements IScene {
     if (near !== this.nearConsole) {
       this.nearConsole = near;
       this.ctx.overlays.showHint(
-        near ? "Press E to stabilise the accelerator" : "Walk to the console",
+        near
+          ? this.ctx.input.isTouch
+            ? "Stabilise"
+            : "Press E to stabilise the accelerator"
+          : "Walk to the console",
       );
     }
     if (eEdge && near) {
@@ -1081,10 +1085,22 @@ class PrologueCafeteriaScene implements IScene {
   private unsubSettings?: () => void;
   private gearEl?: HTMLButtonElement;
 
-  /** Push the current FOV preference onto the live gameplay camera. */
+  /**
+   * Push the current FOV preference onto the live gameplay camera, widened in
+   * narrow portrait to match the dolly-back in framingScale() — a wider view
+   * opens up around the subject instead of just rendering the same crop from
+   * further away.
+   */
   private applyFov(): void {
-    this.camera.fov = this.settings.fov;
+    this.camera.fov = this.settings.fov + portraitFovBoost(this.camera.aspect);
     this.camera.updateProjectionMatrix();
+  }
+
+  /** Generic "nothing nearby" hint, phrased for whichever input the player is using. */
+  private get walkHint(): string {
+    return this.ctx.input.isTouch
+      ? "Use the joystick to walk · tap the button to interact"
+      : "WASD / Arrows or click to walk · E to interact";
   }
 
   /**
@@ -1307,7 +1323,7 @@ class PrologueCafeteriaScene implements IScene {
   resize(width: number, height: number): void {
     this.camera.aspect = width / height;
     this.viewportHeight = height;
-    this.camera.updateProjectionMatrix();
+    this.applyFov();
   }
 
   dispose(): void {

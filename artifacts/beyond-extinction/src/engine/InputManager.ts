@@ -21,6 +21,11 @@ export class InputManager {
   private actionLatched = false;
   private touchRoot: HTMLElement | null = null;
   private resetStick: (() => void) | null = null;
+  private dialogueHidesTouch = false;
+  readonly isTouch: boolean =
+    window.matchMedia("(pointer: coarse)").matches ||
+    navigator.maxTouchPoints > 0 ||
+    window.matchMedia("(max-width: 820px)").matches;
 
   private onKeyDown = (e: KeyboardEvent) => {
     this.keys.add(e.code);
@@ -59,7 +64,28 @@ export class InputManager {
       this.touch.set(0, 0);
       this.resetStick?.();
     }
-    this.touchRoot?.classList.toggle("be-touch--off", !enabled);
+    this.updateTouchVisibility();
+  }
+
+  /**
+   * Hides the on-screen joystick/action button while a dialogue line is on
+   * screen — the player isn't walking mid-conversation, and the bottom-anchored
+   * dialogue box would otherwise compete with them for the same screen space.
+   * Independent of setEnabled() so scenes that don't explicitly gate input
+   * around a dialogue.play() call (e.g. a cutscene with no movement at all)
+   * still get the controls hidden for free.
+   */
+  setDialogueHidesTouch(hidden: boolean): void {
+    if (this.dialogueHidesTouch === hidden) return;
+    this.dialogueHidesTouch = hidden;
+    this.updateTouchVisibility();
+  }
+
+  private updateTouchVisibility(): void {
+    this.touchRoot?.classList.toggle(
+      "be-touch--off",
+      !this.enabled || this.dialogueHidesTouch,
+    );
   }
 
   /** Whether input is currently accepted (false while menus/cutscenes gate it). */
@@ -121,11 +147,7 @@ export class InputManager {
    */
   mountTouchControls(layer: HTMLElement): void {
     if (this.touchRoot) return;
-    const wantsTouch =
-      window.matchMedia("(pointer: coarse)").matches ||
-      navigator.maxTouchPoints > 0 ||
-      window.matchMedia("(max-width: 820px)").matches;
-    if (!wantsTouch) return;
+    if (!this.isTouch) return;
 
     const root = document.createElement("div");
     root.className = "be-touch";

@@ -283,10 +283,14 @@ body {
 /* ---------- HUD hint ---------- */
 .be-hint {
   position: fixed;
-  bottom: 1.4rem;
+  /* Clear of .be-quest, which can wrap to two lines on narrow phones and
+     would otherwise sit underneath this (it's also top-anchored, centred). */
+  top: 7.3rem;
   left: 50%;
   transform: translateX(-50%);
   z-index: 24;
+  max-width: min(80vw, 32rem);
+  text-align: center;
   font-size: 0.78rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -527,10 +531,10 @@ body {
 }
 .be-touch-stick {
   position: absolute;
-  left: max(env(safe-area-inset-left, 0px), 26px);
-  bottom: max(env(safe-area-inset-bottom, 0px), 34px);
-  width: 132px;
-  height: 132px;
+  left: max(env(safe-area-inset-left, 0px), 20px);
+  bottom: max(env(safe-area-inset-bottom, 0px), 26px);
+  width: 66px;
+  height: 66px;
   border-radius: 50%;
   background: radial-gradient(
     circle at 50% 50%,
@@ -547,8 +551,8 @@ body {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 58px;
-  height: 58px;
+  width: 29px;
+  height: 29px;
   border-radius: 50%;
   transform: translate(-50%, -50%);
   background: radial-gradient(
@@ -561,16 +565,16 @@ body {
 }
 .be-touch-action {
   position: absolute;
-  right: max(env(safe-area-inset-right, 0px), 30px);
-  bottom: max(env(safe-area-inset-bottom, 0px), 52px);
-  width: 86px;
-  height: 86px;
+  right: max(env(safe-area-inset-right, 0px), 22px);
+  bottom: max(env(safe-area-inset-bottom, 0px), 38px);
+  width: 43px;
+  height: 43px;
   border-radius: 50%;
   pointer-events: auto;
   touch-action: none;
   cursor: pointer;
   font-family: "Cinzel", serif;
-  font-size: 1.7rem;
+  font-size: 0.85rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   color: #fff4df;
