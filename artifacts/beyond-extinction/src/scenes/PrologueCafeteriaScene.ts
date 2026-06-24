@@ -105,8 +105,8 @@ class PrologueCafeteriaScene implements IScene {
   private static readonly PLAYER_RADIUS = 1.5;
 
   // Live-tunable cup grip offset, expressed in an arm-relative basis (see
-  // gripPoint()). Exposed via a DEV-only on-screen panel (buildGripTuner) so
-  // it can be dialed in visually without a rebuild.
+  // gripPoint()). Exposed via an on-screen panel behind ?tune=1 (buildGripTuner)
+  // so it can be dialed in visually without a rebuild, even on the deployed site.
   private gripOffset = { along: 0.45, up: 0, side: 0 };
   // Cups currently riding a hand bone via the grip point, so the tuner panel
   // can reposition them live as its sliders move.
@@ -235,7 +235,10 @@ class PrologueCafeteriaScene implements IScene {
       this.applyFov();
     });
     this.buildSettingsButton();
-    if (import.meta.env.DEV) this.buildGripTuner();
+    // Visible in any build (including the deployed GitHub Pages site) via
+    // ?tune=1, not just `pnpm dev` — DEV-only code is stripped from
+    // production bundles, which would make the panel unreachable there.
+    if (new URLSearchParams(location.search).has("tune")) this.buildGripTuner();
   }
 
   // ---------- World building ----------
@@ -887,7 +890,7 @@ class PrologueCafeteriaScene implements IScene {
    * of the palm), `up`/`side` perpendicular to it (world-up and left/right
    * relative to the arm). The rig has no finger bones, so this approximates
    * where a closed hand would actually hold an object. Values live in
-   * `gripOffset`, tunable at runtime via the DEV-only panel (buildGripTuner).
+   * `gripOffset`, tunable at runtime via the ?tune=1 panel (buildGripTuner).
    * Falls back to the wrist position itself if there's no forearm bone to
    * derive a direction from.
    */
@@ -922,9 +925,10 @@ class PrologueCafeteriaScene implements IScene {
   }
 
   /**
-   * DEV-only panel with sliders for each gripOffset axis plus a "Copy
-   * values" button, so the final offset can be dialed in visually in a
-   * running build and pasted back into gripOffset's initializer above.
+   * Panel (behind ?tune=1) with sliders for each gripOffset axis plus a
+   * "Copy values" button, so the final offset can be dialed in visually on
+   * any build — including the deployed site — and pasted back into
+   * gripOffset's initializer above.
    */
   private buildGripTuner(): void {
     const el = document.createElement("div");
@@ -934,7 +938,7 @@ class PrologueCafeteriaScene implements IScene {
       "display:flex;flex-direction:column;gap:6px;";
 
     const title = document.createElement("div");
-    title.textContent = "Grip tuner (dev)";
+    title.textContent = "Grip tuner";
     title.style.fontWeight = "bold";
     el.appendChild(title);
 
