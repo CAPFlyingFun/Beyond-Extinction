@@ -505,7 +505,7 @@ class PrologueCafeteriaScene implements IScene {
     ];
     cupPositions.forEach((pos, i) => {
       const cup = this.makeCup();
-      cup.scale.setScalar(0.7);
+      cup.scale.setScalar(0.4);
       cup.position.copy(pos);
       cup.userData.kind = "coffee";
       cup.userData.index = i;
@@ -531,17 +531,18 @@ class PrologueCafeteriaScene implements IScene {
   }
 
   /**
-   * Places a carried cup at a hand bone's current world position (plus a
-   * small lift so it nestles into the palm rather than the wrist pivot), then
-   * reparents it onto the bone with attach() so the cup's local transform is
-   * computed to keep that exact spot — from then on it rides the bone through
-   * every animated pose instead of drifting from a static offset.
+   * Places a carried cup at the hand's grip point (palm, not the wrist
+   * pivot — see gripPoint()), then reparents it onto the bone with attach()
+   * so the cup's local transform is computed to keep that exact spot — from
+   * then on it rides the bone through every animated pose instead of
+   * drifting from a static offset.
    */
-  private attachCupToHand(cup: THREE.Object3D, hand: THREE.Object3D): void {
-    hand.updateMatrixWorld(true);
-    const gripWorld = new THREE.Vector3();
-    hand.getWorldPosition(gripWorld);
-    gripWorld.y += 0.18;
+  private attachCupToHand(
+    cup: THREE.Object3D,
+    hand: THREE.Object3D,
+    foreArm: THREE.Object3D | null,
+  ): void {
+    const gripWorld = this.gripPoint(hand, foreArm);
     this.scene.attach(cup);
     cup.position.copy(gripWorld);
     hand.attach(cup);
@@ -549,14 +550,15 @@ class PrologueCafeteriaScene implements IScene {
 
   private spawnCoffee(index: number): void {
     const cup = this.makeCup();
-    cup.scale.setScalar(0.8);
+    cup.scale.setScalar(0.4);
     this.coffees.push(cup as unknown as THREE.Mesh);
     this.scene.add(cup);
     // index 0 sits on Jack's right side, index 1 on his left, matching the two
     // counter cups' relative positions.
-    const hand = this.handBone(this.jack, index === 0 ? "right" : "left");
+    const side = index === 0 ? "right" : "left";
+    const hand = this.handBone(this.jack, side);
     if (hand) {
-      this.attachCupToHand(cup, hand);
+      this.attachCupToHand(cup, hand, this.foreArmBone(this.jack, side));
     } else {
       // Placeholder capsule has no rig — fall back to a static offset.
       this.scene.remove(cup);
@@ -576,11 +578,9 @@ class PrologueCafeteriaScene implements IScene {
     if (!cup) return;
     this.scene.attach(cup);
     const hand = this.handBone(this.sarah, "right") ?? this.sarah;
-    hand.updateMatrixWorld(true);
-    const handWorld = new THREE.Vector3();
-    hand.getWorldPosition(handWorld);
-    handWorld.y += 0.18;
-    await this.tween(cup.position, handWorld, 600);
+    const foreArm = this.foreArmBone(this.sarah, "right");
+    const gripWorld = this.gripPoint(hand, foreArm);
+    await this.tween(cup.position, gripWorld, 600);
     if (this.disposed) return;
     hand.attach(cup);
     this.sarahCup = cup;
@@ -817,20 +817,28 @@ class PrologueCafeteriaScene implements IScene {
       group.userData.actions = actions;
       group.userData.walkBlend = 0;
     }
-    // Cache the rig's hand bones (Mixamo-style naming) so carried props can be
-    // parented directly to them — that way a held cup tracks the actual
-    // animated hand pose instead of a static offset from the character root,
-    // which used to drift away from the hand mid-gesture.
+    // Cache the rig's hand and forearm bones (Mixamo-style naming) so carried
+    // props can be parented directly to the hand — that way a held cup tracks
+    // the actual animated hand pose instead of a static offset from the
+    // character root, which used to drift away from the hand mid-gesture. The
+    // forearm bone is kept too: it gives the forearm->hand direction needed to
+    // push a grip point past the wrist into the palm (see attachCupToHand).
     let leftHand: THREE.Object3D | null = null;
     let rightHand: THREE.Object3D | null = null;
+    let leftForeArm: THREE.Object3D | null = null;
+    let rightForeArm: THREE.Object3D | null = null;
     model.traverse((obj) => {
       if ((obj as THREE.Bone).isBone) {
         if (obj.name === "LeftHand") leftHand = obj;
         else if (obj.name === "RightHand") rightHand = obj;
+        else if (obj.name === "LeftForeArm") leftForeArm = obj;
+        else if (obj.name === "RightForeArm") rightForeArm = obj;
       }
     });
     group.userData.leftHand = leftHand;
     group.userData.rightHand = rightHand;
+    group.userData.leftForeArm = leftForeArm;
+    group.userData.rightForeArm = rightForeArm;
     group.userData.name = name;
     return group;
   }
@@ -843,6 +851,38 @@ class PrologueCafeteriaScene implements IScene {
     return (character.userData[side === "left" ? "leftHand" : "rightHand"] as
       | THREE.Object3D
       | undefined) ?? null;
+  }
+
+  /** The rig's left/right forearm bone, or null for the capsule placeholder. */
+  private foreArmBone(
+    character: THREE.Group,
+    side: "left" | "right",
+  ): THREE.Object3D | null {
+    return (character.userData[
+      side === "left" ? "leftForeArm" : "rightForeArm"
+    ] as THREE.Object3D | undefined) ?? null;
+  }
+
+  /**
+   * A grip point in the palm, extrapolated past the wrist bone along the
+   * forearm->hand axis. The rig has no finger bones, so this approximates
+   * where a closed hand would actually hold an object: roughly 0.4x the
+   * forearm length beyond the wrist, based on average hand-to-forearm
+   * proportions. Falls back to the wrist position itself if there's no
+   * forearm bone to derive a direction from.
+   */
+  private gripPoint(hand: THREE.Object3D, foreArm: THREE.Object3D | null): THREE.Vector3 {
+    hand.updateMatrixWorld(true);
+    const handWorld = new THREE.Vector3();
+    hand.getWorldPosition(handWorld);
+    if (!foreArm) return handWorld;
+    foreArm.updateMatrixWorld(true);
+    const foreArmWorld = new THREE.Vector3();
+    foreArm.getWorldPosition(foreArmWorld);
+    const direction = handWorld.clone().sub(foreArmWorld);
+    if (direction.lengthSq() < 1e-8) return handWorld;
+    direction.normalize();
+    return handWorld.add(direction.multiplyScalar(0.4));
   }
 
   /** Scale a model to `targetHeight` world units and sit its feet at y=0. */
