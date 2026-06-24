@@ -21,6 +21,7 @@ root.appendChild(loading);
 
 async function boot() {
   const game = new Game(root!);
+  if (import.meta.env.DEV) (window as any).__game = game;
   await game.start(createMainMenuScene);
   loading.classList.add("hide");
   setTimeout(() => loading.remove(), 900);

@@ -153,7 +153,7 @@ class PrologueCafeteriaScene implements IScene {
   private gripOffsets: Record<GripContext, { along: number; up: number; side: number }> = {
     jackRight: { along: 0.51, up: 0.08, side: -0.31 },
     jackLeft: { along: 0.51, up: -0.12, side: 0.24 },
-    sarahRight: { along: 0.46, up: -0.09, side: 0.18 },
+    sarahRight: { along: 0.3, up: 0.08, side: 0.0 },
   };
   // Cups currently riding a hand bone via the grip point, so the tuner panel
   // can reposition them live as its sliders move.
@@ -1622,6 +1622,27 @@ class PrologueCafeteriaScene implements IScene {
     return autoFramingScale(this.camera.aspect, this.viewportHeight) / this.settings.zoom;
   }
 
+  /**
+   * Camera pull-back distance for a fixed-direction travel zone (one camera
+   * angle used for both "walking toward the objective" and "arrived, framed
+   * for the close interaction"), sized so both `a` and `b` actually land
+   * inside the camera's FOV from that angle — a flat per-unit-of-separation
+   * factor doesn't work here because the same separation projects to very
+   * different screen-space spreads depending on how it's aligned with the
+   * fixed viewing direction. Falls through to `base` once they're close
+   * enough that the original tuned close-up framing already covers it.
+   */
+  private travelPullback(a: THREE.Vector3, b: THREE.Vector3, dir: THREE.Vector3, base: number, max: number): number {
+    const viewDir = dir.clone().normalize().multiplyScalar(-1);
+    const half = b.clone().sub(a).multiplyScalar(0.5);
+    const depth = viewDir.clone().multiplyScalar(half.dot(viewDir));
+    const perp = half.sub(depth).length() + 2; // +2: rough character half-width/bob margin
+    const vFov = THREE.MathUtils.degToRad(this.camera.fov) / 2;
+    const hFov = Math.atan(Math.tan(vFov) * this.camera.aspect);
+    const required = (perp * 1.4) / Math.tan(Math.min(vFov, hFov));
+    return THREE.MathUtils.clamp(required, base, max);
+  }
+
   /** Mount the in-game gear button that opens the camera settings panel. */
   private buildSettingsButton(): void {
     const btn = document.createElement("button");
@@ -1702,13 +1723,23 @@ class PrologueCafeteriaScene implements IScene {
       },
     };
 
+    // Active for the *entire* walk to the objective, not just once Jack is
+    // already close — otherwise the long approach falls through to
+    // defaultLab's plain over-the-shoulder framing, which tracks only Jack
+    // and can leave the actual tap target off-screen the whole way there
+    // (see travelPullback doc). Distance still matters: it scales how far
+    // the camera pulls back, so the shot tightens into the original close
+    // two-shot by the time Jack arrives, and stays wide while he's far out.
     const sarahInteraction: CameraZone<CameraZoneState> = {
       id: "sarah-interaction",
       priority: 35,
       easeSpeed: 0.07,
-      isActive: (s) =>
-        (s.phase === "to-sarah" && s.jack.distanceTo(s.sarah) < 9) || s.phase === "intro-dialogue",
-      position: (s) => s.jack.clone().lerp(s.sarah, 0.5).add(new THREE.Vector3(10, 7, 16).multiplyScalar(s.framingScale)),
+      isActive: (s) => s.phase === "to-sarah" || s.phase === "intro-dialogue",
+      position: (s) => {
+        const dir = new THREE.Vector3(10, 7, 16).normalize();
+        const pull = this.travelPullback(s.jack, s.sarah, dir, 20, 70);
+        return s.jack.clone().lerp(s.sarah, 0.5).add(dir.multiplyScalar(pull * s.framingScale));
+      },
       lookAt: (s) => {
         const l = s.jack.clone().lerp(s.sarah, 0.5);
         l.y += 3;
@@ -1720,15 +1751,25 @@ class PrologueCafeteriaScene implements IScene {
       id: "console",
       priority: 40,
       easeSpeed: 0.06,
-      isActive: (s) =>
-        (s.phase === "to-console" && s.jack.distanceTo(this.consoleDeskWorld) < 16) ||
-        s.phase === "console-dialogue",
-      position: (s) =>
-        this.consoleDeskWorld.clone().add(new THREE.Vector3(-18, 14, 18).multiplyScalar(s.framingScale)),
-      lookAt: () => {
-        // Frame the desk and the accelerator ring together.
+      isActive: (s) => s.phase === "to-console" || s.phase === "console-dialogue",
+      position: (s) => {
+        const dir = new THREE.Vector3(-18, 14, 18).normalize();
+        const pull = this.travelPullback(s.jack, this.consoleDeskWorld, dir, 21, 60);
+        // Bias toward Jack the further out he still is, so he stays in frame
+        // alongside the desk instead of the shot holding fixed on the desk
+        // alone for the whole approach.
+        const anchor = this.consoleDeskWorld.clone().lerp(s.jack, 0.3);
+        return anchor.add(dir.multiplyScalar(pull * s.framingScale));
+      },
+      lookAt: (s) => {
+        // Frame the desk and the accelerator ring together — but ease toward
+        // Jack's own position while he's still far out so he isn't looking
+        // at empty space off-frame.
         const ringWorld = this.console.position.clone().add(new THREE.Vector3(0, 11, -14));
-        const l = this.consoleDeskWorld.clone().lerp(ringWorld, 0.4);
+        const deskFocus = this.consoleDeskWorld.clone().lerp(ringWorld, 0.4);
+        const sep = s.jack.distanceTo(this.consoleDeskWorld);
+        const t = THREE.MathUtils.clamp(1 - sep / 40, 0, 1);
+        const l = s.jack.clone().lerp(deskFocus, t);
         l.y += 2;
         return l;
       },
