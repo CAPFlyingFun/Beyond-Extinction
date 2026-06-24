@@ -13,6 +13,7 @@ import {
   type GameplaySettings,
 } from "../engine/Settings";
 import { autoFramingScale, portraitFovBoost } from "../engine/cameraFraming";
+import { CameraDirector, type CameraZone } from "../engine/CameraDirector";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 import {
   createEquipmentPanelTexture,
@@ -37,6 +38,15 @@ type Phase =
 // The three distinct hand/character situations a coffee cup gets gripped in,
 // each with its own tuned offset (see gripOffsets).
 type GripContext = "jackRight" | "jackLeft" | "sarahRight";
+
+// What each camera zone needs to decide if it's active and where to point —
+// see buildCameraZones().
+interface CameraZoneState {
+  phase: Phase;
+  jack: THREE.Vector3;
+  sarah: THREE.Vector3;
+  framingScale: number;
+}
 
 /**
  * The Prologue: a single continuous scene that moves Jack from the Level B
@@ -97,6 +107,15 @@ class PrologueCafeteriaScene implements IScene {
   // buildConsole), so Jack approaches and operates it here while the lane to
   // Sarah and the vortex stays clear.
   private consoleDeskWorld = new THREE.Vector3(30, 0, -28);
+  // Where the coffee counter sits, for the coffee-counter camera zone's
+  // proximity trigger (see buildCoffeeMachine for the actual mesh).
+  private coffeeCounterWorld = new THREE.Vector3(-26, 0, -8.5);
+  // Picks the most specific cinematic framing that applies right now (close on
+  // the coffee counter, a two-shot with Sarah, the console, the vortex chase)
+  // and falls back to the plain follow camera otherwise — see
+  // buildCameraZones(). The plain follow camera (updateCamera()) is kept
+  // intact and still used for the very first frame's snap.
+  private cameraDirector!: CameraDirector<CameraZoneState>;
 
   // Solid props the player can't walk through, as world-space XZ boxes already
   // grown by the player's radius (see buildColliders).
@@ -220,6 +239,8 @@ class PrologueCafeteriaScene implements IScene {
 
     // Camera behind Jack.
     this.updateCamera(true);
+    this.cameraDirector = new CameraDirector(this.camera);
+    this.buildCameraZones();
 
     // With the camera in position and all lights present, warm up every shader
     // program now while the context is healthy. The vortex is briefly made
@@ -1320,6 +1341,7 @@ class PrologueCafeteriaScene implements IScene {
 
   private async triggerIntroDialogue(): Promise<void> {
     this.phase = "intro-dialogue";
+    this.cameraDirector.cut();
     this.ctx.input.setEnabled(false);
     this.ctx.overlays.hideHint();
     // Jack and Sarah turn to face each other for the exchange.
@@ -1340,6 +1362,7 @@ class PrologueCafeteriaScene implements IScene {
 
   private async triggerConsoleDialogue(): Promise<void> {
     this.phase = "console-dialogue";
+    this.cameraDirector.cut();
     this.nearConsole = false;
     this.ctx.input.setEnabled(false);
     this.ctx.overlays.hideHint();
@@ -1407,6 +1430,7 @@ class PrologueCafeteriaScene implements IScene {
 
   private async startCutscene(): Promise<void> {
     this.phase = "cutscene";
+    this.cameraDirector.cut();
     this.ctx.input.setEnabled(false);
 
     // Jack reaches toward Sarah; Sarah's free hand rests on her stomach
@@ -1553,6 +1577,104 @@ class PrologueCafeteriaScene implements IScene {
     this.camera.lookAt(look);
   }
 
+  /**
+   * Declares the cinematic camera moments for this scene, highest-priority
+   * first: emergency/vortex chase, console work, the Sarah two-shot, the
+   * coffee counter close-up, and the plain follow camera as the fallback.
+   * CameraDirector picks whichever's isActive() and eases toward it — see
+   * CameraDirector for why eased zone-switching beats each spot owning its
+   * own lerp. Hard cuts (cameraDirector.cut()) are called explicitly right
+   * before a phase enters dialogue or the closing cutscene.
+   */
+  private buildCameraZones(): void {
+    const defaultLab: CameraZone<CameraZoneState> = {
+      id: "default-lab",
+      priority: 0,
+      easeSpeed: 0.08,
+      isActive: () => true,
+      position: (s) => s.jack.clone().add(this.camOffset.clone().multiplyScalar(s.framingScale)),
+      lookAt: (s) => {
+        const l = s.jack.clone();
+        l.y += 2;
+        return l;
+      },
+    };
+
+    const coffeeCounter: CameraZone<CameraZoneState> = {
+      id: "coffee-counter",
+      priority: 30,
+      easeSpeed: 0.06,
+      isActive: (s) => s.phase === "coffee" && s.jack.distanceTo(this.coffeeCounterWorld) < 13,
+      // Low and close so the cups (and Jack's hands) read clearly; Sarah —
+      // east of the counter — stays visible toward the right of frame.
+      position: (s) =>
+        this.coffeeCounterWorld.clone().add(new THREE.Vector3(-7, 5, 13).multiplyScalar(s.framingScale)),
+      lookAt: (s) => {
+        const l = this.coffeeCounterWorld.clone().lerp(s.jack, 0.35);
+        l.y += 3;
+        return l;
+      },
+    };
+
+    const sarahInteraction: CameraZone<CameraZoneState> = {
+      id: "sarah-interaction",
+      priority: 35,
+      easeSpeed: 0.07,
+      isActive: (s) =>
+        (s.phase === "to-sarah" && s.jack.distanceTo(s.sarah) < 9) || s.phase === "intro-dialogue",
+      position: (s) => s.jack.clone().lerp(s.sarah, 0.5).add(new THREE.Vector3(10, 7, 16).multiplyScalar(s.framingScale)),
+      lookAt: (s) => {
+        const l = s.jack.clone().lerp(s.sarah, 0.5);
+        l.y += 3;
+        return l;
+      },
+    };
+
+    const console_: CameraZone<CameraZoneState> = {
+      id: "console",
+      priority: 40,
+      easeSpeed: 0.06,
+      isActive: (s) =>
+        (s.phase === "to-console" && s.jack.distanceTo(this.consoleDeskWorld) < 16) ||
+        s.phase === "console-dialogue",
+      position: (s) =>
+        this.consoleDeskWorld.clone().add(new THREE.Vector3(-18, 14, 18).multiplyScalar(s.framingScale)),
+      lookAt: () => {
+        // Frame the desk and the accelerator ring together.
+        const ringWorld = this.console.position.clone().add(new THREE.Vector3(0, 11, -14));
+        const l = this.consoleDeskWorld.clone().lerp(ringWorld, 0.4);
+        l.y += 2;
+        return l;
+      },
+    };
+
+    const emergencyVortex: CameraZone<CameraZoneState> = {
+      id: "emergency-vortex",
+      priority: 50,
+      easeSpeed: 0.045,
+      isActive: (s) => s.phase === "reach-sarah" || s.phase === "vortex" || s.phase === "cutscene",
+      position: (s) => {
+        if (s.phase === "reach-sarah") {
+          // Pull wider during the chase so the player can see where to run.
+          return s.jack
+            .clone()
+            .lerp(this.vortex.position, 0.25)
+            .add(new THREE.Vector3(0, 20, 26).multiplyScalar(s.framingScale));
+        }
+        return this.vortex.position.clone().add(new THREE.Vector3(0, 6, 26).multiplyScalar(s.framingScale));
+      },
+      lookAt: (s) => {
+        const l = s.jack.clone().lerp(this.vortex.position, 0.5);
+        l.y += s.phase === "reach-sarah" ? 5 : 4;
+        return l;
+      },
+    };
+
+    for (const zone of [emergencyVortex, console_, sarahInteraction, coffeeCounter, defaultLab]) {
+      this.cameraDirector.addZone(zone);
+    }
+  }
+
   // ---------- Update loop ----------
 
   update(dt: number, elapsed: number): void {
@@ -1690,22 +1812,18 @@ class PrologueCafeteriaScene implements IScene {
       }
     }
 
-    // Camera: follow Jack during play; during the climax, frame the vortex.
-    if (
-      this.phase === "vortex" ||
-      this.phase === "cutscene"
-    ) {
-      const focus = this.vortex.position.clone();
-      const camPos = focus
-        .clone()
-        .add(new THREE.Vector3(0, 6, 26).multiplyScalar(this.framingScale()));
-      this.camera.position.lerp(camPos, 0.04);
-      const mid = this.jack.position.clone().lerp(focus, 0.5);
-      mid.y += 4;
-      this.camera.lookAt(mid);
-    } else {
-      this.updateCamera();
-    }
+    // Camera: hand off to the cinematic director, which picks the most
+    // specific zone that applies right now (see buildCameraZones) and falls
+    // back to the plain follow camera otherwise.
+    this.cameraDirector.update(
+      {
+        phase: this.phase,
+        jack: this.jack.position,
+        sarah: this.sarah.position,
+        framingScale: this.framingScale(),
+      },
+      dt,
+    );
   }
 
   resize(width: number, height: number): void {
