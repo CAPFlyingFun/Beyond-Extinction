@@ -44,6 +44,8 @@ export class ObjectiveHighlight {
   private elapsed = Math.random() * Math.PI * 2;
   private markerHeight: number;
   private worldPos = new THREE.Vector3();
+  private currentIcon: string;
+  private currentColor: FocusColor;
 
   constructor(
     scene: THREE.Scene,
@@ -53,6 +55,8 @@ export class ObjectiveHighlight {
     const colorHex = FOCUS_COLORS[opts.color];
     const radius = opts.radius ?? 1.4;
     this.markerHeight = opts.markerHeight ?? 3.2;
+    this.currentIcon = opts.icon;
+    this.currentColor = opts.color;
 
     this.group = new THREE.Group();
 
@@ -109,6 +113,21 @@ export class ObjectiveHighlight {
   /** Hide once selected/walking, restore on cancel. */
   setVisible(visible: boolean): void {
     this.visible = visible;
+  }
+
+  /** Re-skins the marker/ring (e.g. an objective turning urgent) — a no-op if unchanged. */
+  setIcon(icon: string, color: FocusColor): void {
+    if (icon === this.currentIcon && color === this.currentColor) return;
+    this.currentIcon = icon;
+    this.currentColor = color;
+    const colorHex = FOCUS_COLORS[color];
+
+    const markerMat = this.marker.material as THREE.SpriteMaterial;
+    markerMat.map?.dispose();
+    markerMat.map = makeMarkerTexture(colorHex, icon);
+    markerMat.needsUpdate = true;
+
+    (this.ring.material as THREE.MeshBasicMaterial).color.setHex(colorHex);
   }
 
   dispose(): void {

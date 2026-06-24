@@ -15,6 +15,7 @@ import {
 import { autoFramingScale, portraitFovBoost } from "../engine/cameraFraming";
 import { CameraDirector, type CameraZone } from "../engine/CameraDirector";
 import { ObjectiveHighlight, type ObjectiveHighlightOptions } from "../engine/ObjectiveHighlight";
+import { Navigator } from "../engine/Navigator";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 import {
   createEquipmentPanelTexture,
@@ -94,7 +95,6 @@ class PrologueCafeteriaScene implements IScene {
   // Two physical coffee cups on the counter; collected by proximity + E.
   private coffeeStations: THREE.Object3D[] = [];
   private floor!: THREE.Mesh;
-  private clickTarget: THREE.Vector3 | null = null;
   private nearStation: THREE.Object3D | null = null;
   private readonly pickupRadius = 6;
   private nearConsole = false;
@@ -103,7 +103,6 @@ class PrologueCafeteriaScene implements IScene {
   // a second prompt from another tap before the player answers the first.
   private confirmOpen = false;
   private reachSarahZone = new THREE.Vector3(20, 0, -36);
-  private reachPromptShown = false;
   // The console desk sits to the EAST of the central accelerator lane (see
   // buildConsole), so Jack approaches and operates it here while the lane to
   // Sarah and the vortex stays clear.
@@ -120,11 +119,21 @@ class PrologueCafeteriaScene implements IScene {
 
   // Story Focus highlights for the current phase's tappable objects, keyed by
   // the same object userData.kind is tagged on — see addHighlight()/tryInteract().
-  private highlights = new Map<THREE.Object3D, { highlight: ObjectiveHighlight; isRelevant: () => boolean }>();
+  // dynamicOpts lets a single highlight re-skin itself (e.g. Sarah's marker
+  // turning from 💬 to ! once the emergency starts) instead of registering a
+  // second, conflicting highlight on the same object.
+  private highlights = new Map<
+    THREE.Object3D,
+    { highlight: ObjectiveHighlight; isRelevant: () => boolean; dynamicOpts?: () => ObjectiveHighlightOptions }
+  >();
   // Hides a highlight's marker the moment its object is selected (tapped, or
   // mid-walk toward it); restored if the player backs out of the confirm
   // prompt, cleared for good once the interaction actually happens.
   private selectedHighlightTarget: THREE.Object3D | null = null;
+  // Reusable auto-walkers — see Navigator. Jack's is collider-aware (slides
+  // along props); Sarah's scripted moves don't need that.
+  private jackNav!: Navigator;
+  private sarahNav!: Navigator;
 
   // Solid props the player can't walk through, as world-space XZ boxes already
   // grown by the player's radius (see buildColliders).
@@ -233,15 +242,31 @@ class PrologueCafeteriaScene implements IScene {
       this.jack.position.z -= 1;
     }
 
+    this.jackNav = new Navigator(this.jack, {
+      speed: 16,
+      resolveMove: (cx, cz, nx, nz) =>
+        this.resolveMove(
+          cx,
+          cz,
+          THREE.MathUtils.clamp(nx, -55, 55),
+          THREE.MathUtils.clamp(nz, -38, 40),
+        ),
+    });
+
     this.sarah = await this.buildCharacter("Sarah", 0x36b27a);
     this.sarah.position.set(20, 0, -18);
     this.sarah.rotation.y = Math.PI;
     this.sarah.userData.kind = "sarah";
     scene.add(this.sarah);
+    this.sarahNav = new Navigator(this.sarah, { speed: 10, arriveDistance: 0.5 });
     this.addHighlight(
       this.sarah,
       { color: "friendly", icon: "\u{1F4AC}", radius: 1.8, markerHeight: 8.2 },
-      () => this.phase === "to-sarah",
+      () => this.phase === "to-sarah" || this.phase === "reach-sarah",
+      () =>
+        this.phase === "reach-sarah"
+          ? { color: "danger", icon: "!", radius: 1.8, markerHeight: 8.2 }
+          : { color: "friendly", icon: "\u{1F4AC}", radius: 1.8, markerHeight: 8.2 },
     );
 
     // Emergency lights exist from the start (dark) so the alarm never changes
@@ -587,10 +612,11 @@ class PrologueCafeteriaScene implements IScene {
       cup.userData.index = i;
       this.scene.add(cup);
       this.coffeeStations.push(cup);
+      // Only the next cup to collect glows — not both at once (see ObjectiveHighlight).
       this.addHighlight(
         cup,
         { color: "story", icon: "☕", radius: 1.1, markerHeight: 2.2 },
-        () => this.phase === "coffee",
+        () => this.phase === "coffee" && this.coffeeCount === i,
       );
     });
   }
@@ -1192,8 +1218,12 @@ class PrologueCafeteriaScene implements IScene {
 
   /** Tap/click targets worth raycasting against in the current phase. */
   private tapTargets(): THREE.Object3D[] {
-    if (this.phase === "coffee") return this.coffeeStations;
-    if (this.phase === "to-sarah") return [this.sarah];
+    if (this.phase === "coffee") {
+      // Only the next cup to collect is tappable — matches its highlight.
+      const next = this.coffeeStations.find((s) => s.userData.index === this.coffeeCount);
+      return next ? [next] : [];
+    }
+    if (this.phase === "to-sarah" || this.phase === "reach-sarah") return [this.sarah];
     if (this.phase === "to-console") return this.interactables;
     return [];
   }
@@ -1220,14 +1250,30 @@ class PrologueCafeteriaScene implements IScene {
       };
     }
     if (target.userData.kind === "sarah") {
+      // The emergency dash: no Yes/No prompt, so only count as "arrived"
+      // once Jack is genuinely at her side (see tryInteract).
+      if (this.phase === "reach-sarah") return { anchor: target.position, radius: 4 };
       return { anchor: target.position, radius: 7 };
+    }
+    if (target.userData.kind === "coffee") {
+      // The cups sit on top of the (solid) counter, so Jack can't walk to
+      // their exact XZ — give him a stand-in-front point just south of it.
+      return {
+        anchor: new THREE.Vector3(target.position.x, 0, -3),
+        radius: this.pickupRadius,
+      };
     }
     return { anchor: target.position, radius: this.pickupRadius };
   }
 
+  /**
+   * The Lab Prologue is guided, not free-roam: the player never moves Jack
+   * directly. Tapping the current story objective is the only input that
+   * moves him — see Navigator. Taps on anything else (floor, scenery) do
+   * nothing, by design ("the player learns: I tap important things").
+   */
   private handleClick(): void {
     if (this.ctx.dialogue.isActive || this.confirmOpen) return;
-    // Click-to-move / tap-to-interact: only during free-roam phases.
     if (
       this.phase !== "coffee" &&
       this.phase !== "to-sarah" &&
@@ -1238,43 +1284,41 @@ class PrologueCafeteriaScene implements IScene {
     }
 
     const targets = this.tapTargets();
-    if (targets.length > 0) {
-      const hits = this.ctx.input.intersect(this.camera, targets);
-      if (hits.length > 0) {
-        const interactable = this.resolveInteractable(hits[0].object);
-        if (interactable) {
-          const { anchor, radius } = this.interactionRange(interactable);
-          if (this.jack.position.distanceTo(anchor) <= radius) {
-            this.tryInteract(interactable);
-            return;
-          }
-          // Too far to act on it yet — walk toward where it was tapped, and
-          // hide its marker now that it's been selected (see tryInteract).
-          this.selectedHighlightTarget = interactable;
-          const p = hits[0].point.clone();
-          p.x = THREE.MathUtils.clamp(p.x, -55, 55);
-          p.z = THREE.MathUtils.clamp(p.z, -38, 40);
-          p.y = 0;
-          this.clickTarget = p;
-          return;
-        }
-      }
-    }
+    if (targets.length === 0) return;
+    const hits = this.ctx.input.intersect(this.camera, targets);
+    // Each phase exposes exactly one active objective, so a miss (e.g. it's
+    // off-screen — Sarah can start a whole room away from the coffee
+    // counter) still resolves to it: there's nothing else a tap on the game
+    // world could mean right now.
+    const interactable =
+      hits.length > 0 ? this.resolveInteractable(hits[0].object) : targets[0];
+    if (!interactable) return;
 
-    const hits = this.ctx.input.intersect(this.camera, [this.floor]);
-    if (hits.length === 0) return;
-    // Walking to plain ground cancels any pending walk-to-object selection.
-    this.selectedHighlightTarget = null;
-    const p = hits[0].point.clone();
-    p.x = THREE.MathUtils.clamp(p.x, -55, 55);
-    p.z = THREE.MathUtils.clamp(p.z, -38, 40);
-    p.y = 0;
-    this.clickTarget = p;
+    const { anchor, radius } = this.interactionRange(interactable);
+    if (this.jack.position.distanceTo(anchor) <= radius) {
+      this.tryInteract(interactable);
+      return;
+    }
+    // Out of range — auto-walk to the interaction point and open the prompt
+    // (or, for the emergency dash, trigger the vortex) the instant Jack
+    // arrives, hiding the marker while he's selected/walking.
+    this.selectedHighlightTarget = interactable;
+    this.jackNav.goTo(anchor, () => this.tryInteract(interactable));
   }
 
   /** Opens a Yes/No prompt for a tapped, in-range object and acts on "Yes". */
   private async tryInteract(target: THREE.Object3D): Promise<void> {
     const kind = target.userData.kind as string | undefined;
+
+    // The emergency dash to Sarah skips the prompt entirely — urgency, not a
+    // decision — and goes straight into the vortex beat.
+    if (kind === "sarah" && this.phase === "reach-sarah") {
+      this.faceTowards(this.jack, target.position);
+      this.dismissHighlight(target);
+      this.triggerVortex();
+      return;
+    }
+
     let message: string;
     let onYes: () => void;
     if (kind === "coffee" && this.phase === "coffee") {
@@ -1290,6 +1334,8 @@ class PrologueCafeteriaScene implements IScene {
       return;
     }
 
+    // Arrived — face the object before the prompt comes up.
+    this.faceTowards(this.jack, target.position);
     // Selected — hide its Story Focus marker while the prompt's up.
     this.selectedHighlightTarget = target;
     this.confirmOpen = true;
@@ -1299,7 +1345,15 @@ class PrologueCafeteriaScene implements IScene {
     this.confirmOpen = false;
     this.ctx.input.setEnabled(true);
     if (yes) {
-      this.dismissHighlight(target);
+      // Sarah's highlight stays registered across this delivery and the later
+      // emergency dash (its isRelevant/dynamicOpts cover both phases — see
+      // the addHighlight call in buildCharacter's Sarah setup); coffee cups
+      // and the console are one-shot, so only those get permanently retired.
+      if (kind === "sarah") {
+        if (this.selectedHighlightTarget === target) this.selectedHighlightTarget = null;
+      } else {
+        this.dismissHighlight(target);
+      }
       onYes();
     } else if (this.selectedHighlightTarget === target) {
       this.selectedHighlightTarget = null;
@@ -1321,11 +1375,11 @@ class PrologueCafeteriaScene implements IScene {
       this.ctx.quest.setObjective("Get two coffees — one more to go.");
     } else {
       this.phase = "to-sarah";
-      this.clickTarget = null;
+      this.jackNav.stop();
       this.ctx.quest.setObjective(
         "Take the coffees to Sarah in Lab Seven (head right →).",
       );
-      this.ctx.overlays.showHint("Walk to Sarah");
+      this.ctx.overlays.showHint("Tap Sarah to deliver the coffee");
     }
   }
 
@@ -1359,7 +1413,7 @@ class PrologueCafeteriaScene implements IScene {
     if (near !== this.nearConsole) {
       this.nearConsole = near;
       this.ctx.overlays.showHint(
-        near ? `${this.actionWord} the console to stabilise it` : "Walk to the console",
+        near ? `${this.actionWord} the console to stabilise it` : "Tap the console to stabilise it",
       );
     }
   }
@@ -1369,7 +1423,7 @@ class PrologueCafeteriaScene implements IScene {
     if (near !== this.nearSarah) {
       this.nearSarah = near;
       this.ctx.overlays.showHint(
-        near ? `${this.actionWord} Sarah to deliver the coffee` : "Walk to Sarah",
+        near ? `${this.actionWord} Sarah to deliver the coffee` : "Tap Sarah to deliver the coffee",
       );
     }
   }
@@ -1390,9 +1444,9 @@ class PrologueCafeteriaScene implements IScene {
     this.ctx.input.setEnabled(true);
     this.phase = "to-console";
     this.ctx.quest.setObjective("Follow Sarah to the accelerator console.");
-    this.ctx.overlays.showHint("Walk to the console");
+    this.ctx.overlays.showHint("Tap the console to stabilise it");
     // Sarah walks to the console, beside Jack on the west side of the desk.
-    this.sarahTarget = new THREE.Vector3(24, 0, -26);
+    this.sarahNav.goTo(new THREE.Vector3(24, 0, -26));
   }
 
   private async triggerConsoleDialogue(): Promise<void> {
@@ -1426,12 +1480,11 @@ class PrologueCafeteriaScene implements IScene {
     // update() ramps their intensity now that the cascade is active.
     // Sarah runs down the now-clear lane to the accelerator; the player follows.
     // The console sits to the east of the lane, so nothing needs to be dropped.
-    this.sarahTarget = this.reachSarahZone.clone();
+    this.sarahNav.goTo(this.reachSarahZone.clone());
     this.phase = "reach-sarah";
-    this.reachPromptShown = false;
     this.ctx.input.setEnabled(true);
     this.ctx.quest.setObjective("Reach Sarah!");
-    this.ctx.overlays.showHint("Get to Sarah at the accelerator");
+    this.ctx.overlays.showHint("Tap Sarah to reach her");
   }
 
   private async triggerVortex(): Promise<void> {
@@ -1470,7 +1523,7 @@ class PrologueCafeteriaScene implements IScene {
 
     // Jack reaches toward Sarah; Sarah's free hand rests on her stomach
     // (the quiet pregnancy beat — preserved as staging, not stated outright).
-    this.sarahTarget = null;
+    this.sarahNav.stop();
     this.faceTowards(this.jack, this.sarah.position);
     this.faceTowards(this.sarah, this.jack.position);
 
@@ -1504,8 +1557,6 @@ class PrologueCafeteriaScene implements IScene {
   }
 
   // ---------- Helpers ----------
-
-  private sarahTarget: THREE.Vector3 | null = null;
 
   private faceTowards(obj: THREE.Object3D, target: THREE.Vector3): void {
     const dir = new THREE.Vector3().subVectors(target, obj.position);
@@ -1554,11 +1605,11 @@ class PrologueCafeteriaScene implements IScene {
     return this.ctx.input.isTouch ? "Tap" : "Click";
   }
 
-  /** Generic "nothing nearby" hint, phrased for whichever input the player is using. */
+  /** Generic "nothing selected yet" hint, phrased for whichever input the player is using. */
   private get walkHint(): string {
     return this.ctx.input.isTouch
-      ? "Tap the floor to walk · tap an object to interact"
-      : "WASD / Arrows or click to walk · click an object to interact";
+      ? "Tap the glowing objective to interact"
+      : "Click the glowing objective to interact";
   }
 
   /**
@@ -1721,9 +1772,10 @@ class PrologueCafeteriaScene implements IScene {
     target: THREE.Object3D,
     opts: ObjectiveHighlightOptions,
     isRelevant: () => boolean,
+    dynamicOpts?: () => ObjectiveHighlightOptions,
   ): void {
     const highlight = new ObjectiveHighlight(this.scene, target, opts);
-    this.highlights.set(target, { highlight, isRelevant });
+    this.highlights.set(target, { highlight, isRelevant, dynamicOpts });
   }
 
   /** Permanently retires a highlight once its object has been acted on. */
@@ -1735,10 +1787,15 @@ class PrologueCafeteriaScene implements IScene {
     if (this.selectedHighlightTarget === target) this.selectedHighlightTarget = null;
   }
 
-  /** Drives every live highlight's pulse/visibility for this frame. */
+  /** Drives every live highlight's pulse/visibility/icon for this frame. */
   private updateHighlights(dt: number): void {
     for (const [target, tracked] of this.highlights) {
-      tracked.highlight.setVisible(tracked.isRelevant() && this.selectedHighlightTarget !== target);
+      const relevant = tracked.isRelevant();
+      tracked.highlight.setVisible(relevant && this.selectedHighlightTarget !== target);
+      if (relevant && tracked.dynamicOpts) {
+        const o = tracked.dynamicOpts();
+        tracked.highlight.setIcon(o.icon, o.color);
+      }
       tracked.highlight.update(dt);
     }
   }
@@ -1751,81 +1808,11 @@ class PrologueCafeteriaScene implements IScene {
     this.vortexUniforms.uTime.value = elapsed;
     this.vortex.rotation.z += dt * 0.6;
 
-    // Player movement during free-roam phases.
-    const freeRoam =
-      this.phase === "coffee" ||
-      this.phase === "to-sarah" ||
-      this.phase === "to-console" ||
-      this.phase === "reach-sarah";
-    let jackMoving = false;
-    if (freeRoam) {
-      const speed = 16;
-      const mv = this.ctx.input.getMoveVector();
-      if (mv.lengthSq() > 0) {
-        // Keyboard movement cancels any pending click destination.
-        this.clickTarget = null;
-        const nx = THREE.MathUtils.clamp(
-          this.jack.position.x + mv.x * speed * dt,
-          -55,
-          55,
-        );
-        const nz = THREE.MathUtils.clamp(
-          this.jack.position.z + mv.y * speed * dt,
-          -38,
-          40,
-        );
-        const r = this.resolveMove(
-          this.jack.position.x,
-          this.jack.position.z,
-          nx,
-          nz,
-        );
-        // Only animate the walk if a collider didn't fully cancel the step.
-        jackMoving =
-          Math.hypot(r.x - this.jack.position.x, r.z - this.jack.position.z) >
-          1e-3;
-        this.jack.position.x = r.x;
-        this.jack.position.z = r.z;
-        this.jack.rotation.y = Math.atan2(mv.x, mv.y);
-      } else if (this.clickTarget) {
-        // Click-to-move: walk toward the clicked floor point.
-        const to = new THREE.Vector3().subVectors(this.clickTarget, this.jack.position);
-        to.y = 0;
-        if (to.length() > 0.6) {
-          to.normalize();
-          const step = speed * dt;
-          const nx = THREE.MathUtils.clamp(
-            this.jack.position.x + to.x * step,
-            -55,
-            55,
-          );
-          const nz = THREE.MathUtils.clamp(
-            this.jack.position.z + to.z * step,
-            -38,
-            40,
-          );
-          const r = this.resolveMove(
-            this.jack.position.x,
-            this.jack.position.z,
-            nx,
-            nz,
-          );
-          const moved = Math.hypot(
-            r.x - this.jack.position.x,
-            r.z - this.jack.position.z,
-          );
-          this.jack.position.x = r.x;
-          this.jack.position.z = r.z;
-          this.jack.rotation.y = Math.atan2(to.x, to.z);
-          jackMoving = moved > step * 0.05;
-          // A prop fully blocks the straight path — abandon the click target
-          // rather than grinding against it forever.
-          if (moved < step * 0.05) this.clickTarget = null;
-        } else {
-          this.clickTarget = null;
-        }
-      }
-    }
+    // The Lab Prologue is guided: Jack never moves except auto-walking to a
+    // tapped story objective (see handleClick/Navigator). No WASD, no
+    // tap-anywhere — full manual control comes later, once the story leaves
+    // the lab.
+    const jackMoving = this.jackNav.update(dt);
     this.applyLocomotion(this.jack, jackMoving, dt);
 
     // Proximity hints: the actual pickup/delivery/console action happens by
@@ -1838,20 +1825,9 @@ class PrologueCafeteriaScene implements IScene {
       this.updateSarahPrompt();
     }
 
-    // Sarah walks to her target if set.
-    let sarahMoving = false;
-    if (this.sarahTarget) {
-      const toT = new THREE.Vector3().subVectors(this.sarahTarget, this.sarah.position);
-      toT.y = 0;
-      if (toT.length() > 0.5) {
-        toT.normalize();
-        this.sarah.position.addScaledVector(toT, 10 * dt);
-        this.sarah.rotation.y = Math.atan2(toT.x, toT.z);
-        sarahMoving = true;
-      } else {
-        this.sarahTarget = null;
-      }
-    }
+    // Sarah's scripted moves (to the console, to the accelerator) share the
+    // same Navigator Jack's tap-to-walk uses.
+    const sarahMoving = this.sarahNav.update(dt);
     this.applyLocomotion(this.sarah, sarahMoving, dt);
     // Keep Jack and Sarah from standing inside one another — split the push
     // evenly so neither character's deliberate movement "wins" outright.
@@ -1870,13 +1846,6 @@ class PrologueCafeteriaScene implements IScene {
         const m = ring.material as THREE.MeshStandardMaterial;
         m.emissive.setHex(0xff3322);
         m.emissiveIntensity = 0.5 + pulse * 0.2;
-      }
-    }
-
-    // Reach Sarah: vortex only forms once Jack reaches Sarah's trigger zone.
-    if (this.phase === "reach-sarah") {
-      if (this.jack.position.distanceTo(this.sarah.position) < 5) {
-        this.triggerVortex();
       }
     }
 
