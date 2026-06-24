@@ -1,5 +1,10 @@
 import { defineConfig } from "vite";
 import path from "path";
+import { readFileSync } from "fs";
+
+const pkg = JSON.parse(
+  readFileSync(path.resolve(import.meta.dirname, "package.json"), "utf-8"),
+) as { version: string };
 
 // Replit provides PORT/BASE_PATH, while GitHub Pages serves this repo from
 // /Beyond-Extinction/.  Local development should work without either env var.
@@ -11,6 +16,9 @@ const enableReplitPlugins =
 
 export default defineConfig(async () => ({
   base: basePath,
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   plugins: [
     ...(enableReplitPlugins
       ? [

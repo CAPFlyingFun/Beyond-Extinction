@@ -207,7 +207,7 @@ class MainMenuScene implements IScene {
       </div>
       <div class="be-menu__footer">
         <span>PWA Engine · Prologue</span>
-        <span>Three.js · GitHub Pages Ready</span>
+        <span>Three.js · GitHub Pages Ready · v${__APP_VERSION__}</span>
       </div>`;
     this.ctx.uiLayer.appendChild(el);
     this.menuEl = el;
