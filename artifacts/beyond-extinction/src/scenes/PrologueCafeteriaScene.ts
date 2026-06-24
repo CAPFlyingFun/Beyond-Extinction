@@ -104,6 +104,19 @@ class PrologueCafeteriaScene implements IScene {
   }> = [];
   private static readonly PLAYER_RADIUS = 1.5;
 
+  // Live-tunable cup grip offset, expressed in an arm-relative basis (see
+  // gripPoint()). Exposed via a DEV-only on-screen panel (buildGripTuner) so
+  // it can be dialed in visually without a rebuild.
+  private gripOffset = { along: 0.45, up: 0, side: 0 };
+  // Cups currently riding a hand bone via the grip point, so the tuner panel
+  // can reposition them live as its sliders move.
+  private activeGrips: Array<{
+    cup: THREE.Object3D;
+    hand: THREE.Object3D;
+    foreArm: THREE.Object3D | null;
+  }> = [];
+  private gripTunerEl: HTMLElement | null = null;
+
   constructor(private ctx: SceneContext) {
     this.camera = new THREE.PerspectiveCamera(
       55,
@@ -222,6 +235,7 @@ class PrologueCafeteriaScene implements IScene {
       this.applyFov();
     });
     this.buildSettingsButton();
+    if (import.meta.env.DEV) this.buildGripTuner();
   }
 
   // ---------- World building ----------
@@ -546,6 +560,7 @@ class PrologueCafeteriaScene implements IScene {
     this.scene.attach(cup);
     cup.position.copy(gripWorld);
     hand.attach(cup);
+    this.activeGrips.push({ cup, hand, foreArm });
   }
 
   private spawnCoffee(index: number): void {
@@ -576,6 +591,7 @@ class PrologueCafeteriaScene implements IScene {
   private async handCoffeeToSarah(): Promise<void> {
     const cup = this.coffees.pop();
     if (!cup) return;
+    this.activeGrips = this.activeGrips.filter((g) => g.cup !== cup);
     this.scene.attach(cup);
     const hand = this.handBone(this.sarah, "right") ?? this.sarah;
     const foreArm = this.foreArmBone(this.sarah, "right");
@@ -584,6 +600,7 @@ class PrologueCafeteriaScene implements IScene {
     if (this.disposed) return;
     hand.attach(cup);
     this.sarahCup = cup;
+    this.activeGrips.push({ cup, hand, foreArm });
   }
 
   /**
@@ -606,6 +623,7 @@ class PrologueCafeteriaScene implements IScene {
       cups.push(this.sarahCup);
       this.sarahCup = null;
     }
+    this.activeGrips = this.activeGrips.filter((g) => !cups.includes(g.cup));
     const tweens = cups.slice(0, slots.length).map((cup, i) => {
       this.scene.attach(cup);
       return this.tween(cup.position, slots[i], 450);
@@ -864,12 +882,14 @@ class PrologueCafeteriaScene implements IScene {
   }
 
   /**
-   * A grip point in the palm, extrapolated past the wrist bone along the
-   * forearm->hand axis. The rig has no finger bones, so this approximates
-   * where a closed hand would actually hold an object: roughly 0.4x the
-   * forearm length beyond the wrist, based on average hand-to-forearm
-   * proportions. Falls back to the wrist position itself if there's no
-   * forearm bone to derive a direction from.
+   * A grip point in the palm, offset from the wrist bone along an
+   * arm-relative basis: `along` the forearm->hand axis (push deeper into/out
+   * of the palm), `up`/`side` perpendicular to it (world-up and left/right
+   * relative to the arm). The rig has no finger bones, so this approximates
+   * where a closed hand would actually hold an object. Values live in
+   * `gripOffset`, tunable at runtime via the DEV-only panel (buildGripTuner).
+   * Falls back to the wrist position itself if there's no forearm bone to
+   * derive a direction from.
    */
   private gripPoint(hand: THREE.Object3D, foreArm: THREE.Object3D | null): THREE.Vector3 {
     hand.updateMatrixWorld(true);
@@ -879,10 +899,95 @@ class PrologueCafeteriaScene implements IScene {
     foreArm.updateMatrixWorld(true);
     const foreArmWorld = new THREE.Vector3();
     foreArm.getWorldPosition(foreArmWorld);
-    const direction = handWorld.clone().sub(foreArmWorld);
-    if (direction.lengthSq() < 1e-8) return handWorld;
-    direction.normalize();
-    return handWorld.add(direction.multiplyScalar(0.15));
+    const along = handWorld.clone().sub(foreArmWorld);
+    if (along.lengthSq() < 1e-8) return handWorld;
+    along.normalize();
+    const worldUp = new THREE.Vector3(0, 1, 0);
+    let side = along.clone().cross(worldUp);
+    if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
+    side.normalize();
+    const up = side.clone().cross(along).normalize();
+    return handWorld
+      .add(along.multiplyScalar(this.gripOffset.along))
+      .add(up.multiplyScalar(this.gripOffset.up))
+      .add(side.multiplyScalar(this.gripOffset.side));
+  }
+
+  /** Recomputes every held cup's local position from the current gripOffset. */
+  private regripAll(): void {
+    for (const { cup, hand, foreArm } of this.activeGrips) {
+      const gripWorld = this.gripPoint(hand, foreArm);
+      cup.position.copy(hand.worldToLocal(gripWorld));
+    }
+  }
+
+  /**
+   * DEV-only panel with sliders for each gripOffset axis plus a "Copy
+   * values" button, so the final offset can be dialed in visually in a
+   * running build and pasted back into gripOffset's initializer above.
+   */
+  private buildGripTuner(): void {
+    const el = document.createElement("div");
+    el.style.cssText =
+      "position:fixed;right:8px;bottom:8px;z-index:9999;background:rgba(10,16,28,0.85);" +
+      "color:#dfe9ff;font:12px monospace;padding:10px;border-radius:8px;width:220px;" +
+      "display:flex;flex-direction:column;gap:6px;";
+
+    const title = document.createElement("div");
+    title.textContent = "Grip tuner (dev)";
+    title.style.fontWeight = "bold";
+    el.appendChild(title);
+
+    const slider = (label: string, key: "along" | "up" | "side") => {
+      const row = document.createElement("label");
+      row.style.cssText = "display:flex;flex-direction:column;gap:2px;";
+      const top = document.createElement("span");
+      top.style.cssText = "display:flex;justify-content:space-between;";
+      const name = document.createElement("span");
+      name.textContent = label;
+      const val = document.createElement("b");
+      val.textContent = this.gripOffset[key].toFixed(2);
+      top.append(name, val);
+      const input = document.createElement("input");
+      input.type = "range";
+      input.min = "-0.6";
+      input.max = "0.8";
+      input.step = "0.01";
+      input.value = String(this.gripOffset[key]);
+      input.addEventListener("input", () => {
+        this.gripOffset[key] = parseFloat(input.value);
+        val.textContent = this.gripOffset[key].toFixed(2);
+        this.regripAll();
+      });
+      row.append(top, input);
+      el.appendChild(row);
+    };
+    slider("Along arm", "along");
+    slider("Up / down", "up");
+    slider("Left / right", "side");
+
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.textContent = "Copy values";
+    copyBtn.style.cssText =
+      "background:#2a3650;color:#dfe9ff;border:1px solid #4a5b7a;border-radius:4px;padding:4px;cursor:pointer;";
+    const log = document.createElement("pre");
+    log.style.cssText = "white-space:pre-wrap;font-size:10px;opacity:.8;margin:0;";
+    copyBtn.addEventListener("click", async () => {
+      const text = JSON.stringify(this.gripOffset, null, 2);
+      log.textContent = text;
+      try {
+        await navigator.clipboard.writeText(text);
+        copyBtn.textContent = "Copied!";
+      } catch {
+        copyBtn.textContent = "Copy failed — see below";
+      }
+      setTimeout(() => (copyBtn.textContent = "Copy values"), 1200);
+    });
+    el.append(copyBtn, log);
+
+    this.ctx.uiLayer.appendChild(el);
+    this.gripTunerEl = el;
   }
 
   /** Scale a model to `targetHeight` world units and sit its feet at y=0. */
@@ -1502,6 +1607,7 @@ class PrologueCafeteriaScene implements IScene {
     this.unsubSettings?.();
     closeSettingsPanel();
     this.gearEl?.remove();
+    this.gripTunerEl?.remove();
     this.ctx.overlays.hideClock();
     this.ctx.input.setEnabled(true);
     this.scene.traverse((o) => {
