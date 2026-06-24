@@ -14,6 +14,7 @@ import {
 } from "../engine/Settings";
 import { autoFramingScale, portraitFovBoost } from "../engine/cameraFraming";
 import { CameraDirector, type CameraZone } from "../engine/CameraDirector";
+import { ObjectiveHighlight, type ObjectiveHighlightOptions } from "../engine/ObjectiveHighlight";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 import {
   createEquipmentPanelTexture,
@@ -116,6 +117,14 @@ class PrologueCafeteriaScene implements IScene {
   // buildCameraZones(). The plain follow camera (updateCamera()) is kept
   // intact and still used for the very first frame's snap.
   private cameraDirector!: CameraDirector<CameraZoneState>;
+
+  // Story Focus highlights for the current phase's tappable objects, keyed by
+  // the same object userData.kind is tagged on — see addHighlight()/tryInteract().
+  private highlights = new Map<THREE.Object3D, { highlight: ObjectiveHighlight; isRelevant: () => boolean }>();
+  // Hides a highlight's marker the moment its object is selected (tapped, or
+  // mid-walk toward it); restored if the player backs out of the confirm
+  // prompt, cleared for good once the interaction actually happens.
+  private selectedHighlightTarget: THREE.Object3D | null = null;
 
   // Solid props the player can't walk through, as world-space XZ boxes already
   // grown by the player's radius (see buildColliders).
@@ -229,6 +238,11 @@ class PrologueCafeteriaScene implements IScene {
     this.sarah.rotation.y = Math.PI;
     this.sarah.userData.kind = "sarah";
     scene.add(this.sarah);
+    this.addHighlight(
+      this.sarah,
+      { color: "friendly", icon: "\u{1F4AC}", radius: 1.8, markerHeight: 8.2 },
+      () => this.phase === "to-sarah",
+    );
 
     // Emergency lights exist from the start (dark) so the alarm never changes
     // the scene's light count mid-play, which would otherwise recompile every
@@ -560,7 +574,7 @@ class PrologueCafeteriaScene implements IScene {
     this.coffeeMachine = body;
     this.scene.add(g);
 
-    // Two coffee cups on the counter — collected by walking up and pressing E.
+    // Two coffee cups on the counter — collected by tapping, then confirming.
     const cupPositions = [
       new THREE.Vector3(-28, 4.9, -8),
       new THREE.Vector3(-25, 4.9, -8),
@@ -573,6 +587,11 @@ class PrologueCafeteriaScene implements IScene {
       cup.userData.index = i;
       this.scene.add(cup);
       this.coffeeStations.push(cup);
+      this.addHighlight(
+        cup,
+        { color: "story", icon: "☕", radius: 1.1, markerHeight: 2.2 },
+        () => this.phase === "coffee",
+      );
     });
   }
 
@@ -739,6 +758,11 @@ class PrologueCafeteriaScene implements IScene {
     desk.userData.solid = true;
     this.scene.add(g);
     this.interactables.push(desk);
+    this.addHighlight(
+      desk,
+      { color: "tech", icon: "⚙", radius: 2.2, markerHeight: 5.5 },
+      () => this.phase === "to-console",
+    );
   }
 
   private buildVortex(): void {
@@ -1224,7 +1248,9 @@ class PrologueCafeteriaScene implements IScene {
             this.tryInteract(interactable);
             return;
           }
-          // Too far to act on it yet — walk toward where it was tapped.
+          // Too far to act on it yet — walk toward where it was tapped, and
+          // hide its marker now that it's been selected (see tryInteract).
+          this.selectedHighlightTarget = interactable;
           const p = hits[0].point.clone();
           p.x = THREE.MathUtils.clamp(p.x, -55, 55);
           p.z = THREE.MathUtils.clamp(p.z, -38, 40);
@@ -1237,6 +1263,8 @@ class PrologueCafeteriaScene implements IScene {
 
     const hits = this.ctx.input.intersect(this.camera, [this.floor]);
     if (hits.length === 0) return;
+    // Walking to plain ground cancels any pending walk-to-object selection.
+    this.selectedHighlightTarget = null;
     const p = hits[0].point.clone();
     p.x = THREE.MathUtils.clamp(p.x, -55, 55);
     p.z = THREE.MathUtils.clamp(p.z, -38, 40);
@@ -1262,13 +1290,20 @@ class PrologueCafeteriaScene implements IScene {
       return;
     }
 
+    // Selected — hide its Story Focus marker while the prompt's up.
+    this.selectedHighlightTarget = target;
     this.confirmOpen = true;
     this.ctx.input.setEnabled(false);
     const yes = await this.ctx.overlays.showConfirm(message);
     if (this.disposed) return;
     this.confirmOpen = false;
     this.ctx.input.setEnabled(true);
-    if (yes) onYes();
+    if (yes) {
+      this.dismissHighlight(target);
+      onYes();
+    } else if (this.selectedHighlightTarget === target) {
+      this.selectedHighlightTarget = null;
+    }
   }
 
   private pickUpCoffee(station: THREE.Object3D): void {
@@ -1675,6 +1710,39 @@ class PrologueCafeteriaScene implements IScene {
     }
   }
 
+  // ---------- Story Focus highlights ----------
+
+  /**
+   * Registers a Story Focus highlight for a tappable object, shown only
+   * while `isRelevant()` holds — e.g. only during the phase that object's
+   * tap actually does something.
+   */
+  private addHighlight(
+    target: THREE.Object3D,
+    opts: ObjectiveHighlightOptions,
+    isRelevant: () => boolean,
+  ): void {
+    const highlight = new ObjectiveHighlight(this.scene, target, opts);
+    this.highlights.set(target, { highlight, isRelevant });
+  }
+
+  /** Permanently retires a highlight once its object has been acted on. */
+  private dismissHighlight(target: THREE.Object3D): void {
+    const tracked = this.highlights.get(target);
+    if (!tracked) return;
+    tracked.highlight.dispose();
+    this.highlights.delete(target);
+    if (this.selectedHighlightTarget === target) this.selectedHighlightTarget = null;
+  }
+
+  /** Drives every live highlight's pulse/visibility for this frame. */
+  private updateHighlights(dt: number): void {
+    for (const [target, tracked] of this.highlights) {
+      tracked.highlight.setVisible(tracked.isRelevant() && this.selectedHighlightTarget !== target);
+      tracked.highlight.update(dt);
+    }
+  }
+
   // ---------- Update loop ----------
 
   update(dt: number, elapsed: number): void {
@@ -1824,6 +1892,8 @@ class PrologueCafeteriaScene implements IScene {
       },
       dt,
     );
+
+    this.updateHighlights(dt);
   }
 
   resize(width: number, height: number): void {
