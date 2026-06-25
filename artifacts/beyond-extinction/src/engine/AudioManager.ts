@@ -12,11 +12,16 @@ const MUSIC_TRACKS: Record<string, string> = {
 
 const SFX_TRACKS: Record<string, string> = {};
 
-const MUSIC_VOLUME = 0.55;
+const MUSIC_VOLUME = 0.45;
 const SFX_VOLUME = 0.7;
 const VOICE_VOLUME = 1;
 const FADE_MS = 800;
 const FADE_STEPS = 16;
+// While a voice line is playing, music ducks to a fraction of MUSIC_VOLUME so
+// dialogue stays intelligible over the score, then restores once it's done.
+const MUSIC_DUCK_MULT = 0.25;
+const DUCK_FADE_MS = 250;
+const DUCK_FADE_STEPS = 8;
 
 /**
  * Plays music/sfx via HTMLAudioElement. Music cross-fades between tracks and
@@ -39,6 +44,7 @@ export class AudioManager {
   private unlockBound = false;
   private currentVoiceEl: HTMLAudioElement | null = null;
   private voiceDone: (() => void) | null = null;
+  private ducked = false;
 
   playMusic(track: string): void {
     if (this.current === track) return;
@@ -62,6 +68,8 @@ export class AudioManager {
     this.fadeTo(el, MUSIC_VOLUME);
   }
 
+  // Shared by music and voice: a single user gesture unblocks autoplay for
+  // both, so one retry path covers whichever element(s) are still pending.
   private armUnlock(): void {
     if (this.unlockBound) return;
     this.unlockBound = true;
@@ -69,6 +77,7 @@ export class AudioManager {
       this.unlockBound = false;
       for (const evt of UNLOCK_EVENTS) window.removeEventListener(evt, retry);
       this.currentEl?.play().catch(() => {});
+      this.currentVoiceEl?.play().catch(() => {});
     };
     for (const evt of UNLOCK_EVENTS) {
       window.addEventListener(evt, retry, { once: true });
@@ -95,6 +104,7 @@ export class AudioManager {
    */
   playVoice(id: string): Promise<void> {
     this.stopVoice();
+    this.duckMusic();
     const entry = VOICE_CLIPS[id];
     const fallbackMs = entry
       ? entry.durationMs ?? estimateSpeechMs(entry.text)
@@ -117,6 +127,7 @@ export class AudioManager {
         el.removeEventListener("error", onError);
         el.pause();
         if (this.currentVoiceEl === el) this.currentVoiceEl = null;
+        this.unduckMusic();
         resolve();
       };
       const onError = () => {
@@ -128,6 +139,10 @@ export class AudioManager {
       el.addEventListener("ended", finish);
       el.addEventListener("error", onError);
       el.play().catch(() => {
+        // Blocked by autoplay policy (no user gesture yet) rather than a
+        // missing/corrupt file — retry on the next gesture instead of
+        // leaving this line permanently silent, same as music's unlock path.
+        this.armUnlock();
         if (timer) clearTimeout(timer);
         timer = setTimeout(finish, fallbackMs);
       });
@@ -139,6 +154,19 @@ export class AudioManager {
     this.currentVoiceEl?.pause();
     this.currentVoiceEl = null;
     this.voiceDone?.();
+    this.unduckMusic();
+  }
+
+  private duckMusic(): void {
+    if (this.ducked || !this.currentEl) return;
+    this.ducked = true;
+    this.fadeTo(this.currentEl, MUSIC_VOLUME * MUSIC_DUCK_MULT, undefined, DUCK_FADE_MS, DUCK_FADE_STEPS);
+  }
+
+  private unduckMusic(): void {
+    if (!this.ducked) return;
+    this.ducked = false;
+    if (this.currentEl) this.fadeTo(this.currentEl, MUSIC_VOLUME, undefined, DUCK_FADE_MS, DUCK_FADE_STEPS);
   }
 
   /**
@@ -156,11 +184,13 @@ export class AudioManager {
     return new Promise((resolve) => {
       const t = setTimeout(() => {
         this.voiceDone = null;
+        this.unduckMusic();
         resolve();
       }, ms);
       this.voiceDone = () => {
         clearTimeout(t);
         this.voiceDone = null;
+        this.unduckMusic();
         resolve();
       };
     });
@@ -192,18 +222,24 @@ export class AudioManager {
     this.fadeTo(el, 0, () => el.pause());
   }
 
-  private fadeTo(el: HTMLAudioElement, target: number, onDone?: () => void): void {
+  private fadeTo(
+    el: HTMLAudioElement,
+    target: number,
+    onDone?: () => void,
+    durationMs = FADE_MS,
+    steps = FADE_STEPS,
+  ): void {
     if (this.fadeTimer) clearInterval(this.fadeTimer);
     const start = el.volume;
     let step = 0;
     this.fadeTimer = setInterval(() => {
       step++;
-      el.volume = start + (target - start) * (step / FADE_STEPS);
-      if (step >= FADE_STEPS) {
+      el.volume = start + (target - start) * (step / steps);
+      if (step >= steps) {
         if (this.fadeTimer) clearInterval(this.fadeTimer);
         this.fadeTimer = null;
         onDone?.();
       }
-    }, FADE_MS / FADE_STEPS);
+    }, durationMs / steps);
   }
 }
