@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+    <title>Beyond Extinction</title>
+    <meta name="description" content="Beyond Extinction — a cinematic story-driven prehistoric survival adventure." />
+    <!-- Mobile game feel: dark UI chrome and fullscreen when added to a phone's home screen. -->
+    <meta name="theme-color" content="#05070d" />
+    <meta name="application-name" content="Beyond Extinction" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="Beyond Extinction" />
+    <meta name="apple-mobile-web-app-orientation" content="landscape" />
+    <meta name="robots" content="index, follow" />
+    <meta property="og:title" content="Beyond Extinction" />
+    <meta property="og:description" content="A cinematic story-driven prehistoric survival adventure." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Beyond Extinction" />
+    <meta name="twitter:description" content="A cinematic story-driven prehistoric survival adventure." />
+    <!-- Vite replaces %BASE_URL%, so these public assets work on Replit, local dev, and GitHub Pages. -->
+    <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
+    <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="%BASE_URL%icons/apple-touch-icon.png" />
+  </head>
+  <body>
+    <div id="game-root"></div>
+    <!-- Keep source entry absolute to the Vite project root. Vite applies the deployed base path after bundling. -->
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
