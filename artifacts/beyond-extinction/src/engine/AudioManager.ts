@@ -12,14 +12,18 @@ const MUSIC_TRACKS: Record<string, string> = {
 
 const SFX_TRACKS: Record<string, string> = {};
 
-const MUSIC_VOLUME = 0.45;
+const MUSIC_VOLUME = 0.3;
 const SFX_VOLUME = 0.7;
 const VOICE_VOLUME = 1;
 const FADE_MS = 800;
 const FADE_STEPS = 16;
+// Track changes/stops fade out slower than they fade in — an abrupt cut reads
+// as a glitch, a slow tail reads as a scene ending.
+const FADE_OUT_MS = 5000;
+const FADE_OUT_STEPS = 50;
 // While a voice line is playing, music ducks to a fraction of MUSIC_VOLUME so
 // dialogue stays intelligible over the score, then restores once it's done.
-const MUSIC_DUCK_MULT = 0.25;
+const MUSIC_DUCK_MULT = 0.15;
 const DUCK_FADE_MS = 250;
 const DUCK_FADE_STEPS = 8;
 
@@ -215,11 +219,32 @@ export class AudioManager {
     this.current = null;
   }
 
+  // Fades the *outgoing* element to silence on its own timer, independent of
+  // this.fadeTimer (which belongs to whatever's becoming/staying current).
+  // Sharing one timer would let an incoming track's fade-in cancel this
+  // fade-out mid-flight, freezing the old element's volume and never pausing
+  // it — a switch from playMusic("a") to playMusic("b") would otherwise leave
+  // track "a" playing forever at a frozen volume.
   private fadeOutCurrent(): void {
     const el = this.currentEl;
     if (!el) return;
     this.currentEl = null;
-    this.fadeTo(el, 0, () => el.pause());
+    // el may still be mid fade-in/duck on the shared timer -- stop that first
+    // so it can't race the fade-out below and yank the volume back up.
+    if (this.fadeTimer) {
+      clearInterval(this.fadeTimer);
+      this.fadeTimer = null;
+    }
+    const start = el.volume;
+    let step = 0;
+    const timer = setInterval(() => {
+      step++;
+      el.volume = start * (1 - step / FADE_OUT_STEPS);
+      if (step >= FADE_OUT_STEPS) {
+        clearInterval(timer);
+        el.pause();
+      }
+    }, FADE_OUT_MS / FADE_OUT_STEPS);
   }
 
   private fadeTo(

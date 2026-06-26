@@ -18,7 +18,7 @@
  *
  * Bump VERSION whenever the caching logic changes to retire old caches.
  */
-const VERSION = "v8";
+const VERSION = "v9";
 const CACHE = `beyond-extinction-${VERSION}`;
 
 // Base path this SW is served from, e.g. "/Beyond-Extinction/" or "/".
@@ -110,6 +110,16 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // <audio>/<video> elements issue ranged GETs (Range: bytes=...) to probe
+  // metadata and seek. The Cache API has no concept of partial content, so a
+  // cached 206 gets keyed by URL alone and is later replayed for *any* range
+  // on that URL, returning the wrong bytes. Always defer ranged requests
+  // straight to the network instead of risking the cache poisoning itself.
+  if (req.headers.has("Range")) {
+    event.respondWith(fetch(req));
+    return;
+  }
+
   // Everything else: cache-first, then network (and cache the response).
   event.respondWith(
     (async () => {
@@ -118,7 +128,10 @@ self.addEventListener("fetch", (event) => {
       if (cached) return cached;
       try {
         const fresh = await fetch(req);
-        if (fresh && fresh.ok && fresh.type === "basic") {
+        // Only cache a complete 200 — never a 206 that slipped through some
+        // other way (the Range-header guard above should already keep us out
+        // of this path for it, but res.ok is true for 206 too, so be explicit).
+        if (fresh && fresh.status === 200 && fresh.type === "basic") {
           cache.put(req, fresh.clone());
         }
         return fresh;
