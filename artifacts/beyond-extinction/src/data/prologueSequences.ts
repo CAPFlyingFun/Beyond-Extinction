@@ -17,7 +17,11 @@ import type { TimelineStep } from "../engine/SequenceDirector";
 /** Cold open: a wide establishing shot while Jack's journal narration plays. */
 export const labOpeningNarration: TimelineStep[] = [
   { kind: "camera", moment: "establishing", cut: true },
-  { kind: "wait", ms: 1000 },
+  // Hold on the establishing shot long enough that the lab-calm crossfade
+  // (kicked off on scene enter, ~4s) is most of the way done and clearly the
+  // music playing BEFORE Jack's first line — so the moment he says "I'd...",
+  // we're already settled on the lab bed rather than mid-transition.
+  { kind: "wait", ms: 3000 },
   { kind: "say", clip: "lab_narr_01" },
   { kind: "say", clip: "lab_narr_02" },
   { kind: "wait", ms: 400 },

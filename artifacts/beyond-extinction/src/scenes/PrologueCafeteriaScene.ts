@@ -233,8 +233,6 @@ class PrologueCafeteriaScene implements IScene {
     scene.background = new THREE.Color(0x3a4f73);
     scene.fog = new THREE.Fog(0x3a4f73, 60, 190);
 
-    this.ctx.audio.playMusic("lab-ambient");
-
     // ---- Lab lighting (clinical, brightly lit — a real lab, not a cave) ----
     this.ambient = new THREE.AmbientLight(0x8194ad, 1.65);
     scene.add(this.ambient);
@@ -367,6 +365,11 @@ class PrologueCafeteriaScene implements IScene {
     // awaited so SceneManager can finish enter() and lift the black fade —
     // awaiting here would play the narration behind the fade.
     this.ctx.input.setEnabled(false);
+    // As the lab opens, crossfade the main theme (playing since the menu and
+    // through the journal intro) into the calm lab bed over ~4s — a smooth
+    // blend, not a hard cut. Anchored here, after the async model/shader setup
+    // above, so it starts the moment the scene actually appears.
+    this.ctx.audio.playMusic("lab-calm");
     void this.playLabOpening();
 
     // Camera settings: apply persisted prefs, react to live slider changes, and
@@ -1726,6 +1729,8 @@ class PrologueCafeteriaScene implements IScene {
     this.cascadeTimer = 0;
     this.alarmOn = true;
     this.ctx.audio.playSfx("alarm");
+    // The calm lab bed crossfades into the suspense bed on the alarm beat.
+    this.ctx.audio.playMusic("lab-suspense");
     this.ctx.overlays.showClock("11:47 PM", true);
     // Emergency lights were created up-front (see buildRedLights); the pulse in
     // update() ramps their intensity now that the cascade is active.

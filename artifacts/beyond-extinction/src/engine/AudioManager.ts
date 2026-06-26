@@ -8,30 +8,52 @@ import { VOICE_CLIPS } from "../data/voiceClips";
  */
 const MUSIC_TRACKS: Record<string, string> = {
   "main-theme": "assets/audio/main-theme.mp3",
+  "lab-calm": "assets/audio/lab-calm.mp3",
+  "lab-suspense": "assets/audio/lab-suspense.mp3",
 };
 
-const SFX_TRACKS: Record<string, string> = {};
+const SFX_TRACKS: Record<string, string> = {
+  "coffee-pour": "assets/audio/coffee-pour.mp3",
+  alarm: "assets/audio/alarm.mp3",
+  "vortex-open": "assets/audio/vortex-open.mp3",
+  "vortex-pull": "assets/audio/vortex-pull.mp3",
+};
 
-const MUSIC_VOLUME = 0.3;
+// Base music level. Kept deliberately low so the score is atmosphere, not a
+// foreground element — it should never fight the SFX or (especially) dialogue.
+const MUSIC_VOLUME = 0.35;
+// While a voice clip is speaking, music ducks FAR under the voice — down to a
+// barely-there presence so the dialogue is always clearly intelligible and the
+// bed never competes with what Jack says.
+const MUSIC_DUCK = 0.07;
 const SFX_VOLUME = 0.7;
-const VOICE_VOLUME = 1;
+// Voice plays at full level so it sits clearly above the ducked music bed.
+const VOICE_VOLUME = 1.0;
+// Default fade (stopping music, generic): quick.
 const FADE_MS = 800;
-const FADE_STEPS = 16;
-// Track changes/stops fade out slower than they fade in — an abrupt cut reads
-// as a glitch, a slow tail reads as a scene ending.
-const FADE_OUT_MS = 5000;
-const FADE_OUT_STEPS = 50;
-// While a voice line is playing, music ducks to a fraction of MUSIC_VOLUME so
-// dialogue stays intelligible over the score, then restores once it's done.
-const MUSIC_DUCK_MULT = 0.15;
-const DUCK_FADE_MS = 250;
-const DUCK_FADE_STEPS = 8;
+// Ducking under a voice line: a fairly quick dip so the bed gets out of the way
+// as Jack starts, then a slow, gentle swell back once he's done — so the music
+// returns smoothly instead of snapping up between/after lines.
+const DUCK_FADE_MS = 900;
+const UNDUCK_FADE_MS = 1800;
+// When a line begins MID-crossfade, the outgoing track's tail is faded out this
+// fast so leftover music doesn't pile on top of the ducked bed under the voice.
+const DUCK_KILL_MS = 400;
+// Music track changes crossfade slowly for a smooth, cinematic blend.
+const MUSIC_FADE_MS = 4000;
+// Volume is stepped on this interval; fine-grained so even a 4s fade is smooth.
+const FADE_TICK_MS = 40;
 
-/**
- * Plays music/sfx via HTMLAudioElement. Music cross-fades between tracks and
- * loops; sfx are fire-and-forget one-shots. Cue names with no mapped file are
- * a silent no-op so unfinished sound design never breaks a scene.
- */
+// How many sfx can overlap before the oldest is reused (round-robin pool).
+const SFX_POOL_SIZE = 4;
+
+// A zero-length silent WAV. Mobile browsers (notably iOS Safari) only let an
+// <audio> element play() programmatically — with no user gesture active, e.g.
+// mid-cutscene — AFTER it has been play()'d once inside a real gesture. We
+// "bless" every reusable element by playing this silent clip on the first tap.
+const SILENT_WAV =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
+
 const UNLOCK_EVENTS = ["pointerdown", "keydown", "touchstart"] as const;
 
 /** Rough spoken-duration estimate (ms), used as a fallback when a voice clip
@@ -40,52 +62,142 @@ function estimateSpeechMs(text: string): number {
   return Math.max(1500, Math.round(text.length * 65) + 600);
 }
 
+/**
+ * Plays music/sfx/voice via a FIXED POOL of HTMLAudioElements that are reused
+ * (their `src` is swapped) rather than created on demand. This is what makes
+ * audio reliable on mobile: scenes start music and narration on enter — often
+ * during an automatic scene transition with no user gesture in the moment — and
+ * a brand-new `new Audio().play()` would be autoplay-blocked there. Instead we
+ * unlock the whole pool on the first interaction, after which every element can
+ * play freely. Music cross-fades between two elements; voice is single; sfx use
+ * a small round-robin pool. Cue names with no mapped file are a silent no-op.
+ */
 export class AudioManager {
   private muted = false;
   private current: string | null = null;
-  private currentEl: HTMLAudioElement | null = null;
-  private fadeTimer: ReturnType<typeof setInterval> | null = null;
-  private unlockBound = false;
-  private currentVoiceEl: HTMLAudioElement | null = null;
-  private voiceDone: (() => void) | null = null;
+  private fadeTimers = new Map<HTMLAudioElement, ReturnType<typeof setInterval>>();
   private ducked = false;
+  private unlocked = false;
+  private unlockHandler: (() => void) | null = null;
+
+  // Two music elements so an outgoing and incoming track can truly crossfade.
+  private readonly musicEls: [HTMLAudioElement, HTMLAudioElement] = [
+    new Audio(),
+    new Audio(),
+  ];
+  private currentEl: HTMLAudioElement | null = null;
+
+  // One voice element (only one line speaks at a time).
+  private readonly voiceEl = new Audio();
+  private voiceDone: (() => void) | null = null;
+  private voiceActive = false;
+
+  // Small pool of sfx elements for overlapping one-shots.
+  private readonly sfxEls: HTMLAudioElement[] = Array.from(
+    { length: SFX_POOL_SIZE },
+    () => new Audio(),
+  );
+  private sfxIdx = 0;
+
+  constructor() {
+    for (const el of this.musicEls) el.loop = true;
+    this.bindUnlock();
+  }
+
+  /** Every reusable element, so the unlock pass can bless them in one gesture. */
+  private reusableEls(): HTMLAudioElement[] {
+    return [...this.musicEls, this.voiceEl, ...this.sfxEls];
+  }
+
+  /**
+   * Arm a one-time first-interaction handler that "blesses" the whole element
+   * pool (a silent play()/pause() inside the gesture) so later, gesture-less
+   * playback is allowed on mobile. Also resumes whatever music should already
+   * be sounding (e.g. the menu theme requested before this first tap).
+   */
+  private bindUnlock(): void {
+    const unlock = () => {
+      this.unlocked = true;
+      for (const el of this.reusableEls()) {
+        if (el === this.currentEl) continue; // resumed below with its real src
+        if (!el.src) el.src = SILENT_WAV;
+        const blessSrc = el.src;
+        el.play()
+          .then(() => {
+            // Only pause if a real cue didn't claim this element in the same
+            // gesture (e.g. a menu sfx) — otherwise we'd cut its audio off.
+            if (el.src === blessSrc) el.pause();
+          })
+          .catch(() => {});
+      }
+      // Start the current music for real (it was likely autoplay-blocked when
+      // the scene requested it before any interaction).
+      if (this.currentEl) this.currentEl.play().catch(() => {});
+      this.removeUnlock();
+    };
+    this.unlockHandler = unlock;
+    for (const evt of UNLOCK_EVENTS) {
+      window.addEventListener(evt, unlock);
+    }
+  }
+
+  private removeUnlock(): void {
+    if (!this.unlockHandler) return;
+    for (const evt of UNLOCK_EVENTS) {
+      window.removeEventListener(evt, this.unlockHandler);
+    }
+    this.unlockHandler = null;
+  }
+
+  /**
+   * Re-arm the first-gesture unlock after a post-unlock play() rejection — a
+   * recovery path in case the initial blessing didn't take (some mobile
+   * browsers are stricter than others). Re-blessing on the next tap is harmless
+   * if the pool was already unlocked.
+   */
+  private armRetry(): void {
+    if (this.unlockHandler) return; // already armed
+    this.bindUnlock();
+  }
 
   playMusic(track: string): void {
     if (this.current === track) return;
     this.current = track;
-    this.fadeOutCurrent();
+
+    // Remember which element is fading out so the incoming track uses the OTHER
+    // one — a real crossfade rather than one fade clobbering the other.
+    const outgoing = this.currentEl;
+    this.fadeOutCurrent(MUSIC_FADE_MS);
 
     const src = MUSIC_TRACKS[track];
     if (!src) {
       console.info(`[Audio] music → ${track} (no track file mapped yet)`);
       return;
     }
-    const el = new Audio(assetUrl(src));
+
+    const el = outgoing === this.musicEls[0] ? this.musicEls[1] : this.musicEls[0];
+    const existing = this.fadeTimers.get(el);
+    if (existing) {
+      clearInterval(existing);
+      this.fadeTimers.delete(el);
+    }
+    el.src = assetUrl(src);
     el.loop = true;
+    el.currentTime = 0;
     el.volume = 0;
     el.muted = this.muted;
-    // Scenes call playMusic immediately on enter, often before any user
-    // gesture — browsers block that play() call, so fall back to retrying
-    // on the first interaction instead of staying silent forever.
-    el.play().catch(() => this.armUnlock());
+    el.play()
+      .then(() => console.info(`[Audio] music \u25b6 ${track}`))
+      .catch((err) => {
+        // Before the first interaction this is expected; the unlock handler
+        // will resume `currentEl` on the first tap.
+        console.warn(
+          `[Audio] music blocked: ${track} (${(err as DOMException)?.name ?? err}) \u2014 will start on first interaction`,
+        );
+        this.armRetry();
+      });
     this.currentEl = el;
-    this.fadeTo(el, MUSIC_VOLUME);
-  }
-
-  // Shared by music and voice: a single user gesture unblocks autoplay for
-  // both, so one retry path covers whichever element(s) are still pending.
-  private armUnlock(): void {
-    if (this.unlockBound) return;
-    this.unlockBound = true;
-    const retry = () => {
-      this.unlockBound = false;
-      for (const evt of UNLOCK_EVENTS) window.removeEventListener(evt, retry);
-      this.currentEl?.play().catch(() => {});
-      this.currentVoiceEl?.play().catch(() => {});
-    };
-    for (const evt of UNLOCK_EVENTS) {
-      window.addEventListener(evt, retry, { once: true });
-    }
+    this.fadeTo(el, this.ducked ? MUSIC_DUCK : MUSIC_VOLUME, MUSIC_FADE_MS);
   }
 
   playSfx(name: string): void {
@@ -95,7 +207,10 @@ export class AudioManager {
       console.info(`[Audio] sfx → ${name} (no sfx file mapped yet)`);
       return;
     }
-    const el = new Audio(assetUrl(src));
+    const el = this.sfxEls[this.sfxIdx];
+    this.sfxIdx = (this.sfxIdx + 1) % this.sfxEls.length;
+    el.src = assetUrl(src);
+    el.currentTime = 0;
     el.volume = SFX_VOLUME;
     el.play().catch(() => {});
   }
@@ -108,7 +223,6 @@ export class AudioManager {
    */
   playVoice(id: string): Promise<void> {
     this.stopVoice();
-    this.duckMusic();
     const entry = VOICE_CLIPS[id];
     const fallbackMs = entry
       ? entry.durationMs ?? estimateSpeechMs(entry.text)
@@ -118,20 +232,25 @@ export class AudioManager {
       return this.voiceWait(fallbackMs);
     }
     if (this.muted) return this.voiceWait(fallbackMs);
-    const el = new Audio(assetUrl(entry.src));
+
+    const el = this.voiceEl;
+    el.src = assetUrl(entry.src);
+    el.currentTime = 0;
     el.volume = VOICE_VOLUME;
-    this.currentVoiceEl = el;
+    el.muted = this.muted;
+    this.voiceActive = true;
+
     return new Promise<void>((resolve) => {
       let timer: ReturnType<typeof setTimeout> | null = null;
       const finish = () => {
         if (this.voiceDone !== finish) return;
         this.voiceDone = null;
+        this.voiceActive = false;
         if (timer) clearTimeout(timer);
         el.removeEventListener("ended", finish);
         el.removeEventListener("error", onError);
         el.pause();
-        if (this.currentVoiceEl === el) this.currentVoiceEl = null;
-        this.unduckMusic();
+        this.duckMusic(false);
         resolve();
       };
       const onError = () => {
@@ -142,35 +261,59 @@ export class AudioManager {
       this.voiceDone = finish;
       el.addEventListener("ended", finish);
       el.addEventListener("error", onError);
-      el.play().catch(() => {
-        // Blocked by autoplay policy (no user gesture yet) rather than a
-        // missing/corrupt file — retry on the next gesture instead of
-        // leaving this line permanently silent, same as music's unlock path.
-        this.armUnlock();
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(finish, fallbackMs);
-      });
+      el.play()
+        .then(() => {
+          console.info(`[Audio] voice \u25b6 ${id}`);
+          // Guard against a stop/dispose that landed before play() resolved:
+          // a stale resolve would otherwise duck the music with no voice
+          // playing and leave `ducked` stuck on until the next line finishes.
+          if (this.voiceDone === finish && this.voiceActive) {
+            this.duckMusic(true);
+          }
+        })
+        .catch((err) => {
+          console.warn(
+            `[Audio] voice blocked: ${id} (${(err as DOMException)?.name ?? err}) \u2014 subtitle-only timing`,
+          );
+          this.armRetry();
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(finish, fallbackMs);
+        });
     });
   }
 
   /** Stop any currently playing voice clip and settle its pending promise. */
   stopVoice(): void {
-    this.currentVoiceEl?.pause();
-    this.currentVoiceEl = null;
+    this.voiceActive = false;
+    this.voiceEl.pause();
     this.voiceDone?.();
-    this.unduckMusic();
   }
 
-  private duckMusic(): void {
-    if (this.ducked || !this.currentEl) return;
-    this.ducked = true;
-    this.fadeTo(this.currentEl, MUSIC_VOLUME * MUSIC_DUCK_MULT, undefined, DUCK_FADE_MS, DUCK_FADE_STEPS);
-  }
-
-  private unduckMusic(): void {
-    if (!this.ducked) return;
-    this.ducked = false;
-    if (this.currentEl) this.fadeTo(this.currentEl, MUSIC_VOLUME, undefined, DUCK_FADE_MS, DUCK_FADE_STEPS);
+  /**
+   * Duck the music bed far down while a voice line is speaking, then gently
+   * swell it back once the line finishes — so narration always sits clearly on
+   * top of the score. No-op when no music is playing.
+   */
+  private duckMusic(on: boolean): void {
+    this.ducked = on;
+    if (on) {
+      // If a line starts mid-crossfade, the OUTGOING track is still audible and
+      // isn't the element we duck (currentEl). Fade its tail out fast so the
+      // leftover music doesn't pile on top of the ducked bed — and so the bed
+      // level stays constant for the whole line instead of dropping mid-sentence
+      // as the crossfade finishes (which read as an abrupt shift).
+      for (const el of this.musicEls) {
+        if (el !== this.currentEl && this.fadeTimers.has(el)) {
+          this.fadeTo(el, 0, DUCK_KILL_MS, () => el.pause());
+        }
+      }
+    }
+    if (!this.currentEl) return;
+    this.fadeTo(
+      this.currentEl,
+      on ? MUSIC_DUCK : MUSIC_VOLUME,
+      on ? DUCK_FADE_MS : UNDUCK_FADE_MS,
+    );
   }
 
   /**
@@ -188,13 +331,11 @@ export class AudioManager {
     return new Promise((resolve) => {
       const t = setTimeout(() => {
         this.voiceDone = null;
-        this.unduckMusic();
         resolve();
       }, ms);
       this.voiceDone = () => {
         clearTimeout(t);
         this.voiceDone = null;
-        this.unduckMusic();
         resolve();
       };
     });
@@ -202,69 +343,70 @@ export class AudioManager {
 
   stopMusic(): void {
     this.current = null;
-    this.fadeOutCurrent();
+    // Slow tail rather than a quick cut — an abrupt stop reads as a glitch, a
+    // long fade reads as a scene ending.
+    this.fadeOutCurrent(MUSIC_FADE_MS);
   }
 
   setMuted(muted: boolean): void {
     this.muted = muted;
-    if (this.currentEl) this.currentEl.muted = muted;
-    if (this.currentVoiceEl) this.currentVoiceEl.muted = muted;
+    for (const el of this.musicEls) el.muted = muted;
+    this.voiceEl.muted = muted;
+    for (const el of this.sfxEls) el.muted = muted;
   }
 
   dispose(): void {
-    if (this.fadeTimer) clearInterval(this.fadeTimer);
+    // Pause every element that is mid-fade (an in-progress crossfade has BOTH
+    // the outgoing and incoming track here) — clearing the timers alone would
+    // skip their onDone pause and leave an outgoing track audible after dispose.
+    for (const [el, timer] of this.fadeTimers) {
+      clearInterval(timer);
+      el.pause();
+    }
+    this.fadeTimers.clear();
+    this.removeUnlock();
     this.stopVoice();
-    this.currentEl?.pause();
+    for (const el of this.musicEls) el.pause();
+    for (const el of this.sfxEls) el.pause();
     this.currentEl = null;
     this.current = null;
   }
 
-  // Fades the *outgoing* element to silence on its own timer, independent of
-  // this.fadeTimer (which belongs to whatever's becoming/staying current).
-  // Sharing one timer would let an incoming track's fade-in cancel this
-  // fade-out mid-flight, freezing the old element's volume and never pausing
-  // it — a switch from playMusic("a") to playMusic("b") would otherwise leave
-  // track "a" playing forever at a frozen volume.
-  private fadeOutCurrent(): void {
+  private fadeOutCurrent(durationMs: number = FADE_MS): void {
     const el = this.currentEl;
     if (!el) return;
     this.currentEl = null;
-    // el may still be mid fade-in/duck on the shared timer -- stop that first
-    // so it can't race the fade-out below and yank the volume back up.
-    if (this.fadeTimer) {
-      clearInterval(this.fadeTimer);
-      this.fadeTimer = null;
-    }
-    const start = el.volume;
-    let step = 0;
-    const timer = setInterval(() => {
-      step++;
-      el.volume = start * (1 - step / FADE_OUT_STEPS);
-      if (step >= FADE_OUT_STEPS) {
-        clearInterval(timer);
-        el.pause();
-      }
-    }, FADE_OUT_MS / FADE_OUT_STEPS);
+    this.fadeTo(el, 0, durationMs, () => el.pause());
   }
 
+  /**
+   * Fade one element's volume to `target` over `durationMs`. Each element gets
+   * its own interval (keyed in `fadeTimers`) so an outgoing track and an
+   * incoming track can fade *simultaneously* — a real crossfade — instead of
+   * one fade cancelling the other. Volume is stepped every FADE_TICK_MS so even
+   * a multi-second music crossfade stays smooth.
+   */
   private fadeTo(
     el: HTMLAudioElement,
     target: number,
+    durationMs: number = FADE_MS,
     onDone?: () => void,
-    durationMs = FADE_MS,
-    steps = FADE_STEPS,
   ): void {
-    if (this.fadeTimer) clearInterval(this.fadeTimer);
+    const existing = this.fadeTimers.get(el);
+    if (existing) clearInterval(existing);
     const start = el.volume;
+    const steps = Math.max(1, Math.round(durationMs / FADE_TICK_MS));
     let step = 0;
-    this.fadeTimer = setInterval(() => {
+    const timer = setInterval(() => {
       step++;
-      el.volume = start + (target - start) * (step / steps);
+      const v = start + (target - start) * (step / steps);
+      el.volume = Math.min(1, Math.max(0, v));
       if (step >= steps) {
-        if (this.fadeTimer) clearInterval(this.fadeTimer);
-        this.fadeTimer = null;
+        clearInterval(timer);
+        this.fadeTimers.delete(el);
         onDone?.();
       }
-    }, durationMs / steps);
+    }, FADE_TICK_MS);
+    this.fadeTimers.set(el, timer);
   }
 }
