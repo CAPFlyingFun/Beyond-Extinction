@@ -225,6 +225,7 @@ class ChapterOnePlaceholderScene implements IScene {
     this.unsubSettings = subscribeSettings((s) => {
       this.settings = s;
       this.applyFov();
+      this.maybeAutoAdvance();
     });
     this.buildSettingsButton();
 
@@ -334,6 +335,22 @@ class ChapterOnePlaceholderScene implements IScene {
         }, ChapterOnePlaceholderScene.AUTOPLAY_DELAY_MS);
       }
     });
+  }
+
+  /**
+   * React to Auto Play being switched ON while a trigger is already waiting for
+   * the player: drive the pending objective straight away instead of leaving
+   * Jack stuck waiting for a tap. (Auto Play that was already on when the gate
+   * opened is handled by waitForInteraction's scheduled beat.) Genuine choices
+   * never go through `pending`, so they still always pause for the player.
+   */
+  private maybeAutoAdvance(): void {
+    if (this.disposed || !this.settings.autoPlay) return;
+    if (!this.pending || this.choiceOpen) return;
+    // Already mid-drive (timer pending or Jack walking) — nothing to kick off.
+    if (this.autoPlayTimer || this.jackNav.isMoving) return;
+    const interaction = this.interactions.get(this.pending.id);
+    if (interaction) this.driveTo(interaction);
   }
 
   /** Genuine choice — always pauses for the player, even under Auto Play. */

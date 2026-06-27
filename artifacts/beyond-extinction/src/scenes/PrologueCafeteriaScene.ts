@@ -13,6 +13,7 @@ import {
   climaxReach,
   climaxEnd,
 } from "../data/prologueSequences";
+import { VOICE_DURATIONS } from "../data/voiceDurations";
 import { createChapterOneScene } from "./ChapterOnePlaceholderScene";
 import {
   getSettings,
@@ -32,6 +33,18 @@ import {
   FLOOR_TEXTURE_WORLD_SIZE,
   WALL_TEXTURE_WORLD_SIZE,
 } from "../engine/proceduralTextures";
+
+/**
+ * Total run-time (ms) of the opening narration timeline — the baked VO lengths
+ * plus its scripted waits — read straight from the timeline so it stays correct
+ * if the VO is re-baked or the waits change. Used to size the opening push-in so
+ * it moves continuously across the whole narration instead of finishing early.
+ */
+const OPENING_NARRATION_MS = labOpeningNarration.reduce((ms, step) => {
+  if (step.kind === "wait") return ms + step.ms;
+  if (step.kind === "say" || step.kind === "voice") return ms + (VOICE_DURATIONS[step.clip] ?? 0);
+  return ms;
+}, 0);
 
 type Phase =
   | "coffee"
@@ -119,6 +132,19 @@ class PrologueCafeteriaScene implements IScene {
   // named scripted moment instead of the phase-based zones. Cleared back to
   // null to hand framing back to gameplay.
   private scriptedCameraMoment: string | null = null;
+  // Wall-clock (scene `elapsed`, seconds) captured the first frame the opening
+  // "establishing" push-in becomes active, so cameraMoment() can drive a
+  // time-based dolly. Null whenever that moment isn't running. Captured lazily
+  // on the first active frame (not when the moment is set) so the start time is
+  // the first RENDERED frame regardless of when the timeline fires it.
+  private openingPushStartElapsed: number | null = null;
+  // Duration of the opening push-in. The brief said ~10-12s, but the baked
+  // narration runs far longer (~23s), so a literal 11s dolly would arrive and
+  // then freeze for the rest of the VO — exactly the static hold this redesign
+  // removes. Sized to span the narration (less a short settle) so the camera
+  // keeps moving throughout and lands just as the narration ends, handing off
+  // to the coffee-counter framing — matching the brief's described structure.
+  private readonly openingPushDurationS = Math.max(8, (OPENING_NARRATION_MS - 1500) / 1000);
 
   // Fixed 2.5D view: a high, angled camera that tracks Jack's position but
   // never rotates with him, giving a diorama / three-quarter look.
@@ -1392,13 +1418,23 @@ class PrologueCafeteriaScene implements IScene {
     s: CameraZoneState,
   ): { position: THREE.Vector3; lookAt: THREE.Vector3 } | null {
     if (id === "establishing") {
-      // High, wide hold over the lab looking toward the accelerator end.
-      const focus = new THREE.Vector3(6, 4, -12);
+      // "Before Everything": a slow, continuous eye-level push-in from the
+      // entrance end, drifting deep toward the accelerator while Jack's journal
+      // narration plays — the camera quietly entering a space it doesn't belong
+      // in yet, rather than cutting to a static hold. Held at ~8u (a person
+      // walking in, not a god-cam) and centered on X=0 so the accelerator and
+      // Sarah stay framed without the portrait/narrow-window edge drift the
+      // layout pass flagged. Position is absolute (no framingScale): the
+      // centered framing is what keeps it portrait-safe, and the wider portrait
+      // FOV (see applyFov) opens up around the subject on its own.
+      const p = this.openingPushProgress(s.elapsed);
+      const e = p * p * (3 - 2 * p); // smoothstep: gentle start, gentle settle
       return {
-        position: focus
-          .clone()
-          .add(new THREE.Vector3(-4, 26, 54).multiplyScalar(s.framingScale)),
-        lookAt: focus,
+        position: new THREE.Vector3(0, 8, 30).lerp(new THREE.Vector3(0, 8, -5), e),
+        // Aimed down the lane toward the accelerator end (-Z), biased slightly
+        // east (X=6) so the ring and Sarah's console (both at X=20) read without
+        // pulling the coffee counter off the left edge.
+        lookAt: new THREE.Vector3(6, 7, -38),
       };
     }
     if (id === "climax") {
@@ -1423,6 +1459,21 @@ class PrologueCafeteriaScene implements IScene {
 
   private clearCameraMoment(): void {
     this.scriptedCameraMoment = null;
+    this.openingPushStartElapsed = null;
+  }
+
+  /**
+   * Normalized 0..1 progress of the opening "establishing" push-in, from the
+   * frame it first became active to {@link openingPushDurationS} later. Returns
+   * 0 before the start frame is captured.
+   */
+  private openingPushProgress(elapsed: number): number {
+    if (this.openingPushStartElapsed === null) return 0;
+    return THREE.MathUtils.clamp(
+      (elapsed - this.openingPushStartElapsed) / this.openingPushDurationS,
+      0,
+      1,
+    );
   }
 
   /** Cold-open narration, then control + first objective (see enter()). */
@@ -2192,6 +2243,19 @@ class PrologueCafeteriaScene implements IScene {
     this.vortexUniforms.uTime.value = elapsed;
     this.vortex.rotation.z += dt * 0.6;
     this.elapsed = elapsed;
+
+    // Opening "establishing" push-in: capture the first active frame as the
+    // dolly's start (see cameraMoment), and let the accelerator ring's glow
+    // grow slightly brighter as the camera approaches. Skipped once the alarm
+    // owns the ring (it recolors it red below).
+    if (this.scriptedCameraMoment === "establishing") {
+      if (this.openingPushStartElapsed === null) this.openingPushStartElapsed = elapsed;
+      const ring = (this.console.userData as { ring?: THREE.Mesh }).ring;
+      if (ring && !this.alarmOn) {
+        const m = ring.material as THREE.MeshStandardMaterial;
+        m.emissiveIntensity = 0.5 + this.openingPushProgress(elapsed) * 0.35;
+      }
+    }
 
     // The Lab Prologue is guided: Jack never moves except auto-walking to a
     // tapped story objective (see handleClick/Navigator). No WASD, no
