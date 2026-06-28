@@ -3,6 +3,8 @@ name: Viewport camera framing in Beyond Extinction
 description: why 3D scenes dolly the camera in on awkward viewports (both portrait and wide landscape phones), and how to keep new scenes consistent
 ---
 
+> NOTE: the web build is NOT orientation-locked (a landscape gate was tried and reverted — see landscape-only-gate.md), so BOTH the portrait and the wide/short-landscape branches of `autoFramingScale` are live cases again.
+
 The 3D scenes use a `THREE.PerspectiveCamera` with a **fixed vertical FOV** and resize only updates `camera.aspect`. With a fixed vertical FOV the subject's on-screen *height* fraction is constant across aspect ratios, so on a tall portrait phone the character ends up small in a dark, mostly-empty frame, and on a very wide/short landscape phone it sits marooned in empty width — users read both as "looks weird / too small."
 
 **Decision:** scenes dolly the camera *closer* on awkward viewports instead of changing FOV. The shared helper `engine/cameraFraming.ts` `autoFramingScale(aspect)` returns 1.0 in a comfortable desktop/tablet band (~1.25–2.0) and eases the offset multiplier down toward both extremes — ~0.55 at portrait (~0.45) and ~0.8 at ultrawide (~2.6). The scene multiplies its camera offset vector by it (scaling the whole offset preserves the three-quarter angle, just pulls in).

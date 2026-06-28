@@ -10,6 +10,12 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  /* A game / press-and-hold UI must never trigger native text selection or the
+     iOS copy callout when the player holds down on the screen. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 html,

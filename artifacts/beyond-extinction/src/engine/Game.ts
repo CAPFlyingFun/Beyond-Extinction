@@ -5,6 +5,7 @@ import { QuestManager } from "./QuestManager";
 import { AudioManager } from "./AudioManager";
 import { Overlays } from "./Overlays";
 import { SceneManager } from "./SceneManager";
+import { DevPortal } from "./DevPortal";
 import type { SceneContext, SceneFactory } from "./IScene";
 
 /**
@@ -19,6 +20,7 @@ export class Game {
   readonly audio: AudioManager;
   readonly overlays: Overlays;
   readonly scenes: SceneManager;
+  private readonly devPortal: DevPortal;
 
   private readonly uiLayer: HTMLElement;
   private rafId = 0;
@@ -39,6 +41,9 @@ export class Game {
     this.audio = new AudioManager();
     this.overlays = new Overlays(this.uiLayer);
     this.scenes = new SceneManager();
+
+    // Hidden dev gate: press-and-hold 10s anywhere → PIN → Level Editor.
+    this.devPortal = new DevPortal();
 
     const ctx: SceneContext = {
       renderer: this.renderer,
@@ -91,6 +96,7 @@ export class Game {
     this.quest.dispose();
     this.audio.dispose();
     this.overlays.dispose();
+    this.devPortal.dispose();
     this.renderer.dispose();
   }
 }

@@ -1,0 +1,50 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "8-O9lL74g4iUwBsY83WVs"
+uri = "file://artifacts/beyond-extinction/public/assets/audio/lab-calm.mp3"
+type = "audio"
+title = "Lab music — CALM bed (wired: plays on lab scene open)"
+
+[[outputs]]
+id = "V2j78kXqNq4JkTlZDsnFd"
+uri = "file://artifacts/beyond-extinction/public/assets/audio/lab-calm.alt.mp3"
+type = "audio"
+title = "Lab music — CALM bed (alternate take)"
+
+[[outputs]]
+id = "FLT7ZVAXZyb7tHoXaXfA6"
+uri = "file://artifacts/beyond-extinction/public/assets/audio/lab-suspense.mp3"
+type = "audio"
+title = "Lab music — SUSPENSE bed (wired: plays on the alarm)"
+
+[[outputs]]
+id = "FPGnUOJ1jyhmhYNpw_vXw"
+uri = "file://artifacts/beyond-extinction/public/assets/audio/lab-suspense.alt.mp3"
+type = "audio"
+title = "Lab music — SUSPENSE bed (alternate take)"
+
+[[outputs]]
+id = "tPRPqoQHFrhwYv4t3Rijs"
+uri = "file://artifacts/beyond-extinction/public/assets/audio/coffee-pour.mp3"
+type = "audio"
+title = "SFX — coffee pour"
+
+[[outputs]]
+id = "oCMe40ViO9WbIkTeFcoLd"
+uri = "file://artifacts/beyond-extinction/public/assets/audio/alarm.mp3"
+type = "audio"
+title = "SFX — alarm"
+
+[[outputs]]
+id = "kWscLxp3MYl9GrS2A6haZ"
+uri = "file://artifacts/beyond-extinction/public/assets/audio/vortex-open.mp3"
+type = "audio"
+title = "SFX — vortex open"
+
+[[outputs]]
+id = "h4odvs1N1qwYsfZCgzEkp"
+uri = "file://artifacts/beyond-extinction/public/assets/audio/vortex-pull.mp3"
+type = "audio"
+title = "SFX — vortex pull"

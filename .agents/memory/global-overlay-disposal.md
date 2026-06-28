@@ -27,8 +27,15 @@ its promise survive.
 pair every open with an explicit close in `dispose()`. Treat `director.cancel()`
 as "unblock my play loop", and the overlay close calls as "tidy the shared UI".
 
-**Auto Play note (directed engine):** routine ACTION (`interaction`) gates
-auto-execute only when `settings.autoPlay` is true; genuine `choice` gates have
-NO auto-resolver and ALWAYS pause for the player — never add one. The action
-auto-timer is scheduled at gate entry, so toggling Auto Play on while already
-paused at a gate won't retroactively start it (acceptable; not a bug).
+**Auto Play rule (directed engine):** routine ACTION (interaction) gates may
+auto-execute under Auto Play; genuine CHOICE gates have NO auto-resolver and
+ALWAYS pause for the player — never add one.
+
+Auto Play is **reactive**, not just checked once at gate entry: it must fire both
+when Auto Play is already on as a trigger opens AND when the player toggles it on
+while a trigger is already waiting (the user's rule: "see autoplay is on and do
+it without waiting"). Funnel every auto path through the scene's single
+walk-and-perform routine, and guard re-entry (a drive already scheduled/in
+flight, a gate actually pending, no choice open) so the two paths can't
+double-drive. Choices live on a separate code path from action gates, so they're
+exempt by construction — keep it that way.

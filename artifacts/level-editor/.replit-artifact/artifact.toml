@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/level-editor/"
+title = "Level Editor"
+version = "1.0.0"
+id = "artifacts/level-editor"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/level-editor/" ]
+localPort = 21050
+
+[services.development]
+run = "pnpm --filter @workspace/level-editor run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/level-editor", "run", "build" ]
+publicDir = "artifacts/level-editor/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21050"
+BASE_PATH = "/level-editor/"

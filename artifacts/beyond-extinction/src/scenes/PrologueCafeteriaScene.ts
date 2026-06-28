@@ -238,16 +238,6 @@ class PrologueCafeteriaScene implements IScene {
   }> = [];
   private static readonly PLAYER_RADIUS = 1.5;
 
-  // Tight two-rectangle footprint (8 walls total), replacing the old single
-  // 120×120 box that read as an "enormous warehouse". The MAIN room holds the
-  // cafeteria (south end, +Z) and the lab (north end, −Z) as one space; the
-  // HALLWAY is a separate, smaller rectangle joined to it by a doorway in the
-  // main room's west wall. Floor exists ONLY under these two rectangles, so the
-  // surrounding void (the blueprint's white area) is never visible.
-  private static readonly WALL_H = 24;
-  private static readonly MAIN = { xW: 8, xE: 60, zN: -45, zS: 45 };
-  private static readonly HALL = { xW: -56, xE: 8, zS: 20, zN: 36 };
-
   // Live-tunable cup grip offsets, one per hand/character context, expressed
   // in an arm-relative basis (see gripPoint()). Exposed via an on-screen
   // panel behind ?tune=1 (buildGripTuner) so each can be dialed in visually
@@ -329,18 +319,18 @@ class PrologueCafeteriaScene implements IScene {
       housing.position.set(x, 13.95, z);
       scene.add(fixture, housing);
     };
-    // Warm cafeteria spine over the main room's south (cafeteria) half.
-    for (let i = 0; i < 4; i++) {
-      addCeiling(16 + i * 12, 16, 0xffe1b8, 26, 0xfff0d8, 0xffcf8f);
+    // Warm cafeteria spine (centre).
+    for (let i = -2; i <= 2; i++) {
+      addCeiling(i * 12, 0, 0xffe1b8, 26, 0xfff0d8, 0xffcf8f);
     }
     // Cool overhead lighting down the west hallway corridor (Jack's lane, z28).
-    addCeiling(-44, 28, 0xacc4ec, 18, 0xdce8ff, 0x9fc0ff);
-    addCeiling(-20, 28, 0xacc4ec, 18, 0xdce8ff, 0x9fc0ff);
+    addCeiling(-46, 28, 0xacc4ec, 18, 0xdce8ff, 0x9fc0ff);
+    addCeiling(-26, 28, 0xacc4ec, 18, 0xdce8ff, 0x9fc0ff);
     // Cool light over the cafeteria's east end, by the coffee counter.
-    addCeiling(48, 30, 0xacc4ec, 18, 0xdce8ff, 0x9fc0ff);
+    addCeiling(44, 30, 0xacc4ec, 18, 0xdce8ff, 0x9fc0ff);
     // Dim blue-green lab (north, where the accelerator lives).
-    addCeiling(20, -28, 0x49b6a4, 15, 0xc8f3ea, 0x53c9b4);
-    addCeiling(44, -28, 0x49b6a4, 15, 0xc8f3ea, 0x53c9b4);
+    addCeiling(-13, -28, 0x49b6a4, 15, 0xc8f3ea, 0x53c9b4);
+    addCeiling(13, -28, 0x49b6a4, 15, 0xc8f3ea, 0x53c9b4);
 
     this.buildRoom();
     this.buildHallway();
@@ -376,8 +366,8 @@ class PrologueCafeteriaScene implements IScene {
         this.resolveMove(
           cx,
           cz,
-          THREE.MathUtils.clamp(nx, -55, 59),
-          THREE.MathUtils.clamp(nz, -44, 44),
+          THREE.MathUtils.clamp(nx, -55, 55),
+          THREE.MathUtils.clamp(nz, -38, 40),
         ),
     });
 
@@ -483,60 +473,37 @@ class PrologueCafeteriaScene implements IScene {
 
   private buildRoom(): void {
     const scene = this.scene;
-    const MAIN = PrologueCafeteriaScene.MAIN;
-    const HALL = PrologueCafeteriaScene.HALL;
-    const H = PrologueCafeteriaScene.WALL_H;
-
-    // ---- Floor: one plane per rectangle, so the void around the L has no floor.
-    const mkFloor = (xW: number, xE: number, zN: number, zS: number) => {
-      const w = xE - xW;
-      const d = zS - zN;
-      const tex = createFloorTexture();
-      tex.repeat.set(w / FLOOR_TEXTURE_WORLD_SIZE, d / FLOOR_TEXTURE_WORLD_SIZE);
-      const plane = new THREE.Mesh(
-        new THREE.PlaneGeometry(w, d),
-        new THREE.MeshStandardMaterial({ map: tex, roughness: 0.75, metalness: 0.15 }),
-      );
-      plane.rotation.x = -Math.PI / 2;
-      plane.position.set((xW + xE) / 2, 0, (zN + zS) / 2);
-      plane.receiveShadow = true;
-      scene.add(plane);
-      return plane;
-    };
-    const floor = mkFloor(MAIN.xW, MAIN.xE, MAIN.zN, MAIN.zS);
+    const floorTex = createFloorTexture();
+    const floorRepeat = 120 / FLOOR_TEXTURE_WORLD_SIZE;
+    floorTex.repeat.set(floorRepeat, floorRepeat);
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(120, 120),
+      new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.75, metalness: 0.15 }),
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
     this.floor = floor;
-    mkFloor(HALL.xW, HALL.xE, HALL.zS, HALL.zN);
 
-    // ---- Walls. Each clones the base wall texture so it carries its own repeat
-    // (whole tiles, no stretching). Solid so the colliders keep the player inside
-    // the L; the west wall is split around the hallway doorway. `len` runs along
-    // the wall (X for N/S walls ry=0, Z for E/W walls ry=π/2).
+    // Each wall clones the base wall texture so it can carry its own repeat
+    // (whole tiles only — no stretching) without affecting the other walls.
     const wallTexBase = createWallTexture();
-    const mkWall = (len: number, x: number, z: number, ry: number) => {
+    const mkWall = (w: number, h: number, x: number, y: number, z: number, ry: number) => {
       const tex = wallTexBase.clone();
-      tex.repeat.set(len / WALL_TEXTURE_WORLD_SIZE.width, H / WALL_TEXTURE_WORLD_SIZE.height);
+      tex.repeat.set(w / WALL_TEXTURE_WORLD_SIZE.width, h / WALL_TEXTURE_WORLD_SIZE.height);
       const wall = new THREE.Mesh(
-        new THREE.BoxGeometry(len, H, 0.6),
+        new THREE.BoxGeometry(w, h, 0.6),
         new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 }),
       );
-      wall.position.set(x, H / 2, z);
+      wall.position.set(x, y, z);
       wall.rotation.y = ry;
       wall.receiveShadow = true;
-      wall.userData.solid = true;
       scene.add(wall);
     };
-    const mainW = MAIN.xE - MAIN.xW; // 52
-    const mainD = MAIN.zS - MAIN.zN; // 90
-    // East wall (full depth) + north (lab end) + south (cafeteria far end).
-    mkWall(mainD, MAIN.xE, (MAIN.zN + MAIN.zS) / 2, Math.PI / 2);
-    mkWall(mainW, (MAIN.xW + MAIN.xE) / 2, MAIN.zN, 0);
-    mkWall(mainW, (MAIN.xW + MAIN.xE) / 2, MAIN.zS, 0);
-    // West wall, split around the hallway doorway (z HALL.zS..HALL.zN). The lower
-    // segment is the wall *behind the computers*; the upper closes the corner.
-    const lowLen = HALL.zS - MAIN.zN; // 20 - (-45) = 65
-    const upLen = MAIN.zS - HALL.zN; // 45 - 36 = 9
-    mkWall(lowLen, MAIN.xW, (MAIN.zN + HALL.zS) / 2, Math.PI / 2);
-    mkWall(upLen, MAIN.xW, (HALL.zN + MAIN.zS) / 2, Math.PI / 2);
+    mkWall(120, 24, 0, 12, -45, 0);
+    mkWall(120, 24, 0, 12, 45, 0);
+    mkWall(90, 24, -60, 12, 0, Math.PI / 2);
+    mkWall(90, 24, 60, 12, 0, Math.PI / 2);
 
     // Cafeteria seating: four tables in a 2x2 block in the cafeteria's
     // east-centre (per the layout diagram), placed so Jack's straight eastern
@@ -596,17 +563,16 @@ class PrologueCafeteriaScene implements IScene {
    */
   private buildHallway(): void {
     const scene = this.scene;
-    const zN = PrologueCafeteriaScene.HALL.zN; // 36
-    const zS = PrologueCafeteriaScene.HALL.zS; // 20
-    const xWest = PrologueCafeteriaScene.HALL.xW; // -56
-    const xDoor = PrologueCafeteriaScene.HALL.xE; // 8 (doorway plane into main room)
-    const len = xDoor - xWest; // 64
-    const cx = (xWest + xDoor) / 2; // -24
-    const width = zN - zS; // 16
+    const zN = 35.5;
+    const zS = 20.5;
+    const xWest = -60;
+    const xDoor = -8;
+    const len = xDoor - xWest; // 52
+    const cx = (xWest + xDoor) / 2; // -34
+    const width = zN - zS; // 15
 
     const wallTexBase = createWallTexture();
-    // ry lets a wall run along X (0) or along Z (π/2, for the west back wall).
-    const mkWall = (w: number, h: number, x: number, y: number, z: number, ry = 0) => {
+    const mkWall = (w: number, h: number, x: number, y: number, z: number) => {
       const tex = wallTexBase.clone();
       tex.repeat.set(w / WALL_TEXTURE_WORLD_SIZE.width, h / WALL_TEXTURE_WORLD_SIZE.height);
       const wall = new THREE.Mesh(
@@ -614,18 +580,16 @@ class PrologueCafeteriaScene implements IScene {
         new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 }),
       );
       wall.position.set(x, y, z);
-      wall.rotation.y = ry;
       wall.receiveShadow = true;
-      // Solid: the lane (z28) and Jack's spawn both sit clear of these walls once
-      // grown by PLAYER_RADIUS (N blocks ~z34.5-37.5, S ~z18.5-21.5).
+      // Solid: the lane (z28) and Jack's spawn (z28) both sit clear of these
+      // walls once grown by PLAYER_RADIUS (N blocks ~z33.7-37.3, S ~z18.7-22.3).
       wall.userData.solid = true;
       scene.add(wall);
     };
-    // North and south side walls, plus the west back wall closing the corridor
-    // behind Jack's spawn (the east end is the open doorway into the main room).
+    // North and south side walls (the room's west wall is the third), from the
+    // west wall east to the doorway plane.
     mkWall(len, 24, cx, 12, zN);
     mkWall(len, 24, cx, 12, zS);
-    mkWall(width, 24, xWest, 12, (zN + zS) / 2, Math.PI / 2);
 
     // ---- Framed doorway at the east end (x = -8), full corridor width ----
     // Header beam across the top of the opening. Overhead (y20-24) and NON-solid.
@@ -691,15 +655,13 @@ class PrologueCafeteriaScene implements IScene {
       roughness: 0.5,
       metalness: 0.5,
     });
-    // Hug the main room's east and west walls (the room is x[8,60] now), clear
-    // of the console (x10-14), coffee counter (x52-56) and tables.
     const pillarPositions: Array<[number, number]> = [
-      [12, -42],
-      [56, -42],
-      [12, 42],
-      [56, 42],
-      [12, 10],
-      [56, 10],
+      [-55, -40],
+      [55, -40],
+      [-55, 40],
+      [55, 40],
+      [-55, 0],
+      [55, 0],
     ];
     for (const [x, z] of pillarPositions) {
       const pillar = new THREE.Mesh(new THREE.BoxGeometry(2, 24, 2), pillarMat);
@@ -727,7 +689,7 @@ class PrologueCafeteriaScene implements IScene {
       metalness: 0.5,
     });
     const pipeRuns = [
-      { x: 12, z0: -42, z1: 42 },
+      { x: -40, z0: -42, z1: 42 },
       { x: 40, z0: -42, z1: 42 },
     ];
     for (const run of pipeRuns) {
@@ -753,11 +715,9 @@ class PrologueCafeteriaScene implements IScene {
       metalness: 0.4,
     });
     const equipScreenMat = new THREE.MeshBasicMaterial({ map: equipTex });
-    // Mounted on the main room's interior wall faces (west wall x8, east wall
-    // x60). The west pair sit on the wall behind the computers.
     const equipSpots = [
-      { x: 8.6, y: 6, z: -10, faceSign: 1 },
-      { x: 8.6, y: 6, z: 4, faceSign: 1 },
+      { x: -58.6, y: 6, z: -10, faceSign: 1 },
+      { x: -58.6, y: 6, z: 4, faceSign: 1 },
       { x: 58.6, y: 6, z: -30, faceSign: -1 },
     ];
     for (const spot of equipSpots) {
@@ -776,12 +736,11 @@ class PrologueCafeteriaScene implements IScene {
     const hazardTex = createHazardStripeTexture();
     hazardTex.repeat.set(6, 1);
     const hazard = new THREE.Mesh(
-      new THREE.PlaneGeometry(50, 1.6),
+      new THREE.PlaneGeometry(48, 1.6),
       new THREE.MeshStandardMaterial({ map: hazardTex, roughness: 0.7 }),
     );
     hazard.rotation.x = -Math.PI / 2;
-    // Spans the main room width (x8-60) at the cafeteria/lab boundary.
-    hazard.position.set(34, 0.03, 4);
+    hazard.position.set(-5, 0.03, -2);
     scene.add(hazard);
   }
 
@@ -1638,11 +1597,11 @@ class PrologueCafeteriaScene implements IScene {
         // Starts up on the hallway lane (z=32) and pushes deep toward the
         // accelerator end of the lab. Held at y=9 — a person walking in, not a
         // god-cam — so the sightline down the room stays unobstructed.
-        position: new THREE.Vector3(34, 9, 38).lerp(new THREE.Vector3(30, 9, -4), e),
+        position: new THREE.Vector3(0, 9, 32).lerp(new THREE.Vector3(0, 9, -2), e),
         // Aimed down the lane toward the accelerator end (-Z), biased slightly
         // east (X=8) so the ring and Sarah's console read without pulling the
         // coffee counter off the left edge.
-        lookAt: new THREE.Vector3(20, 7, -36),
+        lookAt: new THREE.Vector3(8, 7, -34),
       };
     }
     if (id === "climax") {
