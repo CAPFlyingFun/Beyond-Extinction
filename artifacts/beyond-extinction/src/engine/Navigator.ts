@@ -48,6 +48,11 @@ export class Navigator {
     this.onArrive = null;
   }
 
+  /** Live-adjust the walk speed (e.g. a slow scripted stroll vs. normal pace). */
+  setSpeed(speed: number): void {
+    this.opts.speed = speed;
+  }
+
   get isMoving(): boolean {
     return this.target !== null;
   }

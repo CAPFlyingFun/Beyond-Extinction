@@ -14,19 +14,21 @@ import type { TimelineStep } from "../engine/SequenceDirector";
  * clip to either character — see ClipLibrary); a missing name is a safe no-op.
  */
 
-/** Cold open: a wide establishing shot while Jack's journal narration plays. */
+/**
+ * Cold open: Jack's journal narration plays over Camera 1 (the third-person
+ * hallway-follow zone, active from the first frame of the coffee phase) holding
+ * on Jack at the hallway end. There is no scripted establishing push — the
+ * gameplay follow camera owns the opening so the shot stays ON Jack rather than
+ * drifting toward the lab/vortex (see PrologueCafeteriaScene.enter).
+ */
 export const labOpeningNarration: TimelineStep[] = [
-  { kind: "camera", moment: "establishing", cut: true },
-  // Hold on the establishing shot long enough that the lab-calm crossfade
-  // (kicked off on scene enter, ~4s) is most of the way done and clearly the
-  // music playing BEFORE Jack's first line — so the moment he says "I'd...",
-  // we're already settled on the lab bed rather than mid-transition.
+  // Hold a beat so the lab-calm crossfade (kicked off on scene enter, ~4s) is
+  // most of the way done and clearly the music playing BEFORE Jack's first line.
   { kind: "wait", ms: 3000 },
   { kind: "say", clip: "lab_narr_01" },
   { kind: "say", clip: "lab_narr_02" },
   { kind: "wait", ms: 400 },
   { kind: "clearSubtitle" },
-  { kind: "clearCamera" },
 ];
 
 /** Coffee delivery / first exchange at Sarah's side (intro-dialogue phase). */

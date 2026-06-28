@@ -70,8 +70,6 @@ interface CameraZoneState {
   framingScale: number;
   /** Seconds since the scene started — lets zones drive time-based moves (the dialogue orbit). */
   elapsed: number;
-  /** Which counter cup is collected next (0 or 1) — slides the coffee-counter framing toward the active cup/hand. */
-  coffeeIndex: number;
 }
 
 /**
@@ -145,6 +143,12 @@ class PrologueCafeteriaScene implements IScene {
   // keeps moving throughout and lands just as the narration ends, handing off
   // to the coffee-counter framing — matching the brief's described structure.
   private readonly openingPushDurationS = Math.max(8, (OPENING_NARRATION_MS - 1500) / 1000);
+  // Wall-clock (scene `elapsed`) captured the first frame the closing "finale"
+  // camera moment becomes active, so cameraMoment() can drive a time-based
+  // push-in over the dissolve. Null until that moment runs. See startCutscene.
+  private finaleStartElapsed: number | null = null;
+  // Duration of the closing finale push-in (seconds).
+  private readonly finaleDurationS = 2.5;
 
   // Fixed 2.5D view: a high, angled camera that tracks Jack's position but
   // never rotates with him, giving a diorama / three-quarter look.
@@ -166,17 +170,18 @@ class PrologueCafeteriaScene implements IScene {
   // a second prompt from another tap before the player answers the first.
   private confirmOpen = false;
   private reachSarahZone = new THREE.Vector3(20, 0, -36);
-  // The console desk sits to the EAST of the central accelerator lane (see
-  // buildConsole), so Jack approaches and operates it here while the lane to
-  // Sarah and the vortex stays clear.
-  private consoleDeskWorld = new THREE.Vector3(30, 0, -28);
-  /** Sarah's spot at the console — beside Jack on the west side of the desk.
-   * She navigates here during "to-console" and is settled here before the
-   * console gesture so the two-up beat always reads. */
-  private readonly sarahConsoleSpot = new THREE.Vector3(24, 0, -26);
+  // The console desk sits to the WEST of the central accelerator lane (see
+  // buildConsole), with Sarah to its east — per the layout diagram — while the
+  // central lane to the accelerator and the vortex stays clear.
+  private consoleDeskWorld = new THREE.Vector3(12, 0, -28);
+  /** Sarah's spot at the console — beside Jack on the east side of the desk
+   * (the desk now sits to the west). She navigates here during "to-console" and
+   * is settled here before the console gesture so the two-up beat always reads. */
+  private readonly sarahConsoleSpot = new THREE.Vector3(22, 0, -26);
   // Where the coffee counter sits, for the coffee-counter camera zone's
-  // proximity trigger (see buildCoffeeMachine for the actual mesh).
-  private coffeeCounterWorld = new THREE.Vector3(-26, 0, -8.5);
+  // proximity trigger (see buildCoffeeMachine for the actual mesh). On Jack's
+  // hallway lane (z28), flush against the east wall, so the run is a straight line.
+  private coffeeCounterWorld = new THREE.Vector3(54, 0, 28);
 
   /** Shared, root-motion-sanitized clip set harvested from every rigged
    * character's GLB so any character can play any gesture (identical bone
@@ -212,6 +217,16 @@ class PrologueCafeteriaScene implements IScene {
   // along props); Sarah's scripted moves don't need that.
   private jackNav!: Navigator;
   private sarahNav!: Navigator;
+  // Monotonic id stamped on each Jack auto-walk request. A multi-leg route
+  // (see followPath) checks this between legs and aborts if a newer tap (or
+  // dispose) superseded it, so an interrupted walk never resumes its old
+  // waypoints. Bumped once per followPath() call (i.e. every walkJackTo).
+  private pathRunId = 0;
+  // One-shot guard for the hallway-follow -> coffee-counter hard cut: the
+  // moment Jack first comes within the coffee-counter zone's activation radius
+  // we snap (rather than ease) the camera, then never again for the rest of
+  // the coffee phase. See update().
+  private coffeeCutDone = false;
 
   // Solid props the player can't walk through, as world-space XZ boxes already
   // grown by the player's radius (see buildColliders).
@@ -268,33 +283,57 @@ class PrologueCafeteriaScene implements IScene {
     key.shadow.mapSize.set(1024, 1024);
     scene.add(key);
     this.mainLights.push(key);
-    // Ceiling fill lights (cool clinical glow), each with a visible fixture
-    // housing so the light source reads as part of the room, not floating.
-    const fixtureMat = new THREE.MeshStandardMaterial({
-      color: 0xe7f3ff,
-      emissive: 0xbfe0ff,
-      emissiveIntensity: 1.45,
-      roughness: 0.4,
-    });
+    // Ceiling fill lights, each with a visible fixture housing so the light
+    // source reads as part of the room, not floating. The room reads as three
+    // zones along Z: a cool/dim hallway (south, z~33), a warm cafeteria
+    // (centre, z=0), and a dim blue-green lab (north, z~-28). Every light is
+    // created here, up-front, so the alarm never changes the scene's light
+    // count mid-play (which would recompile every material on mobile — see the
+    // emergency-light note below).
     const fixtureHousingMat = new THREE.MeshStandardMaterial({
       color: 0x2a3650,
       roughness: 0.6,
       metalness: 0.3,
     });
-    for (let i = -2; i <= 2; i++) {
-      const strip = new THREE.PointLight(0xdfeeff, 27, 80, 2);
-      strip.position.set(i * 12, 14, 0);
-      scene.add(strip);
-      this.mainLights.push(strip);
-
+    const addCeiling = (
+      x: number,
+      z: number,
+      lightColor: number,
+      intensity: number,
+      fixtureColor: number,
+      fixtureEmissive: number,
+    ) => {
+      const light = new THREE.PointLight(lightColor, intensity, 80, 2);
+      light.position.set(x, 14, z);
+      scene.add(light);
+      this.mainLights.push(light);
+      const fixtureMat = new THREE.MeshStandardMaterial({
+        color: fixtureColor,
+        emissive: fixtureEmissive,
+        emissiveIntensity: 1.45,
+        roughness: 0.4,
+      });
       const fixture = new THREE.Mesh(new THREE.BoxGeometry(5, 0.4, 1.6), fixtureMat);
       const housing = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.3, 2), fixtureHousingMat);
-      fixture.position.set(i * 12, 13.6, 0);
-      housing.position.set(i * 12, 13.95, 0);
+      fixture.position.set(x, 13.6, z);
+      housing.position.set(x, 13.95, z);
       scene.add(fixture, housing);
+    };
+    // Warm cafeteria spine (centre).
+    for (let i = -2; i <= 2; i++) {
+      addCeiling(i * 12, 0, 0xffe1b8, 26, 0xfff0d8, 0xffcf8f);
     }
+    // Cool overhead lighting down the west hallway corridor (Jack's lane, z28).
+    addCeiling(-46, 28, 0xacc4ec, 18, 0xdce8ff, 0x9fc0ff);
+    addCeiling(-26, 28, 0xacc4ec, 18, 0xdce8ff, 0x9fc0ff);
+    // Cool light over the cafeteria's east end, by the coffee counter.
+    addCeiling(44, 30, 0xacc4ec, 18, 0xdce8ff, 0x9fc0ff);
+    // Dim blue-green lab (north, where the accelerator lives).
+    addCeiling(-13, -28, 0x49b6a4, 15, 0xc8f3ea, 0x53c9b4);
+    addCeiling(13, -28, 0x49b6a4, 15, 0xc8f3ea, 0x53c9b4);
 
     this.buildRoom();
+    this.buildHallway();
     this.buildCoffeeMachine();
     this.buildConsole();
     this.buildVortex();
@@ -303,9 +342,12 @@ class PrologueCafeteriaScene implements IScene {
 
     // ---- Characters ----
     this.jack = await this.buildCharacter("Jack", 0x3a78d0);
-    // Spawn in the open aisle between the cafeteria tables — clear of every
-    // collider grown by PLAYER_RADIUS.
-    this.jack.position.set(-24, 0, 14);
+    // Spawn at the far-west end of the hallway lane, facing east straight down
+    // the lane toward the coffee counter — clear of every collider grown by
+    // PLAYER_RADIUS. Jack walks a single straight line east to the counter,
+    // then turns south to carry the coffees to Sarah's lab.
+    this.jack.position.set(-52, 0, 28);
+    this.jack.rotation.y = Math.PI / 2;
     scene.add(this.jack);
     // Safety net: with the player radius baked into the colliders, never let
     // Jack spawn wedged inside one — a future prop/spawn tweak shouldn't be able
@@ -386,10 +428,14 @@ class PrologueCafeteriaScene implements IScene {
     this.unsubClick = this.ctx.input.onClick(() => this.handleClick());
 
     this.phase = "coffee";
-    // Cold open: the establishing shot + Jack's journal narration play over the
-    // revealed scene, then control and the first objective are handed over. NOT
-    // awaited so SceneManager can finish enter() and lift the black fade —
-    // awaiting here would play the narration behind the fade.
+    // Snap straight to Camera 1 (the hallway-follow third-person zone, which is
+    // active throughout the coffee phase) on the very first rendered frame, so
+    // the cold open opens ON Jack instead of easing in from the default framing.
+    this.cameraDirector.cut();
+    // Cold open: Jack's journal narration plays over Camera 1 holding on him,
+    // then control and the first objective are handed over. NOT awaited so
+    // SceneManager can finish enter() and lift the black fade — awaiting here
+    // would play the narration behind the fade.
     this.ctx.input.setEnabled(false);
     // As the lab opens, crossfade the main theme (playing since the menu and
     // through the journal intro) into the calm lab bed over ~4s — a smooth
@@ -459,11 +505,21 @@ class PrologueCafeteriaScene implements IScene {
     mkWall(90, 24, -60, 12, 0, Math.PI / 2);
     mkWall(90, 24, 60, 12, 0, Math.PI / 2);
 
-    // A few cafeteria tables on Jack's side
+    // Cafeteria seating: four tables in a 2x2 block in the cafeteria's
+    // east-centre (per the layout diagram), placed so Jack's straight eastern
+    // lane to the coffee counter (z28) threads cleanly BETWEEN the two rows
+    // (north row z35, south row z21) with ~3.5u clearance to their player-grown
+    // colliders, leaving the western hallway open as the start area.
     const tableMat = new THREE.MeshStandardMaterial({ color: 0x33445c, roughness: 0.6 });
-    for (let i = 0; i < 4; i++) {
+    const tablePositions: Array<[number, number]> = [
+      [24, 35],
+      [40, 35],
+      [24, 21],
+      [40, 21],
+    ];
+    for (const [tx, tz] of tablePositions) {
       const t = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 0.4, 16), tableMat);
-      t.position.set(-30 + (i % 2) * 12, 4, 6 + Math.floor(i / 2) * 12);
+      t.position.set(tx, 4, tz);
       t.castShadow = true;
       t.userData.solid = true;
       const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 4, 8), tableMat);
@@ -490,6 +546,96 @@ class PrologueCafeteriaScene implements IScene {
       new THREE.MeshBasicMaterial({ map: signTex }),
     );
     sign.position.set(20, 16, -44.6);
+    scene.add(sign);
+  }
+
+  /**
+   * The hallway Jack starts in: an enclosed corridor on the west (his lane,
+   * z28) with THREE walls — the room's west wall behind him plus a north and a
+   * south wall running east — opening through a framed doorway into the cafeteria
+   * / lab beyond. Overhead light fixtures for the corridor are added alongside
+   * the other ceiling lights in enter(). The two side walls are solid (Jack can
+   * never clip out of the corridor); the doorway header, frame trim and sign are
+   * left NON-solid because their footprint is overhead or flush with the wall
+   * ends — tagging them solid would close the doorway in buildColliders, which
+   * ignores height. The opening spans the full corridor width and clears y0-20,
+   * so the trailing follow-camera passes through it without clipping.
+   */
+  private buildHallway(): void {
+    const scene = this.scene;
+    const zN = 35.5;
+    const zS = 20.5;
+    const xWest = -60;
+    const xDoor = -8;
+    const len = xDoor - xWest; // 52
+    const cx = (xWest + xDoor) / 2; // -34
+    const width = zN - zS; // 15
+
+    const wallTexBase = createWallTexture();
+    const mkWall = (w: number, h: number, x: number, y: number, z: number) => {
+      const tex = wallTexBase.clone();
+      tex.repeat.set(w / WALL_TEXTURE_WORLD_SIZE.width, h / WALL_TEXTURE_WORLD_SIZE.height);
+      const wall = new THREE.Mesh(
+        new THREE.BoxGeometry(w, h, 0.6),
+        new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 }),
+      );
+      wall.position.set(x, y, z);
+      wall.receiveShadow = true;
+      // Solid: the lane (z28) and Jack's spawn (z28) both sit clear of these
+      // walls once grown by PLAYER_RADIUS (N blocks ~z33.7-37.3, S ~z18.7-22.3).
+      wall.userData.solid = true;
+      scene.add(wall);
+    };
+    // North and south side walls (the room's west wall is the third), from the
+    // west wall east to the doorway plane.
+    mkWall(len, 24, cx, 12, zN);
+    mkWall(len, 24, cx, 12, zS);
+
+    // ---- Framed doorway at the east end (x = -8), full corridor width ----
+    // Header beam across the top of the opening. Overhead (y20-24) and NON-solid.
+    const header = new THREE.Mesh(
+      new THREE.BoxGeometry(1.6, 4, width),
+      new THREE.MeshStandardMaterial({ map: wallTexBase.clone(), roughness: 0.85 }),
+    );
+    header.position.set(xDoor, 22, (zN + zS) / 2);
+    header.castShadow = true;
+    scene.add(header);
+
+    // Emissive frame: two side posts + a glow strip under the header, marking the
+    // threshold as a lit portal. NON-solid (posts sit on the wall ends, strip is
+    // overhead).
+    const trimMat = new THREE.MeshStandardMaterial({
+      color: 0x0a1828,
+      emissive: 0x39c5ff,
+      emissiveIntensity: 0.7,
+    });
+    for (const z of [zS, zN]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(1.0, 20, 1.0), trimMat);
+      post.position.set(xDoor, 10, z);
+      scene.add(post);
+    }
+    const glow = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.5, width), trimMat);
+    glow.position.set(xDoor, 19.6, (zN + zS) / 2);
+    scene.add(glow);
+
+    // Sign on the doorway's west face — read by Jack as he walks east toward it.
+    const signCanvas = document.createElement("canvas");
+    signCanvas.width = 512;
+    signCanvas.height = 128;
+    const sctx = signCanvas.getContext("2d")!;
+    sctx.fillStyle = "#0a1422";
+    sctx.fillRect(0, 0, 512, 128);
+    sctx.fillStyle = "#7fd0ff";
+    sctx.font = "bold 54px Inter, sans-serif";
+    sctx.textAlign = "center";
+    sctx.textBaseline = "middle";
+    sctx.fillText("CAFETERIA · LAB →", 256, 64);
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(11, 2.6),
+      new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(signCanvas) }),
+    );
+    sign.position.set(xDoor - 0.85, 22, (zN + zS) / 2);
+    sign.rotation.y = -Math.PI / 2;
     scene.add(sign);
   }
 
@@ -665,42 +811,55 @@ class PrologueCafeteriaScene implements IScene {
   }
 
   private buildCoffeeMachine(): void {
+    // The coffee station stands against the EAST wall, on Jack's hallway lane
+    // (world ~(46, z28)), so the run for two coffees is a single straight line
+    // east from his spawn — matching the layout diagram's "Coffee Table" on the
+    // far-east edge. Jack approaches from the WEST; the counter runs along Z so
+    // both cups sit perpendicular to his approach (reachable without stepping
+    // into the counter), and the machine body sits EAST of it against the wall.
     const g = new THREE.Group();
     const body = new THREE.Mesh(
-      new THREE.BoxGeometry(4, 7, 3),
+      new THREE.BoxGeometry(3, 7, 4),
       new THREE.MeshStandardMaterial({ color: 0x9aa6b3, roughness: 0.4, metalness: 0.6 }),
     );
-    body.position.y = 3.5;
+    // Body east of the counter (toward the wall) so the cups sit between it and
+    // Jack as he steps up from the west.
+    body.position.set(3.2, 3.5, 0);
     body.castShadow = true;
     const panel = new THREE.Mesh(
-      new THREE.BoxGeometry(2.4, 1.6, 0.2),
+      new THREE.BoxGeometry(0.2, 1.6, 2.4),
       new THREE.MeshStandardMaterial({
         color: 0x123,
         emissive: 0x2f6ad0,
         emissiveIntensity: 0.8,
       }),
     );
-    panel.position.set(0, 5, 1.6);
+    // On the body's west face, looking back toward Jack.
+    panel.position.set(1.6, 5, 0);
 
-    // Counter the cups sit on.
+    // Counter the cups sit on — long axis along Z, front (west) edge at local
+    // x=-2.25, where Jack reaches across from the lane.
     const counter = new THREE.Mesh(
-      new THREE.BoxGeometry(14, 1, 4),
+      new THREE.BoxGeometry(4.5, 1, 11),
       new THREE.MeshStandardMaterial({ color: 0x394a63, roughness: 0.6, metalness: 0.3 }),
     );
-    counter.position.set(4, 4, 1.5);
+    counter.position.set(0, 4, 0);
     counter.castShadow = true;
     counter.receiveShadow = true;
 
     g.add(body, panel, counter);
-    g.position.set(-30, 0, -10);
+    g.position.set(54, 0, 28);
     g.userData.solid = true;
     this.coffeeMachine = body;
     this.scene.add(g);
 
     // Two coffee cups on the counter — collected by tapping, then confirming.
+    // Stacked along Z (perpendicular to Jack's western approach) so he reaches
+    // both from one planted spot. cup0 (index 0) -> right hand, cup1 (index 1)
+    // -> left hand.
     const cupPositions = [
-      new THREE.Vector3(-28, 4.9, -8),
-      new THREE.Vector3(-25, 4.9, -8),
+      new THREE.Vector3(53, 4.9, 31),
+      new THREE.Vector3(53, 4.9, 25),
     ];
     cupPositions.forEach((pos, i) => {
       const cup = this.makeCup();
@@ -807,9 +966,12 @@ class PrologueCafeteriaScene implements IScene {
    */
   private async setCoffeesOnConsole(): Promise<void> {
     const top = 4.94; // desk top (y=4.5) + scaled cup half-height
+    // The desk now sits to the WEST (world x~12, top spans x10–14); set the cups
+    // near its east edge (x13) where Jack and Sarah stand, at z's within the
+    // desk's z-span (-38..-18).
     const slots = [
-      new THREE.Vector3(28.8, top, -26.5),
-      new THREE.Vector3(28.8, top, -29.5),
+      new THREE.Vector3(13, top, -26.5),
+      new THREE.Vector3(13, top, -29.5),
     ];
     const cups: THREE.Object3D[] = [];
     while (this.coffees.length) {
@@ -830,20 +992,22 @@ class PrologueCafeteriaScene implements IScene {
 
   private buildConsole(): void {
     const g = new THREE.Group();
-    // The desk is a control bank standing off to the EAST of the central
+    // The desk is a control bank standing off to the WEST of the central
     // accelerator lane (long axis along Z), not a wall across it. This keeps the
     // straight path from the approach point to the accelerator/vortex clear, so
-    // Jack and Sarah walk past the console rather than through it.
+    // Jack and Sarah walk past the console rather than through it, with Sarah to
+    // the desk's east (per the layout diagram).
     const desk = new THREE.Mesh(
-      new THREE.BoxGeometry(4, 1, 12),
+      new THREE.BoxGeometry(4, 1, 20),
       new THREE.MeshStandardMaterial({ color: 0x2b3a52, roughness: 0.5, metalness: 0.4 }),
     );
-    desk.position.set(10, 4, 0);
+    desk.position.set(-8, 4, 0);
     desk.castShadow = true;
     g.add(desk);
-    // Holographic screens line the desk's west face, angled toward the lane so
-    // the player reads them while operating the console from the west.
-    for (let i = -1; i <= 1; i++) {
+    // Holographic screens line the desk's east face, angled toward the lane so
+    // the player reads them while operating the console from the east (where
+    // Sarah and Jack stand).
+    for (let i = -2; i <= 2; i++) {
       const screen = new THREE.Mesh(
         new THREE.PlaneGeometry(3.4, 2.2),
         new THREE.MeshStandardMaterial({
@@ -854,8 +1018,8 @@ class PrologueCafeteriaScene implements IScene {
           opacity: 0.92,
         }),
       );
-      screen.position.set(7.8, 7, i * 4);
-      screen.rotation.y = -Math.PI / 2;
+      screen.position.set(-5.8, 7, i * 4);
+      screen.rotation.y = Math.PI / 2;
       screen.rotation.x = -0.12;
       g.add(screen);
     }
@@ -1430,11 +1594,14 @@ class PrologueCafeteriaScene implements IScene {
       const p = this.openingPushProgress(s.elapsed);
       const e = p * p * (3 - 2 * p); // smoothstep: gentle start, gentle settle
       return {
-        position: new THREE.Vector3(0, 8, 30).lerp(new THREE.Vector3(0, 8, -5), e),
+        // Starts up on the hallway lane (z=32) and pushes deep toward the
+        // accelerator end of the lab. Held at y=9 — a person walking in, not a
+        // god-cam — so the sightline down the room stays unobstructed.
+        position: new THREE.Vector3(0, 9, 32).lerp(new THREE.Vector3(0, 9, -2), e),
         // Aimed down the lane toward the accelerator end (-Z), biased slightly
-        // east (X=6) so the ring and Sarah's console (both at X=20) read without
-        // pulling the coffee counter off the left edge.
-        lookAt: new THREE.Vector3(6, 7, -38),
+        // east (X=8) so the ring and Sarah's console read without pulling the
+        // coffee counter off the left edge.
+        lookAt: new THREE.Vector3(8, 7, -34),
       };
     }
     if (id === "climax") {
@@ -1448,6 +1615,28 @@ class PrologueCafeteriaScene implements IScene {
           .add(new THREE.Vector3(2, 5, 16).multiplyScalar(s.framingScale)),
         lookAt: look,
       };
+    }
+    if (id === "finale") {
+      // Closing push-in: begins on the same two-shot framing as "climax" (so
+      // the handoff is seamless) and slowly dollies in over the dissolve, the
+      // camera drawn toward the vortex light as Jack and Sarah fade into it.
+      if (this.finaleStartElapsed === null) this.finaleStartElapsed = s.elapsed;
+      const p = THREE.MathUtils.clamp(
+        (s.elapsed - this.finaleStartElapsed) / this.finaleDurationS,
+        0,
+        1,
+      );
+      const e = p * p * (3 - 2 * p); // smoothstep
+      const mid = s.jack.clone().lerp(s.sarah, 0.5);
+      const start = mid
+        .clone()
+        .add(new THREE.Vector3(2, 5, 16).multiplyScalar(s.framingScale));
+      const end = mid
+        .clone()
+        .add(new THREE.Vector3(1, 3.5, 9).multiplyScalar(s.framingScale));
+      const look = mid.clone();
+      look.y += 4.2 - e * 0.8; // tightens slightly as it closes in
+      return { position: start.lerp(end, e), lookAt: look };
     }
     return null;
   }
@@ -1476,12 +1665,46 @@ class PrologueCafeteriaScene implements IScene {
     );
   }
 
-  /** Cold-open narration, then control + first objective (see enter()). */
+  /**
+   * Auto-stroll Jack from his hallway spawn, down the corridor and through the
+   * doorway to the coffee counter, WHILE the opening journal narration plays —
+   * control stays disabled the whole time and is handed over only once the VO
+   * ends (see playLabOpening). The pace is sized to span the narration so he
+   * keeps moving throughout and arrives roughly as it finishes, instead of the
+   * normal gameplay speed (which would get him there in a few seconds and then
+   * leave him idle for the rest of the VO). Normal speed is restored on arrival.
+   */
+  private startOpeningStroll(): void {
+    const anchor = new THREE.Vector3(
+      this.coffeeCounterWorld.x - 6,
+      0,
+      this.coffeeCounterWorld.z,
+    );
+    const dist = this.jack.position.distanceTo(anchor);
+    const strollSeconds = Math.max(1, (OPENING_NARRATION_MS - 1500) / 1000);
+    const speed = THREE.MathUtils.clamp(dist / strollSeconds, 3, 16);
+    this.jackNav.setSpeed(speed);
+    // phase is "coffee" here, so routeFor() returns a single straight leg east.
+    this.walkJackTo(anchor, () => this.jackNav.setSpeed(16));
+  }
+
   private async playLabOpening(): Promise<void> {
+    // Jack walks himself to the counter during the narration (input stays off,
+    // Camera 1 trailing him down the hallway — "Camera 1 follows Jack until the
+    // coffee-table").
+    this.startOpeningStroll();
     await this.director.play(labOpeningNarration);
     if (this.disposed) return;
+    // Guarantee the slow stroll pace never leaks into player-driven walking,
+    // even if the VO happened to end before he reached the counter.
+    this.jackNav.setSpeed(16);
+    // The sequence's final step cleared the scripted "establishing" moment,
+    // handing framing back to the gameplay zones (hallway-follow, or the
+    // coffee-counter framing if he's already arrived). Hard cut into that so the
+    // handoff doesn't visibly ease across the whole room.
+    this.cameraDirector.cut();
     this.ctx.input.setEnabled(true);
-    this.ctx.quest.setObjective("Get two coffees from the counter.");
+    this.ctx.quest.setObjective("Pick up the two coffees from the counter.");
     this.ctx.overlays.showHint(this.walkHint);
   }
 
@@ -1518,7 +1741,7 @@ class PrologueCafeteriaScene implements IScene {
   } {
     if (target.userData.kind === "console") {
       return {
-        anchor: this.consoleDeskWorld.clone().add(new THREE.Vector3(-6, 0, 0)),
+        anchor: this.consoleDeskWorld.clone().add(new THREE.Vector3(6, 0, 0)),
         radius: 7,
       };
     }
@@ -1542,17 +1765,63 @@ class PrologueCafeteriaScene implements IScene {
       return { anchor: target.position, radius: 7, walkTo: stand };
     }
     if (target.userData.kind === "coffee") {
-      // Jack walks up to ONE spot centered in front of the counter and stays
-      // planted there for both cups — he only rotates to face each one (see
+      // Jack walks up to ONE spot just WEST of the counter and stays planted
+      // there for both cups — he only rotates to face each one (see
       // pickUpCoffee). Anchoring both cups to the same point means tapping the
-      // second cup never makes him shuffle sideways. The cups sit on the solid
-      // counter, so the stand point is just south of it.
+      // second cup never makes him shuffle sideways. The counter's west (front)
+      // edge sits at world x~51.75, so the stand point is a few units west of it
+      // — clear of the station's grown collider, yet within pickupRadius of both
+      // cups (which straddle it along Z).
       return {
-        anchor: new THREE.Vector3(this.coffeeCounterWorld.x, 0, -3),
+        anchor: new THREE.Vector3(this.coffeeCounterWorld.x - 6, 0, this.coffeeCounterWorld.z),
         radius: this.pickupRadius,
       };
     }
     return { anchor: target.position, radius: this.pickupRadius };
+  }
+
+  /**
+   * Auto-walk Jack to a target along the route from routeFor (a single straight
+   * leg, now that the lab has no interior partitions). Kept as a thin wrapper so
+   * callers don't care whether a trip is one leg or several.
+   */
+  private walkJackTo(target: THREE.Vector3, onArrive?: () => void): void {
+    const route = this.routeFor(target);
+    this.followPath(route, onArrive);
+  }
+
+  /**
+   * Walk Jack through an ordered list of waypoints, invoking onArrive once the
+   * final point is reached. Each leg is stamped with the current pathRunId; if
+   * a newer walk request (or dispose) supersedes it mid-route, the chain aborts
+   * rather than resuming stale waypoints.
+   */
+  private followPath(points: THREE.Vector3[], onArrive?: () => void): void {
+    const runId = ++this.pathRunId;
+    const step = (i: number): void => {
+      if (this.disposed || runId !== this.pathRunId) return;
+      const last = i === points.length - 1;
+      this.jackNav.goTo(points[i].clone(), () => {
+        if (this.disposed || runId !== this.pathRunId) return;
+        if (last) onArrive?.();
+        else step(i + 1);
+      });
+    };
+    if (points.length === 0) onArrive?.();
+    else step(0);
+  }
+
+  /**
+   * Build the waypoint list from Jack's current position to a target. Most trips
+   * are a single straight leg, but the walk from the coffee counter to Sarah
+   * follows the diagram's L-sweep — south down the east side, then west to her —
+   * so it never cuts across the cafeteria tables.
+   */
+  private routeFor(target: THREE.Vector3): THREE.Vector3[] {
+    if (this.phase === "to-sarah") {
+      return [new THREE.Vector3(48, 0, -12), target.clone()];
+    }
+    return [target.clone()];
   }
 
   /**
@@ -1594,7 +1863,7 @@ class PrologueCafeteriaScene implements IScene {
     // target stop Jack short of its centre (e.g. Sarah) without moving the
     // in-range gate above.
     this.selectedHighlightTarget = interactable;
-    this.jackNav.goTo(walkTo ?? anchor, () => this.tryInteract(interactable));
+    this.walkJackTo(walkTo ?? anchor, () => this.tryInteract(interactable));
   }
 
   /** Opens a Yes/No prompt for a tapped, in-range object and acts on "Yes". */
@@ -1673,9 +1942,10 @@ class PrologueCafeteriaScene implements IScene {
     } else {
       this.phase = "to-sarah";
       this.jackNav.stop();
-      this.ctx.quest.setObjective(
-        "Take the coffees to Sarah in Lab Seven (head right →).",
-      );
+      // Hard cut from the coffee-counter framing to the cafeteria-crossing
+      // framing as Jack turns to carry the coffees to Sarah's lab.
+      this.cameraDirector.cut();
+      this.ctx.quest.setObjective("Take the coffees to Sarah in Lab Seven.");
       this.ctx.overlays.showHint("Tap Sarah to deliver the coffee");
     }
   }
@@ -1701,11 +1971,11 @@ class PrologueCafeteriaScene implements IScene {
   }
 
   private updateConsolePrompt(): void {
-    // Approach point is just west of the desk (in the lane), since the desk now
-    // sits to the east.
+    // Approach point is just east of the desk (in the lane), since the desk now
+    // sits to the west.
     const consoleFront = this.consoleDeskWorld
       .clone()
-      .add(new THREE.Vector3(-6, 0, 0));
+      .add(new THREE.Vector3(6, 0, 0));
     const near = this.jack.position.distanceTo(consoleFront) < 7;
     if (near !== this.nearConsole) {
       this.nearConsole = near;
@@ -1743,7 +2013,7 @@ class PrologueCafeteriaScene implements IScene {
     this.phase = "to-console";
     this.ctx.quest.setObjective("Follow Sarah to the accelerator console.");
     this.ctx.overlays.showHint("Tap the console to stabilise it");
-    // Sarah walks to the console, beside Jack on the west side of the desk.
+    // Sarah walks to the console, beside Jack on the east side of the desk.
     this.sarahNav.goTo(this.sarahConsoleSpot.clone());
   }
 
@@ -1786,7 +2056,7 @@ class PrologueCafeteriaScene implements IScene {
     // Emergency lights were created up-front (see buildRedLights); the pulse in
     // update() ramps their intensity now that the cascade is active.
     // Sarah runs down the now-clear lane to the accelerator; the player follows.
-    // The console sits to the east of the lane, so nothing needs to be dropped.
+    // The console sits to the west of the lane, so nothing needs to be dropped.
     this.sarahNav.goTo(this.reachSarahZone.clone());
     this.phase = "reach-sarah";
     // The alarm narration plays over the cascade with control withheld, then
@@ -1850,27 +2120,62 @@ class PrologueCafeteriaScene implements IScene {
     ]);
     if (this.disposed) return;
 
-    // Hold the tableau for the closing narration.
-    await this.director.play(climaxEnd);
-    if (this.disposed) return;
-
-    // Pull both into the vortex.
+    // Closing tableau: the camera pushes in (the "finale" moment, eased from
+    // the climax two-shot it already holds) while the closing narration plays
+    // and Jack and Sarah dissolve into the vortex light together — no white
+    // flash, no pull-in tween. They are left where they stand; only their
+    // materials fade out.
+    this.finaleStartElapsed = null;
+    this.setCameraMoment("finale");
     this.ctx.audio.playSfx("vortex-pull");
     await Promise.all([
-      this.tween(this.jack.position, this.vortex.position.clone(), 1100),
-      this.tween(this.sarah.position, this.vortex.position.clone(), 1100),
+      this.director.play(climaxEnd),
+      this.dissolveCharacter(this.jack, this.finaleDurationS * 1000),
+      this.dissolveCharacter(this.sarah, this.finaleDurationS * 1000),
     ]);
     if (this.disposed) return;
 
-    await this.ctx.overlays.whiteFlash();
+    // Beat of empty, lit space where they were, then ease to black.
+    await new Promise((r) => setTimeout(r, 1500));
+    if (this.disposed) return;
+    await this.ctx.overlays.fadeToBlack(1000);
     if (this.disposed) return;
     this.ctx.overlays.setBlackInstant(true);
     this.ctx.overlays.hideClock();
-    await new Promise((r) => setTimeout(r, 1200));
-    if (this.disposed) return;
 
     this.phase = "done";
     this.ctx.scenes.goTo(createChapterOneScene, false);
+  }
+
+  /**
+   * Fade a character (and everything parented to it — carried props included)
+   * out to fully transparent over `ms`. Materials are flipped to transparent
+   * with depthWrite off so the dissolve reads cleanly against the scene behind
+   * them. Not restored: the scene transitions out immediately after.
+   */
+  private dissolveCharacter(root: THREE.Object3D, ms: number): Promise<void> {
+    const mats: THREE.Material[] = [];
+    root.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const m = mesh.material;
+      for (const mat of Array.isArray(m) ? m : [m]) {
+        mat.transparent = true;
+        mat.depthWrite = false;
+        mats.push(mat);
+      }
+    });
+    return new Promise((resolve) => {
+      const start = performance.now();
+      const tick = () => {
+        if (this.disposed) return resolve();
+        const k = Math.min((performance.now() - start) / ms, 1);
+        for (const mat of mats) (mat as THREE.Material).opacity = 1 - k;
+        if (k < 1) requestAnimationFrame(tick);
+        else resolve();
+      };
+      tick();
+    });
   }
 
   // ---------- Helpers ----------
@@ -2024,70 +2329,82 @@ class PrologueCafeteriaScene implements IScene {
       },
     };
 
-    const coffeeCounter: CameraZone<CameraZoneState> = {
-      id: "coffee-counter",
-      priority: 30,
-      easeSpeed: 0.06,
-      isActive: (s) => s.phase === "coffee" && s.jack.distanceTo(this.coffeeCounterWorld) < 13,
-      // Raised and rotated across the counter so neither cup hides behind Jack
-      // as he steps up. The framing slides laterally toward whichever cup he's
-      // collecting next (index 0 sits left at x=-28 -> right hand; index 1 sits
-      // right at x=-25 -> left hand), so the camera follows his reaching hand.
+    // Camera 1 (the only MOVING camera): a third-person follow that trails Jack
+    // from behind — north-west and above — as he walks the straight hallway lane
+    // east to the coffee counter, the coffee table reading ahead of him. Engages
+    // the instant the opening journal narration ends (see playLabOpening's cut)
+    // and hands off to the coffee-counter framing once he's there. Sits above
+    // defaultLab so it owns the whole approach, below coffeeCounter so the
+    // tighter counter framing takes over. The eye point is clamped to the room
+    // interior so the camera never clips outside the walls.
+    const hallwayFollow: CameraZone<CameraZoneState> = {
+      id: "hallway-follow",
+      priority: 28,
+      easeSpeed: 0.07,
+      isActive: (s) => s.phase === "coffee",
       position: (s) => {
-        const cupX = s.coffeeIndex === 1 ? -25 : -28;
-        const lateral = cupX - this.coffeeCounterWorld.x; // -2 for cup0, +1 for cup1
-        return this.coffeeCounterWorld
+        const p = s.jack
           .clone()
-          .add(
-            new THREE.Vector3(-6 + lateral * 1.6, 11, 12).multiplyScalar(
-              s.framingScale,
-            ),
-          );
+          .add(new THREE.Vector3(-13, 13, 4).multiplyScalar(s.framingScale));
+        p.x = THREE.MathUtils.clamp(p.x, -56, 56);
+        p.z = THREE.MathUtils.clamp(p.z, -40, 42);
+        return p;
       },
       lookAt: (s) => {
-        // Aim at the active cup, dropped to counter height, with only a light
-        // pull toward Jack so he stays framed without dragging the aim off it.
-        const cupX = s.coffeeIndex === 1 ? -25 : -28;
-        const l = new THREE.Vector3(cupX, 3.4, -8).lerp(s.jack, 0.25);
-        l.y += 0.6;
+        // Look a few units ahead (east) of Jack so the counter he's walking
+        // toward stays in frame, not just his back.
+        const l = s.jack.clone();
+        l.x += 5;
+        l.y += 2.5;
         return l;
       },
     };
 
-    // Active for the *entire* walk to the objective, not just once Jack is
-    // already close, so the approach never falls through to defaultLab's plain
-    // over-the-shoulder framing (which tracks only Jack and would drop Sarah).
-    // Composition: Camera > Sarah > Jack — the camera sits beyond Sarah on the
-    // side away from Jack, raised and skewed for a 3/4 angle, so Sarah fills the
-    // foreground while Jack reads in the background and grows as he crosses the
-    // cafeteria toward her.
+    const coffeeCounter: CameraZone<CameraZoneState> = {
+      id: "coffee-counter",
+      priority: 30,
+      easeSpeed: 0.06,
+      isActive: (s) => s.phase === "coffee" && s.jack.distanceTo(this.coffeeCounterWorld) < 7,
+      // Camera 2: a FIXED framing just north of (and above) the counter, looking
+      // south-west across the two cups so Sarah (further south at her console)
+      // reads in the deep background, per the layout diagram. Jack steps up from
+      // the west into frame.
+      position: (s) =>
+        this.coffeeCounterWorld
+          .clone()
+          .add(new THREE.Vector3(-1, 12, 13).multiplyScalar(s.framingScale)),
+      lookAt: (s) => {
+        // Aim across the cups toward Sarah so both cups sit in the foreground
+        // and she lands in the background; a light pull toward Jack keeps him
+        // in frame as he collects them.
+        const cupsCenter = new THREE.Vector3(53, 3.4, this.coffeeCounterWorld.z);
+        const l = cupsCenter.lerp(s.sarah, 0.2).lerp(s.jack, 0.08);
+        l.y += 1.2;
+        return l;
+      },
+    };
+
+    // Camera 3: a FIXED camera (anchored to stationary Sarah, so its position
+    // never moves during the approach) that "follows Jack to Sarah" purely by
+    // panning — only its lookAt tracks the Jack<->Sarah midpoint as he walks the
+    // L-sweep down the east side and across to her. Sits west-and-above the
+    // action for a 3/4 angle, matching the diagram's Camera 3. Owns the to-sarah
+    // approach; the dialogue beat itself is taken by dialogue-orbit (higher prio).
     const sarahInteraction: CameraZone<CameraZoneState> = {
       id: "sarah-interaction",
       priority: 35,
       easeSpeed: 0.07,
       isActive: (s) => s.phase === "to-sarah" || s.phase === "intro-dialogue",
-      position: (s) => {
-        // Horizontal Jack -> Sarah direction; "beyond Sarah" continues past her
-        // along it. Guard the degenerate case when Jack is right on top of her.
-        const toSarah = s.sarah.clone().sub(s.jack);
-        toSarah.y = 0;
-        if (toSarah.lengthSq() < 1) toSarah.set(1, 0, 0);
-        toSarah.normalize();
-        // Perpendicular for a 3/4 skew so Sarah doesn't fully eclipse Jack.
-        const lateral = new THREE.Vector3(-toSarah.z, 0, toSarah.x);
-        // ~13u past Sarah keeps the camera well clear of the east wall (x=60;
-        // console ~x=24); +11 up looks down over her shoulder toward Jack.
-        const offset = toSarah
+      position: (s) =>
+        // Fixed relative to Sarah (who is planted during to-sarah): ~west, high,
+        // and a touch north — a stationary vantage that frames the whole walk.
+        s.sarah
           .clone()
-          .multiplyScalar(13)
-          .add(lateral.multiplyScalar(6))
-          .add(new THREE.Vector3(0, 11, 0));
-        return s.sarah.clone().add(offset.multiplyScalar(s.framingScale));
-      },
+          .add(new THREE.Vector3(-26, 24, 22).multiplyScalar(s.framingScale)),
       lookAt: (s) => {
-        // Center Sarah's upper body, nudged toward Jack so his approach stays
-        // in frame in the background.
-        const l = s.sarah.clone().lerp(s.jack, 0.18);
+        // Pan to the Jack<->Sarah midpoint (biased toward Jack) so he stays
+        // centred as he approaches and Sarah reads as the destination.
+        const l = s.jack.clone().lerp(s.sarah, 0.4);
         l.y += 3;
         return l;
       },
@@ -2128,7 +2445,7 @@ class PrologueCafeteriaScene implements IScene {
       easeSpeed: 0.06,
       isActive: (s) => s.phase === "to-console" || s.phase === "console-dialogue",
       position: (s) => {
-        const dir = new THREE.Vector3(-18, 14, 18).normalize();
+        const dir = new THREE.Vector3(18, 14, 18).normalize();
         const pull = this.travelPullback(s.jack, this.consoleDeskWorld, dir, 21, 60);
         // Bias toward Jack the further out he still is, so he stays in frame
         // alongside the desk instead of the shot holding fixed on the desk
@@ -2191,7 +2508,7 @@ class PrologueCafeteriaScene implements IScene {
       },
     };
 
-    for (const zone of [scripted, emergencyVortex, console_, dialogueOrbit, sarahInteraction, coffeeCounter, defaultLab]) {
+    for (const zone of [scripted, emergencyVortex, console_, dialogueOrbit, sarahInteraction, coffeeCounter, hallwayFollow, defaultLab]) {
       this.cameraDirector.addZone(zone);
     }
   }
@@ -2264,6 +2581,20 @@ class PrologueCafeteriaScene implements IScene {
     const jackMoving = this.jackNav.update(dt);
     this.applyLocomotion(this.jack, jackMoving, dt);
 
+    // Hard cut from the hallway-follow framing to the coffee-counter framing
+    // the first frame Jack crosses into the counter zone's activation radius
+    // (mirrors coffeeCounter.isActive), so the handoff snaps instead of easing.
+    // Kept tight (7u) so Camera 1 trails Jack almost the whole way to the
+    // counter before the fixed counter framing takes over.
+    if (
+      this.phase === "coffee" &&
+      !this.coffeeCutDone &&
+      this.jack.position.distanceTo(this.coffeeCounterWorld) < 7
+    ) {
+      this.coffeeCutDone = true;
+      this.cameraDirector.cut();
+    }
+
     // Proximity hints: the actual pickup/delivery/console action happens by
     // tapping the object itself (see tryInteract(), called from handleClick()).
     if (this.phase === "coffee") {
@@ -2308,7 +2639,6 @@ class PrologueCafeteriaScene implements IScene {
         sarah: this.sarah.position,
         framingScale: this.framingScale(),
         elapsed,
-        coffeeIndex: this.coffeeCount,
       },
       dt,
     );
