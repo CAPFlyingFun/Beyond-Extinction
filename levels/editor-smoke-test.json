@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "units": "meters",
+  "axes": "+X east,-Z north,+Y up",
+  "walls": [],
+  "objects": [
+    {
+      "tag": "smoke",
+      "shape": "square",
+      "x": 1,
+      "z": -2,
+      "rot": 0,
+      "size": 1
+    }
+  ],
+  "spawns": [],
+  "name": "editor-smoke-test"
+}
