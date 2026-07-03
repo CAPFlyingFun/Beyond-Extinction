@@ -1,13 +1,25 @@
 import * as THREE from "three";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { CameraManager } from "../engine/CameraManager";
+import { assetUrl } from "../engine/assets";
 import { createJournalIntroScene } from "./JournalIntroScene";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 
+const SPLASH_LANDSCAPE = assetUrl("assets/branding/splash-landscape.jpg");
+const SPLASH_PORTRAIT = assetUrl("assets/branding/splash-portrait.jpg");
+
 /**
- * Cinematic title screen: a warm, hopeful prehistoric vista — an island rising
- * from a sunlit, animated ocean with pterosaur silhouettes circling overhead
- * and a slowly drifting camera.
+ * Title screen. The branded key art is the backdrop (portrait art on tall
+ * screens, landscape art on wide ones) with the menu overlaid. The 3D scene is
+ * intentionally empty — the opaque splash covers the whole viewport, so
+ * rendering a live vista behind it would only waste GPU/battery on phones.
+ *
+ * The menu works in either orientation. Because the game plays best in
+ * landscape, pressing New Game while a phone is held in portrait triggers a
+ * best-effort orientation lock and, if that can't be enforced (iOS), a
+ * "rotate your device" prompt that clears once the player turns to landscape.
+ * The gate runs here on the menu, *before* any gameplay clock starts, so it
+ * never pauses a running scene.
  */
 class MainMenuScene implements IScene {
   readonly name = "main-menu";
@@ -17,187 +29,68 @@ class MainMenuScene implements IScene {
     return this.cam.camera;
   }
 
-  private ocean!: THREE.Mesh;
-  private oceanUniforms!: { uTime: { value: number } };
-  private pterosaurs: THREE.Group[] = [];
   private menuEl?: HTMLDivElement;
+  private backdropEl?: HTMLDivElement;
   private creditsEl?: HTMLDivElement;
+  private rotateEl?: HTMLDivElement;
+  /** Tears down the rotate gate's listeners/timers and unblocks its promise. */
+  private rotateCleanup?: () => void;
+  private starting = false;
+  private disposed = false;
 
   constructor(private ctx: SceneContext) {
     this.cam = new CameraManager(50, 0.1, 3000);
   }
 
   enter(): void {
-    const scene = this.scene;
-    scene.background = new THREE.Color(0xbfe0f0);
-    scene.fog = new THREE.Fog(0xcfe6f2, 120, 900);
+    this.scene.background = new THREE.Color(0x05070d);
+    this.cam.place({ x: 0, y: 0, z: 10 }, { x: 0, y: 0, z: 0 });
 
     this.ctx.audio.playMusic("main-theme");
 
-    const hemi = new THREE.HemisphereLight(0xdff1ff, 0x4a6a55, 0.9);
-    scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xffe7c2, 2.1);
-    sun.position.set(-180, 160, 120);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
-    sun.shadow.camera.far = 800;
-    scene.add(sun);
-
-    this.oceanUniforms = { uTime: { value: 0 } };
-    const oceanGeo = new THREE.PlaneGeometry(4000, 4000, 220, 220);
-    const oceanMat = new THREE.MeshStandardMaterial({
-      color: 0x2f7fa8,
-      roughness: 0.35,
-      metalness: 0.1,
-    });
-    oceanMat.onBeforeCompile = (shader) => {
-      shader.uniforms.uTime = this.oceanUniforms.uTime;
-      shader.vertexShader =
-        `uniform float uTime;\n` +
-        shader.vertexShader.replace(
-          "#include <begin_vertex>",
-          `vec3 transformed = vec3(position);
-           float w = sin(position.x * 0.015 + uTime * 0.9) * 2.2
-                   + cos(position.y * 0.021 + uTime * 0.7) * 1.8
-                   + sin((position.x + position.y) * 0.008 + uTime * 0.4) * 3.0;
-           transformed.z += w;`,
-        );
-    };
-    this.ocean = new THREE.Mesh(oceanGeo, oceanMat);
-    this.ocean.rotation.x = -Math.PI / 2;
-    this.ocean.position.y = -6;
-    this.ocean.receiveShadow = true;
-    scene.add(this.ocean);
-
-    scene.add(this.buildIsland());
-
-    for (let i = 0; i < 5; i++) {
-      const p = this.buildPterosaur();
-      p.userData.phase = (i / 5) * Math.PI * 2;
-      p.userData.scaleR = 70 + i * 14;
-      p.userData.height = 60 + i * 10;
-      p.userData.speed = 0.18 + i * 0.02;
-      this.pterosaurs.push(p);
-      scene.add(p);
-    }
-
-    this.cam.place({ x: 0, y: 38, z: 210 }, { x: 0, y: 24, z: 0 });
-    this.cam.setDrift(2.2, 0.12);
-
+    this.buildBackdrop();
     this.buildMenu();
   }
 
-  private buildIsland(): THREE.Group {
-    const g = new THREE.Group();
-
-    const landMat = new THREE.MeshStandardMaterial({
-      color: 0x6f8a4e,
-      roughness: 0.95,
-    });
-    const sandMat = new THREE.MeshStandardMaterial({
-      color: 0xd9c79a,
-      roughness: 1,
-    });
-
-    const beach = new THREE.Mesh(new THREE.CylinderGeometry(120, 150, 12, 48), sandMat);
-    beach.position.y = -3;
-    beach.receiveShadow = true;
-    g.add(beach);
-
-    const land = new THREE.Mesh(new THREE.CylinderGeometry(95, 120, 18, 48), landMat);
-    land.position.y = 6;
-    land.receiveShadow = true;
-    land.castShadow = true;
-    g.add(land);
-
-    const mountain = new THREE.Mesh(
-      new THREE.ConeGeometry(70, 130, 8),
-      new THREE.MeshStandardMaterial({ color: 0x5b6e4a, roughness: 1, flatShading: true }),
-    );
-    mountain.position.y = 70;
-    mountain.castShadow = true;
-    g.add(mountain);
-
-    const cap = new THREE.Mesh(
-      new THREE.ConeGeometry(26, 34, 8),
-      new THREE.MeshStandardMaterial({ color: 0xeef3f7, roughness: 0.8, flatShading: true }),
-    );
-    cap.position.y = 130;
-    g.add(cap);
-
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2b, roughness: 1 });
-    const leafMat = new THREE.MeshStandardMaterial({ color: 0x3f7a3a, roughness: 0.9, flatShading: true });
-    for (let i = 0; i < 28; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const r = 55 + Math.random() * 45;
-      const tree = new THREE.Group();
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(1, 1.6, 14, 6), trunkMat);
-      trunk.position.y = 7;
-      trunk.castShadow = true;
-      const canopy = new THREE.Mesh(new THREE.IcosahedronGeometry(7, 0), leafMat);
-      canopy.position.y = 16;
-      canopy.castShadow = true;
-      tree.add(trunk, canopy);
-      tree.position.set(Math.cos(a) * r, 13, Math.sin(a) * r);
-      tree.scale.setScalar(0.8 + Math.random() * 0.8);
-      g.add(tree);
-    }
-
-    return g;
+  private buildBackdrop(): void {
+    const el = document.createElement("div");
+    el.className = "be-splash-bg";
+    this.ctx.uiLayer.appendChild(el);
+    this.backdropEl = el;
+    this.updateBackdrop();
+    requestAnimationFrame(() => el.classList.add("show"));
   }
 
-  private buildPterosaur(): THREE.Group {
-    // Stylized 2.5D silhouette rather than the old geometry birds. This reads
-    // cleaner on phones and keeps the menu cinematic instead of toy-like.
-    const g = new THREE.Group();
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0x2b221e,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.82,
-      depthWrite: false,
-    });
+  private updateBackdrop(): void {
+    if (!this.backdropEl) return;
+    const url = this.isPortrait() ? SPLASH_PORTRAIT : SPLASH_LANDSCAPE;
+    this.backdropEl.style.backgroundImage = `url("${url}")`;
+  }
 
-    const makeWing = (side: -1 | 1) => {
-      const shape = new THREE.Shape();
-      shape.moveTo(0, 0);
-      shape.lineTo(side * 7.5, 1.9);
-      shape.lineTo(side * 15.5, -0.3);
-      shape.lineTo(side * 8.2, -1.8);
-      shape.lineTo(side * 2.0, -0.65);
-      shape.lineTo(0, 0);
-      return new THREE.Mesh(new THREE.ShapeGeometry(shape), mat);
-    };
+  /** True when the viewport is taller than it is wide (device in portrait). */
+  private isPortrait(): boolean {
+    if (window.matchMedia) {
+      return window.matchMedia("(orientation: portrait)").matches;
+    }
+    return window.innerHeight > window.innerWidth;
+  }
 
-    const bodyShape = new THREE.Shape();
-    bodyShape.moveTo(-0.9, 0.35);
-    bodyShape.lineTo(3.9, 0.15);
-    bodyShape.lineTo(6.2, 0.95);
-    bodyShape.lineTo(5.3, 0.05);
-    bodyShape.lineTo(6.4, -0.7);
-    bodyShape.lineTo(3.2, -0.2);
-    bodyShape.lineTo(-4.4, -0.55);
-    bodyShape.lineTo(-2.2, 0.05);
-    bodyShape.lineTo(-4.6, 0.6);
-    bodyShape.lineTo(-0.9, 0.35);
-
-    const body = new THREE.Mesh(new THREE.ShapeGeometry(bodyShape), mat);
-    const left = makeWing(-1);
-    const right = makeWing(1);
-    g.add(left, right, body);
-    g.scale.setScalar(1.75);
-    g.userData.wings = [left, right];
-    return g;
+  /**
+   * Real touch device (phone/tablet) — deliberately stricter than
+   * InputManager.isTouch, which also flags narrow desktop windows. We only want
+   * to nudge users who can actually rotate a device toward landscape.
+   */
+  private isMobile(): boolean {
+    return (
+      (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) ||
+      navigator.maxTouchPoints > 0
+    );
   }
 
   private buildMenu(): void {
     const el = document.createElement("div");
     el.className = "be-menu";
     el.innerHTML = `
-      <div class="be-menu__brand">
-        <div class="be-menu__eyebrow">A Prehistoric Survival Adventure</div>
-        <h1 class="be-menu__title">Beyond<span>Extinction</span></h1>
-      </div>
       <div class="be-menu__buttons">
         <button class="be-btn" data-action="continue">Continue</button>
         <button class="be-btn be-btn--primary" data-action="new">New Game</button>
@@ -207,7 +100,7 @@ class MainMenuScene implements IScene {
       </div>
       <div class="be-menu__footer">
         <span>PWA Engine · Prologue</span>
-        <span>Three.js · GitHub Pages Ready · v${__APP_VERSION__}</span>
+        <span>Three.js · v${__APP_VERSION__}</span>
       </div>`;
     this.ctx.uiLayer.appendChild(el);
     this.menuEl = el;
@@ -283,42 +176,152 @@ class MainMenuScene implements IScene {
   }
 
   private async startNewGame(): Promise<void> {
+    if (this.starting) return; // ignore double-taps
+    this.starting = true;
+    this.menuEl
+      ?.querySelectorAll("button")
+      .forEach((b) => ((b as HTMLButtonElement).disabled = true));
+
+    // Fire the orientation lock immediately, while the click gesture is still
+    // "active" — fullscreen/lock requests are rejected outside a user gesture.
+    const lock = this.tryLockLandscape();
+
     this.menuEl?.classList.remove("show");
+    this.backdropEl?.classList.remove("show");
     await new Promise((r) => setTimeout(r, 600));
+    if (this.disposed) return;
+
+    await lock;
+    if (this.disposed) return;
+
+    // If the platform couldn't force landscape (iOS ignores the API), ask the
+    // player to rotate. The gate also offers a "Continue anyway" escape so a
+    // device that never reports landscape can never be permanently stuck.
+    if (this.isMobile() && this.isPortrait()) {
+      await this.waitForLandscape();
+    }
+    if (this.disposed) return;
+
     this.ctx.scenes.goTo(createJournalIntroScene);
   }
 
-  update(_dt: number, elapsed: number): void {
-    this.oceanUniforms.uTime.value = elapsed;
-    this.cam.update(_dt, elapsed);
-
-    for (const p of this.pterosaurs) {
-      const t = elapsed * p.userData.speed + p.userData.phase;
-      const r = p.userData.scaleR;
-      const denom = 1 + Math.sin(t) * Math.sin(t);
-      const x = (r * Math.cos(t)) / denom;
-      const z = (r * Math.sin(t) * Math.cos(t)) / denom;
-      p.position.set(x, p.userData.height + Math.sin(t * 2) * 4, z);
-
-      const nx = (r * Math.cos(t + 0.01)) / (1 + Math.sin(t + 0.01) ** 2);
-      const nz = (r * Math.sin(t + 0.01) * Math.cos(t + 0.01)) / (1 + Math.sin(t + 0.01) ** 2);
-      p.lookAt(nx, p.position.y, nz);
-
-      const flap = 1 + Math.sin(elapsed * 6 + p.userData.phase) * 0.18;
-      const [lw, rw] = p.userData.wings as THREE.Mesh[];
-      lw.scale.y = flap;
-      rw.scale.y = flap;
+  /**
+   * Best-effort landscape lock. Requests fullscreen (required by Chrome/Android
+   * before an orientation lock is allowed) then locks to landscape. Every step
+   * is wrapped so unsupported platforms (notably iOS Safari) simply fall
+   * through to the manual rotate prompt instead of throwing.
+   */
+  private async tryLockLandscape(): Promise<void> {
+    if (!this.isMobile()) return;
+    try {
+      const root = document.documentElement as HTMLElement & {
+        requestFullscreen?: (opts?: unknown) => Promise<void>;
+      };
+      if (!document.fullscreenElement && typeof root.requestFullscreen === "function") {
+        await root.requestFullscreen({ navigationUI: "hide" }).catch(() => {});
+      }
+      const orientation = screen.orientation as
+        | (ScreenOrientation & { lock?: (o: string) => Promise<void> })
+        | undefined;
+      if (orientation && typeof orientation.lock === "function") {
+        await orientation.lock("landscape").catch(() => {});
+      }
+    } catch {
+      /* Unsupported (iOS) — the rotate prompt handles it. */
     }
+  }
+
+  /**
+   * Full-screen "please rotate" gate. Resolves when the device turns landscape
+   * OR the player taps "Continue anyway" (revealed after a short delay so we ask
+   * for rotation first but never hard-block a device that can't rotate). It is
+   * fully cancellable via `rotateCleanup` so `dispose()` can't leave dangling
+   * window listeners, timers, or an unresolved promise.
+   */
+  private waitForLandscape(): Promise<void> {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "be-rotate";
+      overlay.innerHTML = `
+        <div class="be-rotate__inner">
+          <div class="be-rotate__phone"></div>
+          <div class="be-rotate__title">Rotate your device</div>
+          <p class="be-rotate__hint">Beyond Extinction plays best in landscape.</p>
+          <button class="be-btn be-rotate__skip" data-action="skip">Continue anyway</button>
+        </div>`;
+      this.ctx.uiLayer.appendChild(overlay);
+      this.rotateEl = overlay;
+      requestAnimationFrame(() => overlay.classList.add("show"));
+
+      const skipBtn = overlay.querySelector<HTMLButtonElement>('[data-action="skip"]');
+      let settleTimer = 0;
+      let removeTimer = 0;
+      let skipReveal = 0;
+
+      const teardown = () => {
+        window.removeEventListener("resize", check);
+        window.removeEventListener("orientationchange", check);
+        window.clearTimeout(skipReveal);
+        this.rotateCleanup = undefined;
+      };
+
+      // Graceful path: fade the overlay, settle the viewport, then resolve.
+      const finish = () => {
+        teardown();
+        overlay.classList.remove("show");
+        removeTimer = window.setTimeout(() => {
+          overlay.remove();
+          if (this.rotateEl === overlay) this.rotateEl = undefined;
+        }, 300);
+        // Give the browser a beat to settle the new viewport size before the
+        // next scene reads it for camera framing.
+        settleTimer = window.setTimeout(resolve, 360);
+      };
+
+      const check = () => {
+        if (!this.isPortrait()) finish();
+      };
+
+      // Hard cancel for dispose(): drop everything immediately and unblock the
+      // promise so startNewGame() can fall through its `disposed` guard.
+      this.rotateCleanup = () => {
+        teardown();
+        window.clearTimeout(settleTimer);
+        window.clearTimeout(removeTimer);
+        overlay.remove();
+        if (this.rotateEl === overlay) this.rotateEl = undefined;
+        resolve();
+      };
+
+      window.addEventListener("resize", check);
+      window.addEventListener("orientationchange", check);
+      skipBtn?.addEventListener("click", () => {
+        this.ctx.audio.playSfx("ui-select");
+        finish();
+      });
+      skipReveal = window.setTimeout(() => skipBtn?.classList.add("show"), 3500);
+    });
+  }
+
+  update(dt: number, elapsed: number): void {
+    this.cam.update(dt, elapsed);
   }
 
   resize(width: number, height: number): void {
     this.cam.resize(width, height);
+    this.updateBackdrop();
   }
 
   dispose(): void {
+    this.disposed = true;
+    // Cancel any in-flight rotate gate: removes window listeners/timers and
+    // resolves its promise so startNewGame() exits via its `disposed` guard.
+    this.rotateCleanup?.();
     closeSettingsPanel();
     this.menuEl?.remove();
+    this.backdropEl?.remove();
     this.creditsEl?.remove();
+    this.rotateEl?.remove();
     this.scene.traverse((o) => {
       const m = o as THREE.Mesh;
       if (m.geometry) m.geometry.dispose();

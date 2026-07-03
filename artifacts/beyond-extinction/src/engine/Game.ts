@@ -24,6 +24,8 @@ export class Game {
 
   private readonly uiLayer: HTMLElement;
   private rafId = 0;
+  private resizeRaf = 0;
+  private resizeSettleTimer = 0;
   private running = false;
   private lastTime = 0;
   private elapsed = 0;
@@ -35,7 +37,7 @@ export class Game {
     this.uiLayer.id = "be-ui-layer";
     container.appendChild(this.uiLayer);
 
-    this.input = new InputManager(this.renderer.domElement);
+    this.input = new InputManager(this.renderer.domElement, this.uiLayer);
     this.dialogue = new DialogueManager(this.uiLayer);
     this.quest = new QuestManager(this.uiLayer);
     this.audio = new AudioManager();
@@ -57,10 +59,26 @@ export class Game {
     };
     this.scenes.bind(ctx, this.overlays);
 
-    window.addEventListener("resize", this.onResize);
+    // Mobile browsers report the final viewport size a beat *after* the
+    // resize/orientationchange event fires, so reading dimensions synchronously
+    // in the handler can pick up stale (pre-rotation) values. We coalesce every
+    // resize signal into a single rAF-aligned sync and re-sync once more after
+    // the layout settles, so the drawing buffer always ends up matching the
+    // real viewport. visualViewport (when present) is the most reliable
+    // orientation-change signal on iOS.
+    window.addEventListener("resize", this.scheduleResize);
+    window.addEventListener("orientationchange", this.scheduleResize);
+    window.visualViewport?.addEventListener("resize", this.scheduleResize);
   }
 
-  private onResize = () => {
+  private scheduleResize = () => {
+    cancelAnimationFrame(this.resizeRaf);
+    this.resizeRaf = requestAnimationFrame(this.applyResize);
+    window.clearTimeout(this.resizeSettleTimer);
+    this.resizeSettleTimer = window.setTimeout(this.applyResize, 300);
+  };
+
+  private applyResize = () => {
     this.renderer.resize();
     this.scenes.resize(this.renderer.width, this.renderer.height);
   };
@@ -90,7 +108,11 @@ export class Game {
   dispose(): void {
     this.running = false;
     cancelAnimationFrame(this.rafId);
-    window.removeEventListener("resize", this.onResize);
+    window.removeEventListener("resize", this.scheduleResize);
+    window.removeEventListener("orientationchange", this.scheduleResize);
+    window.visualViewport?.removeEventListener("resize", this.scheduleResize);
+    cancelAnimationFrame(this.resizeRaf);
+    window.clearTimeout(this.resizeSettleTimer);
     this.input.dispose();
     this.dialogue.dispose();
     this.quest.dispose();

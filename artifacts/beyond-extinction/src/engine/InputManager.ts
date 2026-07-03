@@ -2,15 +2,32 @@ import * as THREE from "three";
 
 type ClickHandler = (pointer: THREE.Vector2, event: PointerEvent) => void;
 
+type FpPointerRole = "move" | "look";
+interface FpPointerState {
+  role: FpPointerRole;
+  startX: number;
+  startY: number;
+  lastX: number;
+  lastY: number;
+}
+
 /**
  * Tracks keyboard (WASD / arrows) and pointer input, and exposes raycasting
  * helpers for click/tap-to-interact behaviour. Movement and interaction are
  * unified across desktop and touch: WASD/arrows walk on desktop, and tapping
  * the floor (to walk) or a tagged object (to interact) drives everything else
  * on every platform.
+ *
+ * It also owns the first-person control surface (a virtual joystick on the left
+ * half, drag-to-look on the right half, plus a crosshair / interact button /
+ * prompt). That HUD is mounted on the shared UI layer and only shown while
+ * {@link enableFpControls}(true). Keeping it here means there is a single owner
+ * of the pointer/keyboard: first-person mode suppresses cinematic tap input
+ * instead of running a parallel input stack alongside it.
  */
 export class InputManager {
   private readonly dom: HTMLElement;
+  private readonly uiHost: HTMLElement;
   private readonly keys = new Set<string>();
   readonly pointer = new THREE.Vector2();
   readonly raycaster = new THREE.Raycaster();
@@ -22,14 +39,42 @@ export class InputManager {
     navigator.maxTouchPoints > 0 ||
     window.matchMedia("(max-width: 820px)").matches;
 
+  // --- First-person control surface (built lazily on first FP activation) ----
+  private fpMode = false;
+  private fpLayer: HTMLDivElement | null = null;
+  private fpJoyBase: HTMLDivElement | null = null;
+  private fpJoyStick: HTMLDivElement | null = null;
+  private fpPromptEl: HTMLDivElement | null = null;
+  private fpInteractBtn: HTMLButtonElement | null = null;
+  private readonly fpPointers = new Map<number, FpPointerState>();
+  private readonly fpJoy = { x: 0, y: 0 }; // joystick vector, forward = +y
+  private readonly fpLook = { x: 0, y: 0 }; // accumulated raw drag delta (px)
+  private readonly fpJoyRadius = 56;
+  private readonly interactHandlers = new Set<() => void>();
+
   private onKeyDown = (e: KeyboardEvent) => {
+    if (!this.enabled) return;
+    if (
+      e.target instanceof HTMLInputElement ||
+      e.target instanceof HTMLSelectElement ||
+      e.target instanceof HTMLTextAreaElement
+    ) {
+      return;
+    }
+    if (this.fpMode && (e.code === "KeyE" || e.code === "Space")) {
+      e.preventDefault();
+      this.fireInteract();
+      return;
+    }
     this.keys.add(e.code);
   };
+  // Always clear on key-up (even while disabled) so a key released during a
+  // gated stretch can never linger in the set when input is re-enabled.
   private onKeyUp = (e: KeyboardEvent) => {
     this.keys.delete(e.code);
   };
   private onPointerDown = (e: PointerEvent) => {
-    if (!this.enabled) return;
+    if (!this.enabled || this.fpMode) return;
     this.updatePointer(e);
     this.clickHandlers.forEach((h) => h(this.pointer, e));
   };
@@ -37,8 +82,9 @@ export class InputManager {
     this.updatePointer(e);
   };
 
-  constructor(dom: HTMLElement) {
+  constructor(dom: HTMLElement, uiHost?: HTMLElement) {
     this.dom = dom;
+    this.uiHost = uiHost ?? dom.parentElement ?? document.body;
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
     dom.addEventListener("pointerdown", this.onPointerDown);
@@ -53,7 +99,10 @@ export class InputManager {
 
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
-    if (!enabled) this.keys.clear();
+    if (!enabled) {
+      this.keys.clear();
+      this.resetFpInput();
+    }
   }
 
   /** Whether input is currently accepted (false while menus/cutscenes gate it). */
@@ -97,11 +146,213 @@ export class InputManager {
     this.clickHandlers.clear();
   }
 
+  // ---------- First-person controls ----------
+
+  /**
+   * Show/hide the first-person HUD and start/stop owning the pointer for FP
+   * walk + look. While active, cinematic tap input is suppressed but keyboard
+   * tracking stays live, so WASD keeps driving {@link fpMovement}.
+   */
+  enableFpControls(active: boolean): void {
+    this.fpMode = active;
+    if (active) this.ensureFpLayer();
+    if (this.fpLayer) this.fpLayer.style.display = active ? "block" : "none";
+    if (!active) this.resetFpInput();
+  }
+
+  get fpControlsActive(): boolean {
+    return this.fpMode;
+  }
+
+  /**
+   * Combined first-person movement from the joystick + WASD/arrows, clamped to
+   * the unit disc. Forward (screen-up / W) is +y, strafe-right is +x.
+   */
+  fpMovement(): { x: number; y: number } {
+    let x = this.fpJoy.x;
+    let y = this.fpJoy.y;
+    if (this.isDown("KeyW", "ArrowUp")) y += 1;
+    if (this.isDown("KeyS", "ArrowDown")) y -= 1;
+    if (this.isDown("KeyD", "ArrowRight")) x += 1;
+    if (this.isDown("KeyA", "ArrowLeft")) x -= 1;
+    const len = Math.hypot(x, y);
+    if (len > 1) {
+      x /= len;
+      y /= len;
+    }
+    return { x, y };
+  }
+
+  /** Drag-look delta (raw px) accumulated since the last call; resets on read. */
+  consumeLook(): { x: number; y: number } {
+    const out = { x: this.fpLook.x, y: this.fpLook.y };
+    this.fpLook.x = 0;
+    this.fpLook.y = 0;
+    return out;
+  }
+
+  /** Register a handler fired by the interact button / E / Space. */
+  onInteract(cb: () => void): () => void {
+    this.interactHandlers.add(cb);
+    return () => this.interactHandlers.delete(cb);
+  }
+
+  /**
+   * Show or hide the contextual interact prompt + button. Pass null to hide it
+   * (e.g. when nothing interactable is under the crosshair / in range).
+   */
+  setInteractPrompt(text: string | null): void {
+    if (!this.fpLayer || !this.fpPromptEl || !this.fpInteractBtn) return;
+    if (text) {
+      this.fpPromptEl.textContent = text;
+      this.fpPromptEl.style.display = "block";
+      this.fpInteractBtn.style.display = "block";
+    } else {
+      this.fpPromptEl.style.display = "none";
+      this.fpInteractBtn.style.display = "none";
+    }
+  }
+
+  private fireInteract(): void {
+    this.interactHandlers.forEach((h) => h());
+  }
+
+  private resetFpInput(): void {
+    this.fpPointers.clear();
+    this.fpJoy.x = 0;
+    this.fpJoy.y = 0;
+    this.fpLook.x = 0;
+    this.fpLook.y = 0;
+    if (this.fpJoyBase) this.fpJoyBase.style.display = "none";
+    if (this.fpJoyStick) {
+      this.fpJoyStick.style.transform = "translate(-50%, -50%)";
+    }
+  }
+
+  private ensureFpLayer(): void {
+    if (this.fpLayer) return;
+
+    const layer = document.createElement("div");
+    layer.className = "be-fp-layer";
+    layer.style.display = "none";
+
+    const crosshair = document.createElement("div");
+    crosshair.className = "be-fp-crosshair";
+    layer.appendChild(crosshair);
+
+    const joyBase = document.createElement("div");
+    joyBase.className = "be-fp-joybase";
+    joyBase.style.display = "none";
+    const joyStick = document.createElement("div");
+    joyStick.className = "be-fp-joystick";
+    joyBase.appendChild(joyStick);
+    layer.appendChild(joyBase);
+
+    const prompt = document.createElement("div");
+    prompt.className = "be-fp-prompt";
+    prompt.style.display = "none";
+    layer.appendChild(prompt);
+
+    const interactBtn = document.createElement("button");
+    interactBtn.className = "be-fp-interact";
+    interactBtn.type = "button";
+    interactBtn.textContent = "Interact";
+    interactBtn.style.display = "none";
+    interactBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      this.fireInteract();
+    });
+    layer.appendChild(interactBtn);
+
+    layer.addEventListener("pointerdown", this.onFpPointerDown);
+    layer.addEventListener("pointermove", this.onFpPointerMove);
+    layer.addEventListener("pointerup", this.onFpPointerUp);
+    layer.addEventListener("pointercancel", this.onFpPointerUp);
+
+    this.uiHost.appendChild(layer);
+    this.fpLayer = layer;
+    this.fpJoyBase = joyBase;
+    this.fpJoyStick = joyStick;
+    this.fpPromptEl = prompt;
+    this.fpInteractBtn = interactBtn;
+  }
+
+  // Left half drives the virtual joystick (move); right half drags to look.
+  // Pointer ownership is tracked by id so a move-touch and a look-touch never
+  // interfere. Only pointerdowns that land on the bare layer start move/look,
+  // so the interact button keeps its own clicks.
+  private onFpPointerDown = (e: PointerEvent) => {
+    if (!this.enabled || !this.fpLayer) return;
+    if (e.target !== this.fpLayer) return;
+    const role: FpPointerRole =
+      e.clientX < window.innerWidth / 2 ? "move" : "look";
+    this.fpLayer.setPointerCapture(e.pointerId);
+    this.fpPointers.set(e.pointerId, {
+      role,
+      startX: e.clientX,
+      startY: e.clientY,
+      lastX: e.clientX,
+      lastY: e.clientY,
+    });
+    if (role === "move" && this.fpJoyBase && this.fpJoyStick) {
+      this.fpJoyBase.style.left = `${e.clientX}px`;
+      this.fpJoyBase.style.top = `${e.clientY}px`;
+      this.fpJoyBase.style.display = "block";
+      this.fpJoyStick.style.transform = "translate(-50%, -50%)";
+    }
+    e.preventDefault();
+  };
+
+  private onFpPointerMove = (e: PointerEvent) => {
+    const st = this.fpPointers.get(e.pointerId);
+    if (!st) return;
+    if (st.role === "move") {
+      let dx = e.clientX - st.startX;
+      let dy = e.clientY - st.startY;
+      const len = Math.hypot(dx, dy);
+      if (len > this.fpJoyRadius) {
+        dx = (dx / len) * this.fpJoyRadius;
+        dy = (dy / len) * this.fpJoyRadius;
+      }
+      if (this.fpJoyStick) {
+        this.fpJoyStick.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+      }
+      this.fpJoy.x = dx / this.fpJoyRadius;
+      this.fpJoy.y = -dy / this.fpJoyRadius; // screen-up = forward
+    } else {
+      this.fpLook.x += e.clientX - st.lastX;
+      this.fpLook.y += e.clientY - st.lastY;
+      st.lastX = e.clientX;
+      st.lastY = e.clientY;
+    }
+    e.preventDefault();
+  };
+
+  private onFpPointerUp = (e: PointerEvent) => {
+    const st = this.fpPointers.get(e.pointerId);
+    if (!st) return;
+    this.fpPointers.delete(e.pointerId);
+    if (st.role === "move") {
+      this.fpJoy.x = 0;
+      this.fpJoy.y = 0;
+      if (this.fpJoyBase) this.fpJoyBase.style.display = "none";
+    }
+  };
+
   dispose(): void {
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
     this.dom.removeEventListener("pointerdown", this.onPointerDown);
     this.dom.removeEventListener("pointermove", this.onPointerMove);
+    if (this.fpLayer) {
+      this.fpLayer.removeEventListener("pointerdown", this.onFpPointerDown);
+      this.fpLayer.removeEventListener("pointermove", this.onFpPointerMove);
+      this.fpLayer.removeEventListener("pointerup", this.onFpPointerUp);
+      this.fpLayer.removeEventListener("pointercancel", this.onFpPointerUp);
+      this.fpLayer.remove();
+      this.fpLayer = null;
+    }
+    this.interactHandlers.clear();
     this.clickHandlers.clear();
   }
 }

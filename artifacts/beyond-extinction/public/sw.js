@@ -18,7 +18,7 @@
  *
  * Bump VERSION whenever the caching logic changes to retire old caches.
  */
-const VERSION = "v15";
+const VERSION = "v16";
 const CACHE = `beyond-extinction-${VERSION}`;
 
 // Base path this SW is served from, e.g. "/Beyond-Extinction/" or "/".
@@ -33,6 +33,8 @@ const CORE = [
   BASE + "icons/icon-192.png",
   BASE + "icons/icon-512.png",
   BASE + "icons/apple-touch-icon.png",
+  BASE + "assets/branding/splash-landscape.jpg",
+  BASE + "assets/branding/splash-portrait.jpg",
   BASE + "assets/portraits/Jack.PNG",
   BASE + "assets/portraits/Sarah.PNG",
 ];

@@ -15,11 +15,12 @@ import type { TimelineStep } from "../engine/SequenceDirector";
  */
 
 /**
- * Cold open: Jack's journal narration plays over Camera 1 (the third-person
- * hallway-follow zone, active from the first frame of the coffee phase) holding
- * on Jack at the hallway end. There is no scripted establishing push — the
- * gameplay follow camera owns the opening so the shot stays ON Jack rather than
- * drifting toward the lab/vortex (see PrologueCafeteriaScene.enter).
+ * Cold open: Jack's journal narration plays over a scripted "establishing"
+ * camera path (setCameraMoment("establishing") in playLabOpening) that opens on
+ * Sarah at the lab console and travels west through the glass door, down the
+ * hallway and across the cafeteria to Jack, then hard-cuts to first-person. Jack
+ * stays idle at the cafeteria end the whole time — the camera moves, not him
+ * (see PrologueCafeteriaScene.playLabOpening + OPENING_CAM_PATH).
  */
 export const labOpeningNarration: TimelineStep[] = [
   // Hold a beat so the lab-calm crossfade (kicked off on scene enter, ~4s) is

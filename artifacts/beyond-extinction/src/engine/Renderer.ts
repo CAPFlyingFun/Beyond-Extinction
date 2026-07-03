@@ -11,7 +11,11 @@ export class Renderer {
       powerPreference: "high-performance",
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setSize(container.clientWidth, container.clientHeight);
+    // updateStyle=false: let CSS (#game-root canvas { width/height: 100% }) own
+    // the display size so the canvas always fills the viewport, while setSize
+    // only drives the drawing-buffer resolution. This stops the canvas from
+    // overflowing/offsetting when a resize reads a stale size mid-rotation.
+    this.renderer.setSize(container.clientWidth, container.clientHeight, false);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.15;
@@ -59,7 +63,9 @@ export class Renderer {
 
   resize(): void {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setSize(this.width, this.height);
+    // See constructor: CSS owns the display size (updateStyle=false), so this
+    // only resizes the drawing buffer to match the current viewport.
+    this.renderer.setSize(this.width, this.height, false);
   }
 
   render(scene: THREE.Scene, camera: THREE.Camera): void {
