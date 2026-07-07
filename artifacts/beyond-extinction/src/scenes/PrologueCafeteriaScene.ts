@@ -5,27 +5,24 @@ import {
   WALL_SEGMENTS,
   WORLD_BOUNDS,
   WALL_THICKNESS,
+  WALL_HEIGHT,
+  LAB_WALL_HEIGHT,
   LEDGE_WIDTH,
   LEDGE_HEIGHT,
   DOORS,
+  DOOR_WIDTH,
+  RING_CENTER,
+  RING_RADIUS,
   bpx,
   bpz,
   type WallSeg,
+  type DoorSpec,
 } from "../data/prologueLayout";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { loadModel } from "../engine/assets";
 import { ClipLibrary } from "../engine/ClipLibrary";
 import { SequenceDirector } from "../engine/SequenceDirector";
-import {
-  labOpeningNarration,
-  introSequence,
-  consoleSequence,
-  alarmNarration,
-  vortexNarration,
-  vortexDialogue,
-  climaxReach,
-  climaxEnd,
-} from "../data/prologueSequences";
+import { labOpeningNarration } from "../data/prologueSequences";
 import { VOICE_DURATIONS } from "../data/voiceDurations";
 import { createChapterOneScene } from "./ChapterOnePlaceholderScene";
 import {
@@ -48,6 +45,9 @@ import {
 } from "../engine/proceduralTextures";
 import { PlayerController } from "../engine/PlayerController";
 import { CameraOwnership } from "../engine/CameraOwnership";
+import { PlayerInventory } from "../engine/PlayerInventory";
+import { Interactable } from "../engine/Interactable";
+import { ProximityDoor, type DoorPanel } from "../engine/ProximityDoor";
 
 /**
  * Total run-time (ms) of the opening narration timeline — the baked VO lengths
@@ -98,30 +98,34 @@ function lerpPath(points: readonly THREE.Vector3[], t: number): THREE.Vector3 {
 }
 
 type Phase =
-  | "coffee"
-  | "to-sarah"
-  | "intro-dialogue"
-  | "to-console"
-  | "console-dialogue"
-  | "reach-sarah"
-  | "vortex"
-  | "cutscene"
+  | "coffee" // grab both cups at the cafeteria cart
+  | "to-glass" // approach Lab Seven glass door + use the badge reader
+  | "to-badge" // door denied → find the lost badge in the server room
+  | "to-sarah" // badge scans, door opens → reach Sarah at the console
+  | "accident" // scripted accident sequence (character switches to Sarah)
+  | "cutscene" // closing pull-to-core tableau
   | "done";
 
 /**
- * The prologue's ordered objective beats, keyed by stable id. Fed to
- * QuestManager.configure() so each goal can visibly activate and then complete
- * (a ✓ tick) as the player advances through the phase machine above.
+ * The prologue's ordered objective beats, keyed by stable id — the exact
+ * quest flow from the confirmed Godot design:
+ *   1. grab two coffees at the cart
+ *   2. reach the Lab Seven glass door and badge in → ACCESS DENIED (no badge)
+ *   3. find the dropped badge in the server room
+ *   4. return, scan, and the door opens → reach Sarah at the accelerator console
+ * Fed to QuestManager.configure() so each goal activates then ticks complete as
+ * the phase machine advances.
  */
 const prologueObjectives = [
   {
     id: "coffee-1",
-    text: "Grab a coffee — walk to the counter, look at a cup and press Interact.",
+    text: "Grab a coffee — walk to the cart, look at a cup and press Interact.",
   },
   { id: "coffee-2", text: "Get two coffees — one more to go." },
-  { id: "deliver-sarah", text: "Take the coffees to Sarah in Lab Seven." },
-  { id: "follow-console", text: "Follow Sarah to the accelerator console." },
-  { id: "reach-sarah", text: "Reach Sarah!" },
+  { id: "reach-lab", text: "Take the coffees to Lab Seven — badge in at the door." },
+  { id: "find-badge", text: "Access denied. Find your badge — try the server room." },
+  { id: "scan-badge", text: "Return to the Lab Seven door and scan your badge." },
+  { id: "reach-sarah", text: "Enter Lab Seven and reach Sarah at the console." },
 ] as const;
 
 // The three distinct hand/character situations a coffee cup gets gripped in,
@@ -194,6 +198,32 @@ class PrologueCafeteriaScene implements IScene {
   private unsubClick?: () => void;
   private disposed = false;
 
+  // ---- Doors, badge gate & accident props (confirmed Godot design) ----
+  // Auto proximity doors (cafeteria↔hall, server↔hall) + the badge-gated glass
+  // door (manual: opened only by the badge reader). All three toggle a gap
+  // collider through isBlocked() so a closed door is a real wall.
+  private doors: ProximityDoor[] = [];
+  private cafeteriaDoor?: ProximityDoor;
+  private serverDoor?: ProximityDoor;
+  private glassDoor?: ProximityDoor;
+  // The USE-driven badge reader beside the glass door and the dropped badge in
+  // the server room, wired through the ONE reusable Interactable base.
+  private glassReader?: Interactable;
+  private badgeItem?: Interactable;
+  private badgeReaderMesh!: THREE.Object3D;
+  private badgeProp?: THREE.Object3D;
+  private badgeReaderLight?: THREE.MeshStandardMaterial; // the reader's LED
+  private glassDenied = false; // first ACCESS DENIED has fired (knock beat)
+  // Accident-sequence props: the flashlight Sarah picks up (+ its cone) and the
+  // emergency power unit she crosses the lab to restore.
+  private flashlight?: THREE.Object3D;
+  private flashlightSpot?: THREE.SpotLight;
+  private flashlightActive = false;
+  private powerUnit!: THREE.Object3D;
+  private accidentStarted = false;
+  // True once the emergency (red) lights should be lit; alarmOn adds the pulse.
+  private emergencyOn = false;
+
   // Cutscene timeline runner (voiced lines, subtitles, scripted camera,
   // gestures). The Phase machine still gates BETWEEN beats; the director drives
   // what happens within one. See SequenceDirector / prologueSequences.
@@ -238,20 +268,17 @@ class PrologueCafeteriaScene implements IScene {
   // True while a tap-to-confirm prompt is on screen — guards against stacking
   // a second prompt from another tap before the player answers the first.
   private confirmOpen = false;
-  // Sarah's climax destination: the accelerator sits inside the walled lab
-  // (north-east of the console, kept clear of the desk and the north wall so
-  // both Sarah and the player can actually reach it). The ring child and the
-  // vortex group are positioned to match this point — see buildConsole and
-  // buildVortex.
-  private reachSarahZone = new THREE.Vector3(26, 0, -17);
-  // The console desk sits to the WEST of the central accelerator lane (see
-  // buildConsole), with Sarah to its east — per the layout diagram — while the
-  // central lane to the accelerator and the vortex stays clear.
-  private consoleDeskWorld = new THREE.Vector3(12, 0, -28);
-  /** Sarah's spot at the console — beside Jack on the east side of the desk
-   * (the desk now sits to the west). She navigates here during "to-console" and
-   * is settled here before the console gesture so the two-up beat always reads. */
-  private readonly sarahConsoleSpot = new THREE.Vector3(22, 0, -26);
+  // The accelerator core (ring centre) is the climax's gravity well — both Jack
+  // and Sarah are pulled here and touch it. Blueprint: dead centre of Lab Seven.
+  private readonly coreWorld = RING_CENTER.clone();
+  // Sarah stands at the accelerator console on the WEST (entry) side of the ring,
+  // where Jack meets her after walking in through the glass door. Blueprint anchor.
+  private consoleDeskWorld = ANCHORS.deliveryConsole.clone();
+  /** Sarah's spot at the console (blueprint anchor, just west of the ring). */
+  private readonly sarahConsoleSpot = ANCHORS.sarah.clone();
+  /** The emergency power unit on the FAR (east) side of the lab walkway that
+   * Sarah crosses to during the accident to restore power. Blueprint anchor. */
+  private readonly powerUnitWorld = ANCHORS.rebootConsole.clone();
   // Where the coffee counter sits, for the coffee-counter camera zone's
   // proximity trigger and the FP pickup reach (see buildCoffeeMachine). At the
   // blueprint's coffee-cart spot against the cafeteria's south wall — visible on
@@ -370,10 +397,12 @@ class PrologueCafeteriaScene implements IScene {
     scene.background = new THREE.Color(0x3a4f73);
     scene.fog = new THREE.Fog(0x3a4f73, 60, 190);
 
-    // ---- Lab lighting (clinical, brightly lit — a real lab, not a cave) ----
-    this.ambient = new THREE.AmbientLight(0x8194ad, 1.65);
+    // ---- Global fill (kept low so each room reads by its OWN lights per the
+    // confirmed design: warm cafeteria, cooler/darker hallway, atmospheric blue
+    // server room, and a cool dim blue-gray Lab Seven — not one evenly-lit box).
+    this.ambient = new THREE.AmbientLight(0x6f80a0, 0.85);
     scene.add(this.ambient);
-    const key = new THREE.DirectionalLight(0xeaf2ff, 1.95);
+    const key = new THREE.DirectionalLight(0xdfe8ff, 1.15);
     key.position.set(20, 40, 20);
     key.castShadow = true;
     key.shadow.mapSize.set(1024, 1024);
@@ -415,24 +444,38 @@ class PrologueCafeteriaScene implements IScene {
       housing.position.set(x, 13.95, z);
       scene.add(fixture, housing);
     };
-    // Warm cafeteria (west).
+    // Warm cafeteria (west) — normal brightness, warm overhead lights.
     addCeiling(bpx(2.5), bpz(6.5), 0xffe1b8, 24, 0xfff0d8, 0xffcf8f);
     addCeiling(bpx(5.5), bpz(9.5), 0xffe1b8, 24, 0xfff0d8, 0xffcf8f);
-    // Cool hallway connector.
-    addCeiling(bpx(8.5), bpz(8), 0xacc4ec, 18, 0xdce8ff, 0x9fc0ff);
-    // Dim server room (north off the hallway).
-    addCeiling(bpx(8), bpz(4), 0x9fb0cc, 10, 0xdce8ff, 0x9fc0ff);
-    // Clinical lab (east) — cool lights over the four quadrants around the ring.
+    // Hallway connector — slightly cooler AND darker than the cafeteria.
+    addCeiling(bpx(8.5), bpz(8), 0x9fbae4, 11, 0xc4d6f4, 0x8fb0f0);
+    // Cool DIM blue-gray Lab Seven (east) — low ceiling fill over the four
+    // quadrants around the ring; the accelerator's own #0044FF glow does the
+    // rest. Deliberately dim so the blackout/emergency beats have somewhere to
+    // fall from and the ring reads as the brightest thing in the room.
     for (const lx of [14, 21]) {
       for (const lz of [5, 10]) {
-        addCeiling(bpx(lx), bpz(lz), 0xd6e6ff, 18, 0xeaf3ff, 0xbcd6ff);
+        addCeiling(bpx(lx), bpz(lz), 0x9fb2d6, 6.5, 0xbcccea, 0x8fa6cf);
       }
     }
+    // The server room lights itself atmospherically (blue rack strips + red
+    // indicator LEDs) in buildServerRoom() — no warm ceiling fixture here.
+
+    // Fresh inventory each entry so a replay starts empty-handed (no badge, no
+    // cups) — mirrors the Godot PlayerInventory autoload being reset on new game.
+    PlayerInventory.reset();
 
     this.buildRoom();
+    this.buildServerRoom();
     this.buildCoffeeMachine();
     this.buildConsole();
     this.buildVortex();
+    this.buildDoors();
+    this.buildBadge();
+    this.buildPowerUnit();
+    this.buildFlashlight();
+    // Colliders last: solid props (racks, power unit, desk) must exist first.
+    // Door leaves are excluded (not tagged solid) — they block dynamically.
     this.buildColliders();
 
     // ---- Characters ----
@@ -488,11 +531,7 @@ class PrologueCafeteriaScene implements IScene {
     this.addHighlight(
       this.sarah,
       { color: "friendly", icon: "\u{1F4AC}", radius: 1.8, markerHeight: 8.2 },
-      () => this.phase === "to-sarah" || this.phase === "reach-sarah",
-      () =>
-        this.phase === "reach-sarah"
-          ? { color: "danger", icon: "!", radius: 1.8, markerHeight: 8.2 }
-          : { color: "friendly", icon: "\u{1F4AC}", radius: 1.8, markerHeight: 8.2 },
+      () => this.phase === "to-sarah",
     );
 
     // Emergency lights exist from the start (dark) so the alarm never changes
@@ -709,6 +748,74 @@ class PrologueCafeteriaScene implements IScene {
     sign.position.set(DOORS.labGlass.x - 0.6, 14, DOORS.labGlass.z);
     sign.rotation.y = -Math.PI / 2;
     scene.add(sign);
+  }
+
+  /**
+   * Server room dressing + its own atmospheric lighting (per the confirmed
+   * design): tall equipment racks along the back walls, blue emissive strip
+   * lighting down each rack, small red indicator LEDs on the units, and one low
+   * blue point light so the room stays navigable while reading as a cold, humming
+   * server closet — not a warm-lit office. Jack's lost badge sits on the floor
+   * in the middle (spawned separately in buildBadge). The racks are tagged solid
+   * so they're real obstacles the player rounds to reach the badge.
+   */
+  private buildServerRoom(): void {
+    const scene = this.scene;
+    const srv = ROOMS.server; // 2×2 m room, north off the hallway
+    const rackMat = new THREE.MeshStandardMaterial({ color: 0x141b28, roughness: 0.6, metalness: 0.5 });
+    const stripMat = new THREE.MeshStandardMaterial({
+      color: 0x0a1828,
+      emissive: 0x2a6cff,
+      emissiveIntensity: 1.5,
+    });
+    const redLedMat = new THREE.MeshStandardMaterial({
+      color: 0x1a0505,
+      emissive: 0xff2a1a,
+      emissiveIntensity: 2.2,
+    });
+    const RACK_H = 15;
+    // A rack standing against a wall, facing `faceX/faceZ` (unit inward normal):
+    // a dark cabinet, a blue light strip down its front, and a column of red LEDs.
+    const mkRack = (cx: number, cz: number, w: number, d: number, faceX: number, faceZ: number) => {
+      const rack = new THREE.Mesh(new THREE.BoxGeometry(w, RACK_H, d), rackMat);
+      rack.position.set(cx, RACK_H / 2, cz);
+      rack.castShadow = true;
+      rack.userData.solid = true;
+      scene.add(rack);
+      // Front-face point: step out from centre along the inward normal by half
+      // the box's extent on that axis (normals here are axis-aligned).
+      const front = new THREE.Vector3(
+        cx + faceX * (w / 2 + 0.06),
+        0,
+        cz + faceZ * (d / 2 + 0.06),
+      );
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(0.1, RACK_H - 3, 0.5), stripMat);
+      strip.position.set(front.x, RACK_H / 2, front.z);
+      if (faceZ !== 0) strip.rotation.y = Math.PI / 2;
+      scene.add(strip);
+      // A column of small red indicator LEDs beside the strip.
+      for (let i = 0; i < 5; i++) {
+        const led = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 8), redLedMat);
+        const off = 0.9; // sit the LEDs to one side of the strip along the wall
+        led.position.set(
+          front.x + (faceZ !== 0 ? off : 0),
+          3 + i * 2.4,
+          front.z + (faceX !== 0 ? off : 0),
+        );
+        scene.add(led);
+      }
+    };
+    // North wall racks (front faces south, +? inward normal is +Z toward room).
+    mkRack(srv.minX + 2.2, srv.minZ + 1.1, 3.2, 1.6, 0, 1);
+    mkRack(srv.maxX - 2.2, srv.minZ + 1.1, 3.2, 1.6, 0, 1);
+    // East wall rack (front faces west, inward normal −X).
+    mkRack(srv.maxX - 1.1, srv.maxZ - 2.6, 1.6, 3.2, -1, 0);
+
+    // Low blue fill so the room is navigable without a warm ceiling light.
+    const fill = new THREE.PointLight(0x3f7bff, 7, 34, 2);
+    fill.position.set((srv.minX + srv.maxX) / 2, 12, (srv.minZ + srv.maxZ) / 2);
+    scene.add(fill);
+    this.mainLights.push(fill);
   }
 
   /**
@@ -946,10 +1053,15 @@ class PrologueCafeteriaScene implements IScene {
     this.sarah.position.z -= dz * push;
   }
 
-  /** True if an XZ point lies inside any solid prop's (player-grown) box. */
+  /** True if an XZ point lies inside any solid prop's (player-grown) box, or
+   * inside the gap of a currently-CLOSED door (proximity or badge-gated). */
   private isBlocked(x: number, z: number): boolean {
     for (const c of this.colliders) {
       if (x > c.minX && x < c.maxX && z > c.minZ && z < c.maxZ) return true;
+    }
+    const r = PrologueCafeteriaScene.PLAYER_RADIUS;
+    for (const d of this.doors) {
+      if (d.blocks(x, z, r)) return true;
     }
     return false;
   }
@@ -1044,19 +1156,61 @@ class PrologueCafeteriaScene implements IScene {
     });
   }
 
+  /**
+   * Generic to-go coffee cup, matching the confirmed Godot design: a tapered
+   * white body (wider at the rim), a green #51e460 sleeve band low on the body
+   * (blueprint places the band at 64–87% down the cup), and a short dark closed
+   * lid on top. No handle, no visible liquid — it's a lidded to-go cup.
+   *
+   * Modelled at the same pre-scale magnitude the counter/grip code expects (the
+   * caller applies scale 0.4, landing the ~1.2u body at ≈0.12 m for the 7.2u ≈
+   * 1.8 m characters), so the hand-grip offsets stay valid. Blueprint radii
+   * (top 0.035 m, bottom 0.028 m — a 1.25 taper) drive the body's proportions.
+   */
   private makeCup(): THREE.Group {
     const cup = new THREE.Group();
-    const mug = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.5, 0.4, 1.1, 14),
-      new THREE.MeshStandardMaterial({ color: 0xf3ede0, roughness: 0.8 }),
+    const H = 1.2; // body height (pre-scale); ≈0.12 m after the caller's ×0.4
+    const rTop = 0.35; // wider rim  (0.035 m)
+    const rBot = 0.28; // narrower base (0.028 m) → 1.25 taper
+    const body = new THREE.Mesh(
+      new THREE.CylinderGeometry(rTop, rBot, H, 18),
+      new THREE.MeshStandardMaterial({ color: 0xf5f5f2, roughness: 0.85 }),
     );
-    mug.castShadow = true;
-    const brew = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.45, 0.45, 0.1, 14),
-      new THREE.MeshStandardMaterial({ color: 0x4a2c18, roughness: 0.5 }),
+    body.castShadow = true;
+    cup.add(body);
+
+    // Green sleeve band, 64–87% down from the rim. On a body centred at y=0 with
+    // the rim at +H/2, that spans y∈[+H/2 − 0.87·H, +H/2 − 0.64·H]. Rendered as a
+    // short tapered ring hugging the (tapered) body surface at that height.
+    const bandTopFrac = 0.64;
+    const bandBotFrac = 0.87;
+    const yAt = (downFrac: number) => H / 2 - downFrac * H;
+    const bandTopY = yAt(bandTopFrac);
+    const bandBotY = yAt(bandBotFrac);
+    const bandH = bandTopY - bandBotY;
+    const bandCenterY = (bandTopY + bandBotY) / 2;
+    // Radius of the tapered body at the band's top/bottom (+ a hair to avoid z-fight).
+    const radAt = (y: number) => rBot + (rTop - rBot) * ((y + H / 2) / H) + 0.012;
+    const band = new THREE.Mesh(
+      new THREE.CylinderGeometry(radAt(bandTopY), radAt(bandBotY), bandH, 18, 1, true),
+      new THREE.MeshStandardMaterial({
+        color: 0x51e460,
+        roughness: 0.6,
+        side: THREE.DoubleSide,
+      }),
     );
-    brew.position.y = 0.55;
-    cup.add(mug, brew);
+    band.position.y = bandCenterY;
+    cup.add(band);
+
+    // Short dark closed lid, slightly overhanging the rim.
+    const lid = new THREE.Mesh(
+      new THREE.CylinderGeometry(rTop - 0.01, rTop + 0.03, 0.18, 18),
+      new THREE.MeshStandardMaterial({ color: 0x24252a, roughness: 0.55, metalness: 0.15 }),
+    );
+    lid.position.y = H / 2 + 0.09;
+    lid.castShadow = true;
+    cup.add(lid);
+
     return cup;
   }
 
@@ -1157,25 +1311,26 @@ class PrologueCafeteriaScene implements IScene {
   }
 
   private buildConsole(): void {
+    // Group is anchored at the world origin so every child sits at true blueprint
+    // world coordinates (the accelerator ring is dead-centre in Lab Seven, the
+    // console desk just west of it where Sarah works and Jack meets her).
     const g = new THREE.Group();
-    // The desk is a control bank standing off to the WEST of the central
-    // accelerator lane (long axis along Z), not a wall across it. This keeps the
-    // straight path from the approach point to the accelerator/vortex clear, so
-    // Jack and Sarah walk past the console rather than through it, with Sarah to
-    // the desk's east (per the layout diagram).
+    // Control desk — a bank just WEST of the ring, on the entry side, out of the
+    // z≈6 glass-door→Sarah walk line so Jack never has to round it. Dressing only
+    // now (no "operate the console" beat in the confirmed flow); Sarah's flashlight
+    // rests on it for the accident.
     const desk = new THREE.Mesh(
-      new THREE.BoxGeometry(4, 1, 20),
+      new THREE.BoxGeometry(4, 1.2, 10),
       new THREE.MeshStandardMaterial({ color: 0x2b3a52, roughness: 0.5, metalness: 0.4 }),
     );
-    desk.position.set(-8, 4, 0);
+    const deskCenter = new THREE.Vector3(3, 4, 2);
+    desk.position.copy(deskCenter);
     desk.castShadow = true;
     g.add(desk);
-    // Holographic screens line the desk's east face, angled toward the lane so
-    // the player reads them while operating the console from the east (where
-    // Sarah and Jack stand).
-    for (let i = -2; i <= 2; i++) {
+    // Holographic screens on the desk's east face, glowing toward the ring.
+    for (let i = -1; i <= 1; i++) {
       const screen = new THREE.Mesh(
-        new THREE.PlaneGeometry(3.4, 2.2),
+        new THREE.PlaneGeometry(3.2, 2.2),
         new THREE.MeshStandardMaterial({
           color: 0x0a1828,
           emissive: 0x39c5ff,
@@ -1184,50 +1339,220 @@ class PrologueCafeteriaScene implements IScene {
           opacity: 0.92,
         }),
       );
-      screen.position.set(-5.8, 7, i * 4);
+      screen.position.set(deskCenter.x + 2.1, 7, deskCenter.z + i * 3);
       screen.rotation.y = Math.PI / 2;
       screen.rotation.x = -0.12;
       g.add(screen);
     }
-    // Accelerator ring — centered in the lane behind the approach point.
+    // Accelerator ring — Ø6 m (RING_RADIUS world units), dead-centre in the lab,
+    // laid FLAT on the floor as a glowing floor ring the pair are pulled into at
+    // the climax. Deep-electric-blue low-intensity glow (see the material above).
     const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(9, 0.7, 16, 60),
+      new THREE.TorusGeometry(RING_RADIUS, 0.9, 16, 72),
       new THREE.MeshStandardMaterial({
-        color: 0x55708f,
-        emissive: 0x2a6cff,
-        emissiveIntensity: 0.5,
-        metalness: 0.8,
+        color: 0x2a3550,
+        emissive: 0x0044ff,
+        emissiveIntensity: 0.1,
+        metalness: 0.85,
         roughness: 0.3,
       }),
     );
-    // Local offset chosen so the ring's world position lands at (26, 1.2, -17) —
-    // inside the walled lab and centred on the vortex/Sarah climax spot (the
-    // group origin is (20, 0, -28), so local = world - origin). Sits just above
-    // the floor so it reads as a ring on the ground the pair stand inside.
-    ring.position.set(6, 1.2, 11);
-    // Lie the accelerator ring flat (horizontal, like a tyre on the ground)
-    // instead of standing it up as a vertical hoop, so the climax reads as the
-    // pair standing inside a glowing floor portal rather than framed by an
-    // upright halo. Default TorusGeometry is in the XY plane (a vertical hoop);
-    // a +90° X rotation lays it into the XZ (ground) plane.
-    ring.rotation.x = Math.PI / 2;
+    ring.position.set(RING_CENTER.x, 1.2, RING_CENTER.z);
+    ring.rotation.x = Math.PI / 2; // lay flat into the XZ ground plane
     g.add(ring);
     (g.userData as { ring?: THREE.Mesh }).ring = ring;
 
-    g.position.set(20, 0, -28);
+    g.position.set(0, 0, 0);
     this.console = g;
     this.consoleDesk = desk;
-    desk.userData.kind = "console";
-    // Permanently solid: it sits beside the lane, so it never needs to be
-    // dropped for the finale.
-    desk.userData.solid = true;
+    desk.userData.solid = true; // a real obstacle beside the walk line
     this.scene.add(g);
-    this.interactables.push(desk);
-    this.addHighlight(
-      desk,
-      { color: "tech", icon: "⚙", radius: 2.2, markerHeight: 5.5 },
-      () => this.phase === "to-console",
+  }
+
+  // ---------- Doors, badge gate & accident props ----------
+
+  /**
+   * Build the three doors from the blueprint's door specs. Cafeteria↔hall and
+   * server↔hall are AUTO proximity doors; the Lab Seven glass door is MANUAL —
+   * it opens only when the badge reader scans a valid badge. Also builds the
+   * badge reader beside the glass door. Door leaves are deliberately NOT tagged
+   * `solid` (so buildColliders ignores them); each door instead blocks its gap
+   * dynamically via {@link ProximityDoor.blocks}, checked in isBlocked().
+   */
+  private buildDoors(): void {
+    this.cafeteriaDoor = this.mkDoor(DOORS.cafeteriaHall, false, true);
+    this.serverDoor = this.mkDoor(DOORS.serverHall, false, true);
+    this.glassDoor = this.mkDoor(DOORS.labGlass, true, false);
+    this.doors = [this.cafeteriaDoor, this.serverDoor, this.glassDoor];
+    this.buildBadgeReader();
+  }
+
+  /** A two-leaf sliding door filling a wall gap; returns its ProximityDoor. */
+  private mkDoor(spec: DoorSpec, glass: boolean, auto: boolean): ProximityDoor {
+    const half = DOOR_WIDTH / 2; // each leaf covers half the gap
+    const H = (glass ? LAB_WALL_HEIGHT : WALL_HEIGHT) - 2;
+    const th = WALL_THICKNESS * 0.9;
+    const mat = glass
+      ? new THREE.MeshStandardMaterial({
+          color: 0x8fc7e6,
+          transparent: true,
+          opacity: 0.26,
+          roughness: 0.1,
+          metalness: 0.2,
+          side: THREE.DoubleSide,
+        })
+      : new THREE.MeshStandardMaterial({ color: 0x39485f, roughness: 0.5, metalness: 0.55 });
+    const alongZ = spec.axis === "z"; // wall runs along Z → leaves span Z
+    const geo = alongZ
+      ? new THREE.BoxGeometry(th, H, half)
+      : new THREE.BoxGeometry(half, H, th);
+    const panels: DoorPanel[] = [];
+    for (const s of [-1, 1] as const) {
+      const leaf = new THREE.Mesh(geo, mat);
+      leaf.position.set(
+        spec.x + (alongZ ? 0 : (s * half) / 2),
+        H / 2,
+        spec.z + (alongZ ? (s * half) / 2 : 0),
+      );
+      leaf.castShadow = !glass;
+      this.scene.add(leaf);
+      panels.push({
+        mesh: leaf,
+        openOffset: alongZ ? new THREE.Vector3(0, 0, s * half) : new THREE.Vector3(s * half, 0, 0),
+      });
+    }
+    const gap = alongZ
+      ? { minX: spec.x - th, maxX: spec.x + th, minZ: spec.z - half, maxZ: spec.z + half }
+      : { minX: spec.x - half, maxX: spec.x + half, minZ: spec.z - th, maxZ: spec.z + th };
+    return new ProximityDoor({
+      panels,
+      auto,
+      triggerPos: new THREE.Vector3(spec.x, 0, spec.z),
+      triggerRange: 8, // ≈2 m proximity trigger
+      gap,
+      onOpenStart: () => this.ctx.audio.playSfx(glass ? "door-glass" : "door-open"),
+    });
+  }
+
+  /** Wall-mounted badge reader on the hallway side of the Lab Seven glass door. */
+  private buildBadgeReader(): void {
+    const g = DOORS.labGlass;
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(0.6, 2.2, 1.2),
+      new THREE.MeshStandardMaterial({ color: 0x1a2230, roughness: 0.5, metalness: 0.5 }),
     );
+    // On the south jamb, hallway (west) side, at hand height.
+    body.position.set(g.x - 0.5, 9, g.z - DOOR_WIDTH / 2 - 1);
+    const ledMat = new THREE.MeshStandardMaterial({
+      color: 0x2a0808,
+      emissive: 0xff2a1a, // red = locked; flips green on a valid scan
+      emissiveIntensity: 2.5,
+    });
+    const led = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.5, 0.5), ledMat);
+    led.position.set(g.x - 0.82, 9.4, g.z - DOOR_WIDTH / 2 - 1);
+    this.scene.add(body, led);
+    this.badgeReaderMesh = body;
+    this.badgeReaderLight = ledMat;
+    body.userData.kind = "badge-reader";
+    // ONE reusable Interactable base holds the glass-door logic (denied vs scan).
+    this.glassReader = new Interactable({
+      object: body,
+      promptText: () => (PlayerInventory.hasBadge ? "Scan badge" : "Use badge reader"),
+      interactRange: 8,
+      isEnabled: () => this.phase === "to-glass",
+      interacted: () => void this.onUseBadgeReader(),
+    });
+    this.addHighlight(
+      body,
+      { color: "tech", icon: "\u{1F512}", radius: 1.6, markerHeight: 3.6 },
+      () => this.phase === "to-glass",
+    );
+  }
+
+  /** The dropped ID badge lying on the server-room floor (blueprint anchor). */
+  private buildBadge(): void {
+    const badge = new THREE.Group();
+    const card = new THREE.Mesh(
+      new THREE.BoxGeometry(1.4, 0.12, 0.9),
+      new THREE.MeshStandardMaterial({
+        color: 0xdfe6ef,
+        roughness: 0.4,
+        metalness: 0.3,
+        emissive: 0x2a6cff,
+        emissiveIntensity: 0.3,
+      }),
+    );
+    badge.add(card);
+    badge.position.copy(ANCHORS.badge);
+    badge.position.y = 0.4;
+    badge.userData.kind = "badge";
+    this.scene.add(badge);
+    this.badgeProp = badge;
+    this.badgeItem = new Interactable({
+      object: badge,
+      promptText: "Pick up your badge",
+      interactRange: 6.5,
+      isEnabled: () => this.phase === "to-badge",
+      interacted: () => this.onPickUpBadge(),
+    });
+    this.addHighlight(
+      badge,
+      { color: "story", icon: "\u{1FAAA}", radius: 1.4, markerHeight: 2.6 },
+      () => this.phase === "to-badge",
+    );
+  }
+
+  /** Emergency power unit on the far (east) side of the lab walkway. */
+  private buildPowerUnit(): void {
+    const g = new THREE.Group();
+    const box = new THREE.Mesh(
+      new THREE.BoxGeometry(3, 10, 3),
+      new THREE.MeshStandardMaterial({ color: 0x1c2634, roughness: 0.6, metalness: 0.5 }),
+    );
+    box.position.y = 5;
+    box.castShadow = true;
+    box.userData.solid = true;
+    const panelMat = new THREE.MeshStandardMaterial({
+      color: 0x0a1828,
+      emissive: 0xff3a2a,
+      emissiveIntensity: 0, // dark until the accident (then blinks, then green)
+    });
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2.4, 2), panelMat);
+    panel.position.set(-1.7, 6.5, 0);
+    g.add(box, panel);
+    g.position.copy(this.powerUnitWorld);
+    this.scene.add(g);
+    this.powerUnit = g;
+    (g.userData as { panel?: THREE.MeshStandardMaterial }).panel = panelMat;
+  }
+
+  /** Sarah's flashlight — rests on the console, grabbed during the blackout. */
+  private buildFlashlight(): void {
+    const fl = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.22, 0.26, 1.6, 12),
+      new THREE.MeshStandardMaterial({ color: 0x111418, roughness: 0.5, metalness: 0.6 }),
+    );
+    body.rotation.z = Math.PI / 2; // lie along X
+    const lensMat = new THREE.MeshStandardMaterial({
+      color: 0x223044,
+      emissive: 0xfff2d0,
+      emissiveIntensity: 0,
+    });
+    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.22, 0.2, 12), lensMat);
+    lens.rotation.z = Math.PI / 2;
+    lens.position.x = 0.9;
+    fl.add(body, lens);
+    fl.position.set(3, 4.95, 2); // on the console desk top
+    this.scene.add(fl);
+    this.flashlight = fl;
+    (fl.userData as { lens?: THREE.MeshStandardMaterial }).lens = lensMat;
+    // The cone light (off until she clicks it on), aimed by updateFlashlight().
+    const spot = new THREE.SpotLight(0xfff2d0, 0, 70, Math.PI / 6, 0.45, 1.2);
+    spot.visible = false;
+    spot.target.position.set(0, 0, 0);
+    this.scene.add(spot, spot.target);
+    this.flashlightSpot = spot;
   }
 
   private buildVortex(): void {
@@ -1290,7 +1615,7 @@ class PrologueCafeteriaScene implements IScene {
     // to avoid z-fighting. The radius-11 distortion shell becomes a faint low
     // dome here (0.06 opacity — imperceptible); z stays well south of the north
     // wall (z=-30) so it can't poke through.
-    g.position.set(26, 0.12, -17);
+    g.position.set(RING_CENTER.x, 0.12, RING_CENTER.z);
     g.rotation.x = -Math.PI / 2;
     g.visible = false;
     g.scale.setScalar(0.01);
@@ -1306,9 +1631,15 @@ class PrologueCafeteriaScene implements IScene {
    * where the resonance-cascade beat could crash.
    */
   private buildRedLights(): void {
+    // Four emergency lights spread across Lab Seven's quadrants around the
+    // centred accelerator ring, dark until the accident cuts the power.
     for (let i = 0; i < 4; i++) {
-      const rl = new THREE.PointLight(0xff2d22, 0, 80);
-      rl.position.set(20 + (i % 2 ? 18 : -18), 16, -28 + (i < 2 ? 14 : -14));
+      const rl = new THREE.PointLight(0xff2d22, 0, 90);
+      rl.position.set(
+        RING_CENTER.x + (i % 2 ? 15 : -15),
+        16,
+        RING_CENTER.z + (i < 2 ? 15 : -15),
+      );
       this.scene.add(rl);
       this.redLights.push(rl);
     }
@@ -1800,6 +2131,24 @@ class PrologueCafeteriaScene implements IScene {
         lookAt: lerpPath(OPENING_LOOK_PATH, e),
       };
     }
+    if (id === "sarah-follow") {
+      // Accident blackout: third-person follow of Sarah as she takes the
+      // flashlight and crosses the lab to the power unit.
+      const p = s.sarah
+        .clone()
+        .add(new THREE.Vector3(-7, 12, 15).multiplyScalar(s.framingScale));
+      const l = s.sarah.clone();
+      l.y += 3;
+      return { position: p, lookAt: l };
+    }
+    if (id === "core-pull") {
+      // Wide on the accelerator core as both are drawn into it.
+      const core = this.coreWorld.clone();
+      return {
+        position: core.clone().add(new THREE.Vector3(0, 16, 30).multiplyScalar(s.framingScale)),
+        lookAt: core.clone().add(new THREE.Vector3(0, 3, 0)),
+      };
+    }
     if (id === "climax") {
       // Tight two-shot tracking the midpoint between Jack and Sarah. The camera
       // rides a little higher and looks down more than a straight two-shot so
@@ -1973,15 +2322,15 @@ class PrologueCafeteriaScene implements IScene {
     if (this.phase === "coffee") {
       // Guard against a stale target: only the next uncollected cup is valid.
       if (target.userData.index !== this.coffeeCount) return;
-      // pickUpCoffee advances to "to-sarah" once the second cup is collected;
-      // first person is retained — the player walks the coffee to Sarah.
+      // pickUpCoffee advances to "to-glass" once the second cup is collected;
+      // first person is retained — the player walks the coffee to the lab door.
       this.pickUpCoffee(target);
+    } else if (this.phase === "to-glass" && kind === "badge-reader") {
+      this.glassReader?.interact();
+    } else if (this.phase === "to-badge" && kind === "badge") {
+      this.badgeItem?.interact();
     } else if (this.phase === "to-sarah" && kind === "sarah") {
-      void this.triggerIntroDialogue();
-    } else if (this.phase === "to-console" && kind === "console") {
-      void this.triggerConsoleDialogue();
-    } else if (this.phase === "reach-sarah" && kind === "sarah") {
-      void this.triggerVortex();
+      void this.triggerReachSarah();
     }
   }
 
@@ -1993,15 +2342,12 @@ class PrologueCafeteriaScene implements IScene {
           this.coffeeStations.find((s) => s.userData.index === this.coffeeCount) ??
           null
         );
+      case "to-glass":
+        return this.badgeReaderMesh;
+      case "to-badge":
+        return this.badgeProp ?? null;
       case "to-sarah":
-      case "reach-sarah":
         return this.sarah;
-      case "to-console":
-        // The tagged desk, not the whole group: its world position sits at desk
-        // height near consoleDeskWorld (the group origin is offset and at y=0,
-        // which would put it out of first-person reach), and it carries the
-        // "console" kind fpTryInteract dispatches on.
-        return this.consoleDesk;
       default:
         return null;
     }
@@ -2012,12 +2358,12 @@ class PrologueCafeteriaScene implements IScene {
     switch (this.phase) {
       case "coffee":
         return "Pick up coffee";
+      case "to-glass":
+        return PlayerInventory.hasBadge ? "Scan badge" : "Use badge reader";
+      case "to-badge":
+        return "Pick up your badge";
       case "to-sarah":
-        return "Deliver the coffee to Sarah";
-      case "to-console":
-        return "Stabilise the accelerator";
-      case "reach-sarah":
-        return "Reach Sarah";
+        return "Talk to Sarah";
       default:
         return "Interact";
     }
@@ -2028,8 +2374,8 @@ class PrologueCafeteriaScene implements IScene {
     switch (this.phase) {
       case "coffee":
         return this.pickupRadius;
-      case "reach-sarah":
-        return 4.5;
+      case "to-glass":
+        return 8; // ≈2 m — at the badge reader
       default:
         return 6.5;
     }
@@ -2091,8 +2437,7 @@ class PrologueCafeteriaScene implements IScene {
       const next = this.coffeeStations.find((s) => s.userData.index === this.coffeeCount);
       return next ? [next] : [];
     }
-    if (this.phase === "to-sarah" || this.phase === "reach-sarah") return [this.sarah];
-    if (this.phase === "to-console") return this.interactables;
+    if (this.phase === "to-sarah") return [this.sarah];
     return [];
   }
 
@@ -2113,16 +2458,7 @@ class PrologueCafeteriaScene implements IScene {
     /** Optional point to walk to instead of `anchor` (e.g. stop short of a person). */
     walkTo?: THREE.Vector3;
   } {
-    if (target.userData.kind === "console") {
-      return {
-        anchor: this.consoleDeskWorld.clone().add(new THREE.Vector3(6, 0, 0)),
-        radius: 7,
-      };
-    }
     if (target.userData.kind === "sarah") {
-      // The emergency dash: no Yes/No prompt, so only count as "arrived"
-      // once Jack is genuinely at her side (see tryInteract).
-      if (this.phase === "reach-sarah") return { anchor: target.position, radius: 4 };
       // Stop a conversational step short of her: the nav target is otherwise
       // her body centre, so Jack walks into her and grinds there while
       // resolveCharacterOverlap shoves them apart. walkTo is offset back along
@@ -2192,19 +2528,8 @@ class PrologueCafeteriaScene implements IScene {
    * cuts across a wall or the counter.
    */
   private routeFor(target: THREE.Vector3): THREE.Vector3[] {
-    if (this.phase === "to-sarah") {
-      // Cafeteria coffee counter → Sarah in the lab, threaded through both door
-      // gaps (cafeteria↔hall at x=-24, z∈[-1,5]; lab glass at x=-12, z∈[3,9]) and
-      // kept clear of the counter, tables and vending colliders so each straight
-      // leg is walkable rather than grinding into a wall.
-      return [
-        new THREE.Vector3(-28, 0, 2), // clear the counter into the door lane
-        new THREE.Vector3(-20, 0, 3), // through the cafeteria↔hall door
-        new THREE.Vector3(-12, 0, 6), // through the lab glass door
-        new THREE.Vector3(-6, 0, 6), // into the lab toward Sarah
-        target.clone(),
-      ];
-    }
+    // The interactive middle is first-person (the player walks Jack the whole
+    // way), so this cinematic tap-to-walk route is only a single straight leg.
     return [target.clone()];
   }
 
@@ -2219,12 +2544,7 @@ class PrologueCafeteriaScene implements IScene {
     // are handled by the FP interact button, not this cinematic tap-to-walk path.
     if (this.ownership.is("player")) return;
     if (this.ctx.dialogue.isActive || this.confirmOpen) return;
-    if (
-      this.phase !== "coffee" &&
-      this.phase !== "to-sarah" &&
-      this.phase !== "to-console" &&
-      this.phase !== "reach-sarah"
-    ) {
+    if (this.phase !== "coffee" && this.phase !== "to-sarah") {
       return;
     }
 
@@ -2257,26 +2577,14 @@ class PrologueCafeteriaScene implements IScene {
   private async tryInteract(target: THREE.Object3D): Promise<void> {
     const kind = target.userData.kind as string | undefined;
 
-    // The emergency dash to Sarah skips the prompt entirely — urgency, not a
-    // decision — and goes straight into the vortex beat.
-    if (kind === "sarah" && this.phase === "reach-sarah") {
-      this.faceTowards(this.jack, target.position);
-      this.dismissHighlight(target);
-      this.triggerVortex();
-      return;
-    }
-
     let message: string;
     let onYes: () => void;
     if (kind === "coffee" && this.phase === "coffee") {
       message = "Pick up coffee cup?";
       onYes = () => this.pickUpCoffee(target);
     } else if (kind === "sarah" && this.phase === "to-sarah") {
-      message = "Deliver the coffee to Sarah?";
-      onYes = () => this.triggerIntroDialogue();
-    } else if (kind === "console" && this.phase === "to-console") {
-      message = "Stabilise the accelerator?";
-      onYes = () => this.triggerConsoleDialogue();
+      message = "Talk to Sarah?";
+      onYes = () => void this.triggerReachSarah();
     } else {
       return;
     }
@@ -2322,181 +2630,301 @@ class PrologueCafeteriaScene implements IScene {
     this.coffeeStations = this.coffeeStations.filter((s) => s !== station);
     this.spawnCoffee(idx);
     this.coffeeCount++;
+    PlayerInventory.hold("coffee"); // both cups tracked in held_items
     this.ctx.overlays.hideHint();
     if (this.coffeeCount === 1) {
       this.ctx.quest.complete("coffee-1", { nextId: "coffee-2" });
     } else {
-      // Both cups in hand: stay in first person and send the player to Sarah's
-      // lab to deliver them. No camera hand-off — the middle of the prologue is
-      // fully player-controlled (only the opening and ending are cinematic).
-      this.phase = "to-sarah";
+      // Both cups in hand: stay in first person and head for Lab Seven. Next stop
+      // is the badge reader at the glass door — which will deny access (no badge).
+      this.phase = "to-glass";
       this.currentFpTarget = null;
-      this.ctx.quest.complete("coffee-2", { nextId: "deliver-sarah" });
-      this.ctx.overlays.showHint("Take the coffee to Sarah in the lab");
+      this.ctx.quest.complete("coffee-2", { nextId: "reach-lab" });
+      this.ctx.overlays.showHint("Take the coffees to Lab Seven — badge in at the door");
     }
   }
 
-
-  private async triggerIntroDialogue(): Promise<void> {
-    this.ctx.quest.complete("deliver-sarah");
-    // Cinematic interlude: hand the camera to the director for the exchange,
-    // then resume first person for the walk to the console.
-    this.suspendFirstPerson();
-    this.phase = "intro-dialogue";
-    this.introOrbitStart = this.elapsed;
-    this.ctx.input.setEnabled(false);
-    this.ctx.overlays.hideHint();
-    // Jack and Sarah turn to face each other for the exchange.
-    this.faceTowards(this.jack, this.sarah.position);
-    this.faceTowards(this.sarah, this.jack.position);
-    // Jack hands Sarah one of the two coffees before they talk.
-    await this.handCoffeeToSarah();
+  /**
+   * USE on the Lab Seven badge reader. Without the badge it beeps ACCESS DENIED,
+   * the door stays shut, Jack knocks on the glass and — after exactly 3 seconds
+   * with no answer — the quest updates to "find your badge" (server room). Once
+   * the badge is held, the same reader scans it, flips the LED green and opens
+   * the glass door permanently.
+   */
+  private async onUseBadgeReader(): Promise<void> {
+    if (PlayerInventory.hasBadge) {
+      // Valid scan: green light, permanent open, on to Sarah.
+      this.ctx.audio.playSfx("badge-accept");
+      if (this.badgeReaderLight) this.badgeReaderLight.emissive.setHex(0x2ad24a);
+      this.glassDoor?.openPermanently();
+      this.ctx.quest.complete("scan-badge", { nextId: "reach-sarah" });
+      this.ctx.overlays.showToast("ACCESS GRANTED");
+      this.phase = "to-sarah";
+      this.currentFpTarget = null;
+      return;
+    }
+    if (this.glassDenied) return; // knock beat already played; door still locked
+    this.glassDenied = true;
+    // ACCESS DENIED: beep, the reader flashes, the door does not move.
+    this.ctx.audio.playSfx("badge-denied");
+    this.ctx.overlays.showToast("ACCESS DENIED");
+    if (this.badgeReaderLight) this.badgeReaderLight.emissiveIntensity = 4;
+    await this.knockOnGlass();
     if (this.disposed) return;
-    await this.director.play(introSequence);
-    if (this.disposed) return;
-    this.phase = "to-console";
-    this.ctx.quest.activate("follow-console");
-    this.ctx.overlays.showHint("Head to the console and stabilise it");
-    // Sarah walks to the console, beside Jack on the east side of the desk.
-    this.sarahNav.goTo(this.sarahConsoleSpot.clone());
-    // Back to first person: the player walks Jack to the console.
-    this.resumeFirstPerson(this.consoleDeskWorld);
+    if (this.badgeReaderLight) this.badgeReaderLight.emissiveIntensity = 2.5;
+    // No answer — go find the badge.
+    this.ctx.quest.complete("reach-lab", { nextId: "find-badge" });
+    this.ctx.overlays.showHint("No answer. Find your badge — check the server room");
+    this.phase = "to-badge";
+    this.currentFpTarget = null;
   }
 
-  private async triggerConsoleDialogue(): Promise<void> {
-    this.ctx.quest.complete("follow-console");
-    // Cinematic interlude for the console exchange (continues into the alarm).
-    this.suspendFirstPerson();
-    this.phase = "console-dialogue";
-    this.ctx.input.setEnabled(false);
-    this.ctx.overlays.hideHint();
-    this.faceTowards(this.jack, this.consoleDeskWorld);
-    // Settle Sarah at her console spot (the snap is masked by the camera cut
-    // above) so she's beside Jack at the desk for the beat instead of caught
-    // mid-stride. (The console "reach" gesture is disabled for now — see
-    // pickUpCoffee.)
-    this.sarahNav.stop();
-    this.sarah.position.copy(this.sarahConsoleSpot);
-    this.faceTowards(this.sarah, this.consoleDeskWorld);
-    // Both characters set their coffees down on the desk before working it.
-    await this.setCoffeesOnConsole();
-    if (this.disposed) return;
-    this.ctx.overlays.showClock("11:46 PM");
-    await this.director.play(consoleSequence);
-    if (this.disposed) return;
-    void this.activateAlarm();
+  /** Jack knocks on the glass; exactly 3 seconds pass with no answer. */
+  private async knockOnGlass(): Promise<void> {
+    this.ctx.audio.playSfx("glass-knock");
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+
+  /** USE on the dropped badge: has_badge = true and the badge prop disappears. */
+  private onPickUpBadge(): void {
+    if (PlayerInventory.hasBadge) return;
+    PlayerInventory.hasBadge = true;
+    PlayerInventory.hold("badge");
+    this.ctx.audio.playSfx("badge-pickup");
+    if (this.badgeProp) {
+      this.badgeProp.parent?.remove(this.badgeProp);
+      this.badgeProp = undefined;
+    }
+    this.currentFpTarget = null;
+    this.ctx.quest.complete("find-badge", { nextId: "scan-badge" });
+    this.ctx.overlays.showHint("Badge found. Return to the Lab Seven door and scan in");
+    this.phase = "to-glass";
+  }
+
+
+  /** Small await-able delay used to pace the scripted accident beats. */
+  private wait(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
   }
 
   /**
-   * Console activation triggers the resonance cascade: warm lab lights give way
-   * to pulsing red alarm lighting. Sarah breaks for the accelerator and the
-   * objective becomes "Reach Sarah" — the vortex only forms once Jack reaches
-   * her trigger zone.
+   * Jack reaches Sarah at the accelerator console — coffee delivered. A short
+   * two-shot beat, then the accident begins (see runAccidentSequence).
    */
-  private async activateAlarm(): Promise<void> {
-    this.cascadeTimer = 0;
-    this.alarmOn = true;
-    this.ctx.audio.playSfx("alarm");
-    // The calm lab bed crossfades into the suspense bed on the alarm beat.
-    this.ctx.audio.playMusic("lab-suspense");
-    this.ctx.overlays.showClock("11:47 PM", true);
-    // Emergency lights were created up-front (see buildRedLights); the pulse in
-    // update() ramps their intensity now that the cascade is active.
-    // Sarah runs down the now-clear lane to the accelerator; the player follows.
-    // The console sits to the west of the lane, so nothing needs to be dropped.
-    this.sarahNav.goTo(this.reachSarahZone.clone());
-    this.phase = "reach-sarah";
-    // The alarm narration plays over the cascade with control withheld, then
-    // the player gets the "Reach Sarah" objective.
-    this.ctx.input.setEnabled(false);
-    await this.director.play(alarmNarration);
-    if (this.disposed) return;
-    this.ctx.quest.activate("reach-sarah");
-    this.ctx.overlays.showHint("Get to Sarah — now!");
-    // Hand control back: the player sprints Jack down the lane to Sarah in
-    // first person. Facing the accelerator zone she's running to.
-    this.resumeFirstPerson(this.reachSarahZone);
-  }
-
-  private async triggerVortex(): Promise<void> {
-    // The ending is cinematic: suspend first person for good (no resume) so the
-    // vortex growth, final exchange and closing cutscene play uninterrupted.
-    this.suspendFirstPerson();
-    this.phase = "vortex";
-    this.ctx.input.setEnabled(false);
+  private async triggerReachSarah(): Promise<void> {
+    this.ctx.quest.complete("reach-sarah");
     this.ctx.overlays.hideHint();
-    this.ctx.quest.complete("reach-sarah", { holdMs: 700 });
-    this.vortex.visible = true;
-    this.ctx.audio.playSfx("vortex-open");
-    // Grow the vortex.
-    const grow = (target: number, ms: number) =>
-      new Promise<void>((resolve) => {
-        const start = performance.now();
-        const from = this.vortex.scale.x;
-        const tick = () => {
-          const k = Math.min((performance.now() - start) / ms, 1);
-          const s = from + (target - from) * k;
-          this.vortex.scale.setScalar(s);
-          if (k < 1) requestAnimationFrame(tick);
-          else resolve();
-        };
-        tick();
-      });
-    // The wall-glow narration plays as the vortex grows, then the final
-    // exchange before the pull-in.
-    await Promise.all([grow(1, 1800), this.director.play(vortexNarration)]);
-    if (this.disposed) return;
-
-    await this.director.play(vortexDialogue);
-    if (this.disposed) return;
-    this.startCutscene();
-  }
-
-  private async startCutscene(): Promise<void> {
-    this.phase = "cutscene";
-    this.ctx.input.setEnabled(false);
-
-    // Jack reaches toward Sarah; Sarah's free hand rests on her stomach
-    // (the quiet pregnancy beat — preserved as staging, not stated outright).
+    // Hand control to the cinematic director for good — the rest of the prologue
+    // is the accident sequence (no resume to first person).
+    this.suspendFirstPerson();
+    this.phase = "accident";
     this.sarahNav.stop();
     this.faceTowards(this.jack, this.sarah.position);
     this.faceTowards(this.sarah, this.jack.position);
-
-    // Tight two-shot for the climax, overriding the wide chase framing.
     this.setCameraMoment("climax", { cut: true });
+    // Jack hands Sarah one of the coffees.
+    await this.handCoffeeToSarah();
+    if (this.disposed) return;
+    this.ctx.overlays.showClock("11:46 PM");
+    await this.wait(1400);
+    if (this.disposed) return;
+    void this.runAccidentSequence();
+  }
 
-    // Jack leans toward Sarah as the climax exchange plays.
-    await Promise.all([
-      this.tween(this.jack.position, new THREE.Vector3(20, 0, -17), 1400),
-      this.director.play(climaxReach),
-    ]);
+  /**
+   * The accident sequence, beat-for-beat from the confirmed Godot design:
+   * lights flicker and cut to black → seamless switch to Sarah in the dark →
+   * red emergency lights → Sarah takes the console flashlight → crosses the lab
+   * walkway to the power unit → power restores, lab lights return → alarms →
+   * Sarah's comms get no answer from Jack → both are pulled into the accelerator
+   * core and touch it → slow fade to BLACK (never white) → "Beyond Extinction".
+   */
+  private async runAccidentSequence(): Promise<void> {
+    if (this.accidentStarted) return;
+    this.accidentStarted = true;
+    this.ctx.input.setEnabled(false);
+
+    // Both drop their coffees (inventory toggle only — no cups spawned in world).
+    this.dropAllCoffees();
+
+    // --- 1. Lights flicker, then cut to black -------------------------------
+    const base = this.mainLights.map((l) => l.intensity);
+    const scaleLights = (k: number) =>
+      this.mainLights.forEach((l, i) => (l.intensity = base[i] * k));
+    this.ctx.audio.playSfx("power-fail");
+    for (const k of [0.15, 1, 0.05, 0.7, 0, 0.4, 0]) {
+      scaleLights(k);
+      await this.wait(110);
+      if (this.disposed) return;
+    }
+    scaleLights(0); // full blackout
+    await this.ctx.overlays.fadeToBlack(260);
     if (this.disposed) return;
 
-    // Closing tableau: the camera pushes in (the "finale" moment, eased from
-    // the climax two-shot it already holds) while the closing narration plays
-    // and Jack and Sarah dissolve into the vortex light together — no white
-    // flash, no pull-in tween. They are left where they stand; only their
-    // materials fade out.
-    this.finaleStartElapsed = null;
-    this.setCameraMoment("finale");
+    // --- 2. Seamless switch to Sarah while the screen is dark ---------------
+    // No loading screen: reposition the camera onto Sarah and turn the emergency
+    // lights on behind the black, then lift the black to reveal the red-lit lab.
+    this.setCameraMoment("sarah-follow", { cut: true });
+    this.emergencyOn = true; // red emergency lights come up (see update())
+    await this.wait(500);
+    if (this.disposed) return;
+    await this.ctx.overlays.fadeFromBlack(600);
+    if (this.disposed) return;
+
+    // --- 3 & 4. Sarah finds the flashlight on the console and clicks it on ---
+    this.faceTowards(this.sarah, this.powerUnitWorld);
+    this.grabFlashlight();
+    this.ctx.audio.playSfx("flashlight-click");
+    await this.wait(700);
+    if (this.disposed) return;
+
+    // --- 5. Sarah crosses the lab walkway to the power unit -----------------
+    this.ctx.overlays.showHint("Power's out — reach the emergency power unit");
+    await new Promise<void>((resolve) => {
+      this.sarahNav.goTo(this.powerUnitWorld.clone().add(new THREE.Vector3(-3, 0, 0)), resolve);
+    });
+    if (this.disposed) return;
+    this.faceTowards(this.sarah, this.powerUnitWorld);
+    await this.wait(500);
+    if (this.disposed) return;
+
+    // --- 6. Power restores: lab lights return, flashlight off ---------------
+    this.ctx.audio.playSfx("power-restore");
+    this.stowFlashlight();
+    const panel = (this.powerUnit.userData as { panel?: THREE.MeshStandardMaterial }).panel;
+    if (panel) {
+      panel.emissive.setHex(0x2ad24a);
+      panel.emissiveIntensity = 1.4;
+    }
+    // Ramp the main lights back up over ~700 ms.
+    await new Promise<void>((resolve) => {
+      const t0 = performance.now();
+      const tick = () => {
+        if (this.disposed) return resolve();
+        const k = Math.min((performance.now() - t0) / 700, 1);
+        scaleLights(k);
+        if (k < 1) requestAnimationFrame(tick);
+        else resolve();
+      };
+      tick();
+    });
+    if (this.disposed) return;
+
+    // --- 7. Alarms trigger immediately -------------------------------------
+    this.alarmOn = true;
+    this.ctx.audio.playSfx("alarm");
+    this.ctx.audio.playMusic("lab-suspense");
+    this.ctx.overlays.showClock("11:47 PM", true);
+    this.ctx.overlays.hideHint();
+    await this.wait(900);
+    if (this.disposed) return;
+
+    // --- 8. Sarah tries comms — no response from Jack ----------------------
+    this.setCameraMoment("sarah-follow");
+    this.playGesture(this.sarah, "Checkout_Gesture");
+    this.ctx.audio.playSfx("comms-static");
+    this.ctx.overlays.showToast("Jack? Do you copy?");
+    await this.wait(2400);
+    if (this.disposed) return;
+    this.ctx.overlays.showToast("...no response.");
+    await this.wait(1600);
+    if (this.disposed) return;
+
+    // --- 9, 10. Both are pulled to the accelerator core and touch it -------
+    this.phase = "cutscene";
+    this.vortex.visible = true;
+    this.ctx.audio.playSfx("vortex-open");
+    this.setCameraMoment("core-pull", { cut: true });
+    const core = this.coreWorld;
+    // Grow the core vortex while dragging both toward it — involuntarily.
+    const jackTo = core.clone().add(new THREE.Vector3(-2.5, 0, 0));
+    const sarahTo = core.clone().add(new THREE.Vector3(2.5, 0, 0));
+    this.faceTowards(this.jack, core);
+    this.faceTowards(this.sarah, core);
+    await Promise.all([
+      this.growVortex(1, 2200),
+      this.tween(this.jack.position, jackTo, 2200),
+      this.tween(this.sarah.position, sarahTo, 2200),
+    ]);
+    if (this.disposed) return;
     this.ctx.audio.playSfx("vortex-pull");
-    await Promise.all([
-      this.director.play(climaxEnd),
-      this.dissolveCharacter(this.jack, this.finaleDurationS * 1000),
-      this.dissolveCharacter(this.sarah, this.finaleDurationS * 1000),
-    ]);
+    await this.wait(500); // both touch the core
     if (this.disposed) return;
 
-    // Beat of empty, lit space where they were, then ease to black.
-    await new Promise((r) => setTimeout(r, 1500));
-    if (this.disposed) return;
-    await this.ctx.overlays.fadeToBlack(1000);
+    // --- 11. Slow fade to BLACK — never white ------------------------------
+    this.setCameraMoment("finale");
+    await Promise.all([
+      this.dissolveCharacter(this.jack, 2200),
+      this.dissolveCharacter(this.sarah, 2200),
+      this.ctx.overlays.fadeToBlack(2600),
+    ]);
     if (this.disposed) return;
     this.ctx.overlays.setBlackInstant(true);
     this.ctx.overlays.hideClock();
 
+    // --- 12. Title card ----------------------------------------------------
+    await this.ctx.overlays.showCaption("BEYOND EXTINCTION", 3200);
+    if (this.disposed) return;
+
+    // --- 13. Into Chapter One ----------------------------------------------
     this.phase = "done";
     this.ctx.scenes.goTo(createChapterOneScene, false);
+  }
+
+  /** Grow the core vortex disc from its current scale to `target` over `ms`. */
+  private growVortex(target: number, ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const start = performance.now();
+      const from = this.vortex.scale.x;
+      const tick = () => {
+        if (this.disposed) return resolve();
+        const k = Math.min((performance.now() - start) / ms, 1);
+        this.vortex.scale.setScalar(from + (target - from) * k);
+        if (k < 1) requestAnimationFrame(tick);
+        else resolve();
+      };
+      tick();
+    });
+  }
+
+  /** Remove any carried coffee cups (inventory toggle — nothing spawned). */
+  private dropAllCoffees(): void {
+    const all: THREE.Object3D[] = [...this.coffees];
+    if (this.sarahCup) all.push(this.sarahCup);
+    for (const c of all) {
+      c.parent?.remove(c);
+      PlayerInventory.drop("coffee");
+    }
+    this.activeGrips = this.activeGrips.filter((g) => !all.includes(g.cup));
+    this.coffees = [];
+    this.sarahCup = null;
+  }
+
+  /** Move the console flashlight into Sarah's hand and switch its cone on. */
+  private grabFlashlight(): void {
+    if (!this.flashlight) return;
+    const hand = this.handBone(this.sarah, "right") ?? this.sarah;
+    hand.attach(this.flashlight);
+    this.flashlight.position.set(0, 0, 0);
+    const lens = (this.flashlight.userData as { lens?: THREE.MeshStandardMaterial }).lens;
+    if (lens) lens.emissiveIntensity = 3;
+    if (this.flashlightSpot) {
+      this.flashlightSpot.visible = true;
+      this.flashlightSpot.intensity = 9;
+    }
+    this.flashlightActive = true;
+  }
+
+  /** Switch the flashlight off once power is restored. */
+  private stowFlashlight(): void {
+    this.flashlightActive = false;
+    if (this.flashlightSpot) {
+      this.flashlightSpot.visible = false;
+      this.flashlightSpot.intensity = 0;
+    }
+    const lens =
+      this.flashlight && (this.flashlight.userData as { lens?: THREE.MeshStandardMaterial }).lens;
+    if (lens) lens.emissiveIntensity = 0;
   }
 
   /**
@@ -2738,7 +3166,7 @@ class PrologueCafeteriaScene implements IScene {
       id: "sarah-interaction",
       priority: 35,
       easeSpeed: 0.07,
-      isActive: (s) => s.phase === "to-sarah" || s.phase === "intro-dialogue",
+      isActive: (s) => s.phase === "to-sarah",
       position: (s) =>
         // Fixed relative to Sarah (who is planted during to-sarah): ~west, high,
         // and a touch north — a stationary vantage that frames the whole walk.
@@ -2750,67 +3178,6 @@ class PrologueCafeteriaScene implements IScene {
         // centred as he approaches and Sarah reads as the destination.
         const l = s.jack.clone().lerp(s.sarah, 0.4);
         l.y += 3;
-        return l;
-      },
-    };
-
-    // While Jack and Sarah talk over the coffee, slowly orbit the camera around
-    // Sarah (the pivot) so the exchange plays against a moving view of the lab
-    // instead of a locked two-shot. Outranks sarahInteraction so it owns the
-    // dialogue beat; the walk up (to-sarah) still uses sarahInteraction. It
-    // starts on the same bearing the two-shot held, so the hard cut into
-    // dialogue lands on a familiar angle before the drift begins.
-    const dialogueOrbit: CameraZone<CameraZoneState> = {
-      id: "dialogue-orbit",
-      priority: 45,
-      easeSpeed: 0.05,
-      isActive: (s) => s.phase === "intro-dialogue",
-      position: (s) => {
-        const t = Math.max(0, s.elapsed - this.introOrbitStart);
-        const angle = Math.atan2(10, 16) + t * 0.1;
-        const dist = 24 * s.framingScale;
-        return new THREE.Vector3(
-          s.sarah.x + Math.sin(angle) * dist,
-          s.sarah.y + 10 * s.framingScale,
-          s.sarah.z + Math.cos(angle) * dist,
-        );
-      },
-      lookAt: (s) => {
-        // Keep Sarah centered, pulled a touch toward Jack so he stays in frame.
-        const l = s.sarah.clone().lerp(s.jack, 0.2);
-        l.y += 3.5;
-        return l;
-      },
-    };
-
-    const console_: CameraZone<CameraZoneState> = {
-      id: "console",
-      priority: 40,
-      easeSpeed: 0.06,
-      isActive: (s) => s.phase === "to-console" || s.phase === "console-dialogue",
-      position: (s) => {
-        const dir = new THREE.Vector3(18, 14, 18).normalize();
-        const pull = this.travelPullback(s.jack, this.consoleDeskWorld, dir, 21, 60);
-        // Bias toward Jack the further out he still is, so he stays in frame
-        // alongside the desk instead of the shot holding fixed on the desk
-        // alone for the whole approach.
-        const anchor = this.consoleDeskWorld.clone().lerp(s.jack, 0.3);
-        return anchor.add(dir.multiplyScalar(pull * s.framingScale));
-      },
-      lookAt: (s) => {
-        // Frame the desk and the accelerator ring together — but ease toward
-        // Jack's own position while he's still far out so he isn't looking
-        // at empty space off-frame.
-        // Frame a point above the accelerator (its X/Z), held at a comfortable
-        // standing height for this desk two-shot. The ring mesh itself now lies
-        // flat near the floor (see buildConsole), so this framing anchor stays
-        // deliberately elevated rather than tracking the ring's low Y.
-        const ringWorld = this.console.position.clone().add(new THREE.Vector3(6, 11, 11));
-        const deskFocus = this.consoleDeskWorld.clone().lerp(ringWorld, 0.4);
-        const sep = s.jack.distanceTo(this.consoleDeskWorld);
-        const t = THREE.MathUtils.clamp(1 - sep / 40, 0, 1);
-        const l = s.jack.clone().lerp(deskFocus, t);
-        l.y += 2;
         return l;
       },
     };
@@ -2834,29 +3201,11 @@ class PrologueCafeteriaScene implements IScene {
       },
     };
 
-    const emergencyVortex: CameraZone<CameraZoneState> = {
-      id: "emergency-vortex",
-      priority: 50,
-      easeSpeed: 0.045,
-      isActive: (s) => s.phase === "reach-sarah" || s.phase === "vortex" || s.phase === "cutscene",
-      position: (s) => {
-        if (s.phase === "reach-sarah") {
-          // Pull wider during the chase so the player can see where to run.
-          return s.jack
-            .clone()
-            .lerp(this.vortex.position, 0.25)
-            .add(new THREE.Vector3(0, 20, 26).multiplyScalar(s.framingScale));
-        }
-        return this.vortex.position.clone().add(new THREE.Vector3(0, 6, 26).multiplyScalar(s.framingScale));
-      },
-      lookAt: (s) => {
-        const l = s.jack.clone().lerp(this.vortex.position, 0.5);
-        l.y += s.phase === "reach-sarah" ? 5 : 4;
-        return l;
-      },
-    };
+    // The accident sequence drives the camera entirely through scripted moments
+    // (sarah-follow, core-pull, finale) via the top-priority `scripted` zone, so
+    // no dedicated gameplay zone is needed for it.
 
-    for (const zone of [scripted, emergencyVortex, console_, dialogueOrbit, sarahInteraction, coffeeCounter, hallwayFollow, defaultLab]) {
+    for (const zone of [scripted, sarahInteraction, coffeeCounter, hallwayFollow, defaultLab]) {
       this.cameraDirector.addZone(zone);
     }
   }
@@ -2916,9 +3265,10 @@ class PrologueCafeteriaScene implements IScene {
     if (this.scriptedCameraMoment === "establishing") {
       if (this.openingPushStartElapsed === null) this.openingPushStartElapsed = elapsed;
       const ring = (this.console.userData as { ring?: THREE.Mesh }).ring;
-      if (ring && !this.alarmOn) {
+      if (ring && !this.emergencyOn) {
         const m = ring.material as THREE.MeshStandardMaterial;
-        m.emissiveIntensity = 0.5 + this.openingPushProgress(elapsed) * 0.35;
+        // Base is the confirmed low 0.1 glow, lifting subtly as the camera nears.
+        m.emissiveIntensity = 0.1 + this.openingPushProgress(elapsed) * 0.18;
       }
     }
 
@@ -2936,28 +3286,44 @@ class PrologueCafeteriaScene implements IScene {
       this.applyLocomotion(this.jack, jackMoving, dt);
     }
 
-    // Sarah's scripted moves (to the console, to the accelerator) share the same
-    // Navigator Jack's cinematic walk uses, and must keep ticking during first
-    // person so she isn't frozen while the player has control.
+    // Sarah's scripted moves (to the console, then to the power unit during the
+    // accident) share the same Navigator Jack's cinematic walk uses, and must
+    // keep ticking during first person so she isn't frozen while the player has
+    // control.
     const sarahMoving = this.sarahNav.update(dt);
     this.applyLocomotion(this.sarah, sarahMoving, dt);
     // Keep Jack and Sarah from standing inside one another — split the push
     // evenly so neither character's deliberate movement "wins" outright.
     this.resolveCharacterOverlap();
 
-    // Alarm pulse: once the cascade is active, the red emergency lights pulse
-    // and the warm ambient drains. Runs through the reach-sarah and vortex beats.
-    if (this.alarmOn) {
-      this.cascadeTimer += dt;
-      const pulse = (Math.sin(elapsed * 8) * 0.5 + 0.5) * 6;
-      for (const rl of this.redLights) rl.intensity = pulse;
-      this.ambient.intensity = 1.65 - Math.min(this.cascadeTimer / 4, 1.0) * 1.45;
-      // Console ring glows hot.
-      const ring = (this.console.userData as { ring?: THREE.Mesh }).ring;
-      if (ring) {
-        const m = ring.material as THREE.MeshStandardMaterial;
-        m.emissive.setHex(0xff3322);
-        m.emissiveIntensity = 0.5 + pulse * 0.2;
+    // Auto proximity + badge-gated doors: slide open/closed against Jack's
+    // position (which mirrors the player in first person) and play a hiss on the
+    // opening edge. Their closed gaps block movement via isBlocked().
+    for (const d of this.doors) d.update(dt, this.jack.position);
+
+    // Sarah's flashlight cone during the blackout: sit it at her head and aim it
+    // a few metres ahead along her facing.
+    if (this.flashlightActive && this.flashlightSpot) {
+      const head = this.sarah.position.clone();
+      head.y += 6;
+      this.flashlightSpot.position.copy(head);
+      const fwd = new THREE.Vector3(Math.sin(this.sarah.rotation.y), -0.15, -Math.cos(this.sarah.rotation.y));
+      this.flashlightSpot.target.position.copy(head).addScaledVector(fwd, 14);
+    }
+
+    // Emergency lighting: red lights come up when the power fails, and pulse once
+    // the alarm sounds; the accelerator ring glows hot as the core goes critical.
+    if (this.emergencyOn) {
+      const pulse = this.alarmOn ? (Math.sin(elapsed * 8) * 0.5 + 0.5) * 4 : 0;
+      const baseRed = this.alarmOn ? 5 : 3.4;
+      for (const rl of this.redLights) rl.intensity = baseRed + pulse;
+      if (this.alarmOn) {
+        const ring = (this.console.userData as { ring?: THREE.Mesh }).ring;
+        if (ring) {
+          const m = ring.material as THREE.MeshStandardMaterial;
+          m.emissive.setHex(0xff3322);
+          m.emissiveIntensity = 0.6 + pulse * 0.25;
+        }
       }
     }
 
