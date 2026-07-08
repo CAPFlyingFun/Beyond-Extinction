@@ -425,9 +425,12 @@ class PrologueCafeteriaScene implements IScene {
     // ---- Global fill (kept low so each room reads by its OWN lights per the
     // confirmed design: warm cafeteria, cooler/darker hallway, atmospheric blue
     // server room, and a cool dim blue-gray Lab Seven — not one evenly-lit box).
-    this.ambient = new THREE.AmbientLight(0x6f80a0, 0.85);
+    // Global fill roughly doubled from the original so the lab reads bright like
+    // the Godot build (its ceiling PointLights decay to ~nothing at floor level,
+    // so ambient + key are what actually light the room and the characters).
+    this.ambient = new THREE.AmbientLight(0x8494b4, 1.55);
     scene.add(this.ambient);
-    const key = new THREE.DirectionalLight(0xdfe8ff, 1.15);
+    const key = new THREE.DirectionalLight(0xeaf1ff, 1.7);
     key.position.set(20, 40, 20);
     key.castShadow = true;
     key.shadow.mapSize.set(1024, 1024);
@@ -1556,6 +1559,162 @@ class PrologueCafeteriaScene implements IScene {
     this.consoleDesk = desk;
     desk.userData.solid = true; // a real obstacle beside the walk line
     this.scene.add(g);
+
+    this.buildLabInterior();
+  }
+
+  /**
+   * Lab-Seven dressing recreated from the Godot lab_builder.gd (_build_lab,
+   * _build_accelerator, _console, _build_east_console_bank, _railing): a ring of
+   * six operator consoles facing the accelerator, the accelerator's central
+   * pedestal + magnet housings + support pylons, a DNA terminal, the east-wall
+   * mainframe bank with flanking server racks, a walkway railing with a west
+   * entry gap, hazard stripes, and a ceiling-panel grid. Godot blueprint metres
+   * are mapped onto this scene's ×M world and re-centred on the existing ring
+   * (RING_CENTER), so everything lines up with the ring/vortex already built.
+   *
+   * Dressing is VISUAL-ONLY (no colliders) except the east bank, so it can never
+   * block the scripted glass-door → Sarah → power-unit walk lines; the player and
+   * the cinematic navigator move freely through the open deck.
+   */
+  private buildLabInterior(): void {
+    const scene = this.scene;
+    // Godot lab centre is (LCX 17.5, LCZ 8.0); place everything by its offset
+    // from there so it recentres on this build's RING_CENTER.
+    const LCX = 17.5;
+    const LCZ = 8.0;
+    const gp = (gx: number, gy: number, gz: number) =>
+      new THREE.Vector3(
+        RING_CENTER.x + (gx - LCX) * M,
+        gy * M,
+        RING_CENTER.z + (gz - LCZ) * M,
+      );
+    // Materials tuned to the Godot look but matte (metalness low) so they read
+    // clean without an environment map — same reasoning as the prop fix.
+    const mMetal = new THREE.MeshStandardMaterial({ color: 0xb9c0cc, roughness: 0.5, metalness: 0.15 });
+    const mScreen = new THREE.MeshStandardMaterial({ color: 0x0a1828, emissive: 0x33a6ff, emissiveIntensity: 1.4 });
+    const mCool = new THREE.MeshStandardMaterial({ color: 0xdbe8ff, emissive: 0xbcd2ff, emissiveIntensity: 1.6 });
+    const mWarm = new THREE.MeshStandardMaterial({ color: 0xfff0d6, emissive: 0xffdf9c, emissiveIntensity: 1.4 });
+    const mHazard = new THREE.MeshStandardMaterial({ color: 0xe0bd05, roughness: 0.7 });
+    // Box helper: centre (world Vec3), size in blueprint metres (×M), material.
+    const box = (
+      c: THREE.Vector3,
+      sx: number,
+      sy: number,
+      sz: number,
+      mat: THREE.Material,
+      solid = false,
+    ) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(sx * M, sy * M, sz * M), mat);
+      m.position.copy(c);
+      m.castShadow = solid;
+      m.receiveShadow = true;
+      if (solid) m.userData.solid = true;
+      scene.add(m);
+      return m;
+    };
+
+    // ── Accelerator centre: pedestal + 6 magnet housings + 4 pylons ──
+    box(gp(LCX, 0.35, LCZ), 1.2, 0.7, 1.2, mMetal); // central pedestal/target
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      box(gp(LCX + Math.sin(a) * 3.0, 0.9, LCZ + Math.cos(a) * 3.0), 0.55, 1.1, 0.55, mMetal);
+    }
+    for (let i = 0; i < 4; i++) {
+      const a = ((i + 0.5) / 4) * Math.PI * 2;
+      box(gp(LCX + Math.sin(a) * 3.0, 0.45, LCZ + Math.cos(a) * 3.0), 0.14, 0.9, 0.14, mMetal);
+    }
+
+    // ── Six operator consoles ringing the accelerator, facing centre ──
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const c = gp(LCX + Math.sin(a) * 5.4, 0, LCZ + Math.cos(a) * 5.4);
+      const grp = new THREE.Group();
+      grp.position.copy(c);
+      grp.rotation.y = a + Math.PI; // face the centre
+      const body = new THREE.Mesh(new THREE.BoxGeometry(1.4 * M, 0.9 * M, 0.6 * M), mMetal);
+      body.position.y = 0.45 * M;
+      body.castShadow = true;
+      const scr = new THREE.Mesh(new THREE.BoxGeometry(1.2 * M, 0.55 * M, 0.05 * M), mScreen);
+      scr.position.set(0, 1.15 * M, -0.22 * M);
+      scr.rotation.x = -0.314; // ~ -18°
+      grp.add(body, scr);
+      scene.add(grp);
+    }
+
+    // ── Holographic DNA terminal, north of the ring ──
+    box(gp(LCX, 0.6, LCZ - 4.6), 0.6, 1.2, 0.6, mMetal);
+    box(gp(LCX, 1.7, LCZ - 4.6), 0.5, 0.8, 0.5, mScreen);
+
+    // ── East-wall mainframe bank (solid — safely at the back wall) + racks ──
+    const bxc = 24.5;
+    box(gp(bxc, 1.35, LCZ), 0.55, 2.7, 1.9, mMetal, true); // tower
+    box(gp(bxc - 0.31, 1.65, LCZ), 0.05, 1.66, 1.66, mCool); // bezel glow
+    box(gp(bxc - 0.33, 1.65, LCZ), 0.05, 1.48, 1.48, mScreen); // display
+    box(gp(bxc - 0.33, 2.86, LCZ), 0.04, 0.1, 1.9, mWarm); // status strip
+    for (const z of [4.6, 5.9, 10.1, 11.4]) {
+      box(gp(bxc, 1.05, z), 0.55, 2.1, 1.05, mMetal, true); // rack body
+      box(gp(bxc - 0.33, 1.28, z), 0.05, 1.42, 0.74, mScreen); // rack panel
+    }
+
+    // ── Walkway railing (visual) with a west entry gap aligned to the glass door ──
+    const ix0 = 10.0 + 1.2;
+    const ix1 = 25.0 - 1.2;
+    const iz0 = 0.5 + 1.2;
+    const iz1 = 15.5 - 1.2;
+    const railSeg = (x0: number, z0: number, x1: number, z1: number) => {
+      const alongX = Math.abs(x1 - x0) > Math.abs(z1 - z0);
+      const len = Math.hypot((x1 - x0) * M, (z1 - z0) * M);
+      const mid = gp((x0 + x1) / 2, 1.0, (z0 + z1) / 2);
+      const rail = new THREE.Mesh(
+        alongX ? new THREE.BoxGeometry(len, 0.06 * M, 0.06 * M) : new THREE.BoxGeometry(0.06 * M, 0.06 * M, len),
+        mMetal,
+      );
+      rail.position.copy(mid);
+      scene.add(rail);
+      const posts = Math.max(1, Math.round(len / (2 * M)));
+      for (let i = 0; i <= posts; i++) {
+        const t = i / posts;
+        const p = gp(x0 + (x1 - x0) * t, 0.5, z0 + (z1 - z0) * t);
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.05 * M, 1.0 * M, 0.05 * M), mMetal);
+        post.position.copy(p);
+        scene.add(post);
+      }
+    };
+    const ga = 7.0;
+    const gb = 9.0; // west entry gap (Godot)
+    railSeg(ix0, iz0, ix1, iz0); // north
+    railSeg(ix1, iz0, ix1, ga); // east, north of gap
+    railSeg(ix1, gb, ix1, iz1); // east, south of gap
+    railSeg(ix0, iz1, ix1, iz1); // south
+    railSeg(ix0, iz0, ix0, ga); // west, north of gap
+    railSeg(ix0, gb, ix0, iz1); // west, south of gap
+    // Hazard stripes along the inner deck edge.
+    box(gp(LCX, 0.06, iz0), ix1 - ix0, 0.02, 0.1, mHazard);
+    box(gp(LCX, 0.06, iz1), ix1 - ix0, 0.02, 0.1, mHazard);
+    box(gp(ix0, 0.06, LCZ), 0.1, 0.02, iz1 - iz0, mHazard);
+    box(gp(ix1, 0.06, LCZ), 0.1, 0.02, iz1 - iz0, mHazard);
+
+    // ── Emissive ceiling-panel grid (Godot: 3×3 cool panels under the 5 m ceiling) ──
+    for (const gx of [13.5, 17.5, 21.5]) {
+      for (const gz of [4.0, 8.0, 12.0]) {
+        box(gp(gx, LAB_WALL_HEIGHT / M - 0.05, gz), 1.6, 0.06, 1.6, mCool);
+      }
+    }
+
+    // ── Lab fill omnis (Godot: omnis at LCX/4.4/LCZ, 13/4.5, 22/11.5). Placed LOW
+    // (y≈2.6 m) with gentle decay so they actually reach the deck and light the
+    // characters — a ceiling omni with square decay dies before the floor. Added
+    // to mainLights so the accident blackout cuts them with the rest. ──
+    const fill = (gx: number, gz: number, intensity: number) => {
+      const l = new THREE.PointLight(0xcfe0ff, intensity, 95, 1.1);
+      l.position.copy(gp(gx, 2.6, gz));
+      scene.add(l);
+      this.mainLights.push(l);
+    };
+    fill(LCX, LCZ, 42);
+    fill(13, 4.5, 26);
+    fill(22, 11.5, 26);
   }
 
   // ---------- Doors, badge gate & accident props ----------
@@ -1611,9 +1770,9 @@ class PrologueCafeteriaScene implements IScene {
     // past the centre and bury their outer edges in the solid wall — so no two
     // faces are ever coplanar as the camera moves (which is what fought before).
     // Opaque doors keep their original meet-in-the-middle leaves.
-    const leafW = glass ? half * 1.2 : half; // glass leaves overlap; opaque meet
-    const bury = glass ? 0.24 : 0; // glass outer edge buries into the wall
-    const dn = glass ? 0.2 : 0; // wall-normal separation between the two leaves
+    const leafW = glass ? half * 1.25 : half; // glass leaves overlap; opaque meet
+    const bury = glass ? 0.3 : 0; // glass outer edge buries into the wall
+    const dn = glass ? 0.36 : 0; // wall-normal separation between the two leaves
     const alongOff = (s: number) => s * (half + bury - leafW / 2); // centre along gap axis
     for (const s of [-1, 1] as const) {
       let leaf: THREE.Object3D;
@@ -2067,6 +2226,9 @@ class PrologueCafeteriaScene implements IScene {
             sm.metalness = 0;
             sm.metalnessMap = null;
             sm.emissiveIntensity = 0;
+            // Meshy exports the skin/cloth fairly glossy; push roughness up so
+            // the characters read as matte skin + fabric, not shiny/wet.
+            sm.roughness = Math.max(sm.roughness, 0.82);
           }
           mat.needsUpdate = true;
         }
