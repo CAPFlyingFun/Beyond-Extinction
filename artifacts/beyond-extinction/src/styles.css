@@ -297,6 +297,55 @@ body {
   pointer-events: auto;
 }
 
+/* ---------- Landscape-only lock (persistent, pure CSS) ----------
+   The whole game is landscape-only. This overlay is in the static index.html
+   markup and is driven entirely by the media query below — no JS state to get
+   stuck — so it covers every scene (loading / menu / gameplay) the moment a
+   touch device turns portrait and vanishes the moment it turns back. Gated to
+   `pointer: coarse` so a narrow desktop window (which can't be "rotated") is
+   never blocked. Sits above every other overlay. */
+.be-orient-lock {
+  display: none;
+}
+@media (orientation: portrait) and (pointer: coarse) {
+  .be-orient-lock {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    text-align: center;
+    background: #05070d;
+    pointer-events: auto;
+  }
+}
+.be-orient-lock__inner {
+  max-width: 32ch;
+}
+.be-orient-lock__phone {
+  width: 48px;
+  height: 84px;
+  margin: 0 auto 1.9rem;
+  border: 3px solid #f3c87f;
+  border-radius: 11px;
+  transform-origin: 50% 50%;
+  animation: be-rotate-phone 2.4s ease-in-out infinite;
+}
+.be-orient-lock__title {
+  font-family: "Cinzel", serif;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #fbf2dd;
+  margin-bottom: 0.6rem;
+}
+.be-orient-lock__hint {
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: #8fb4d8;
+}
+
 /* ---------- Dialogue ---------- */
 .be-dialogue {
   position: fixed;

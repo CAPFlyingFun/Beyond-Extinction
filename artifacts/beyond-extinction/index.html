@@ -26,6 +26,19 @@
   </head>
   <body>
     <div id="game-root"></div>
+    <!-- Landscape-only lock. Pure-CSS gate (see .be-orient-lock in styles.css):
+         shown whenever a touch device is held in portrait, hidden the instant it
+         turns landscape. It lives in the static markup so it covers every scene
+         (loading, menu, gameplay) and can never get stuck in a bad JS state.
+         iOS can't be force-rotated by any web page, so this manual prompt is the
+         reliable cross-platform way to keep the game landscape-only. -->
+    <div class="be-orient-lock" aria-hidden="true">
+      <div class="be-orient-lock__inner">
+        <div class="be-orient-lock__phone"></div>
+        <div class="be-orient-lock__title">Rotate your device</div>
+        <p class="be-orient-lock__hint">Beyond Extinction plays in landscape.</p>
+      </div>
+    </div>
     <!-- Keep source entry absolute to the Vite project root. Vite applies the deployed base path after bundling. -->
     <script type="module" src="/src/main.ts"></script>
   </body>
