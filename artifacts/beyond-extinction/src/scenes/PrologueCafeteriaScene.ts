@@ -26,7 +26,6 @@ import { ClipLibrary } from "../engine/ClipLibrary";
 import { SequenceDirector } from "../engine/SequenceDirector";
 import {
   labOpeningNarration,
-  badgeFound,
   introSequence,
   portalClimax,
 } from "../data/prologueSequences";
@@ -600,7 +599,7 @@ class PrologueCafeteriaScene implements IScene {
     this.unsubLongPress = this.ctx.input.onLongPress((p) => this.onLongPressInteract(p));
 
     this.director = new SequenceDirector({
-      playVoice: (id) => this.ctx.audio.playVoice(id),
+      playVoice: (id) => this.awaitVoice(id),
       showSubtitle: (o) => this.ctx.dialogue.showSubtitle(o),
       hideSubtitle: () => this.ctx.dialogue.hideSubtitle(),
       setCameraMoment: (m, o) => this.setCameraMoment(m, o),
@@ -3248,18 +3247,24 @@ class PrologueCafeteriaScene implements IScene {
     this.knockInProgress = true;
     this.currentFpTarget = null;
     if (this.knockZone) this.dismissHighlight(this.knockZone);
-    // Jack is locked in place for the knock beat (Godot dialogue_frozen).
+    // Jack is locked in place for the knock beat (Godot dialogue_frozen). The
+    // unlock + phase advance run in `finally` so a stalled voice clip can never
+    // leave Jack frozen — control always comes back.
     this.ctx.input.setEnabled(false);
-    this.ctx.audio.playSfx("door-knock");
-    await this.wait(3000); // exactly three seconds, no answer
-    if (this.disposed) return;
-    await this.speakClip("jack_no_response");
-    if (this.disposed) return;
-    this.ctx.dialogue.hideSubtitle();
-    this.ctx.quest.complete("knock", { nextId: "find-badge" });
-    this.ctx.overlays.showHint("Find your badge — check the server room");
-    this.phase = "to-badge";
-    this.ctx.input.setEnabled(true);
+    try {
+      this.ctx.audio.playSfx("door-knock");
+      await this.wait(3000); // exactly three seconds, no answer
+      if (this.disposed) return;
+      await this.speakClip("jack_no_response");
+    } finally {
+      if (!this.disposed) {
+        this.ctx.dialogue.hideSubtitle();
+        this.ctx.quest.complete("knock", { nextId: "find-badge" });
+        this.ctx.overlays.showHint("Find your badge — check the server room");
+        this.phase = "to-badge";
+        this.ctx.input.setEnabled(true);
+      }
+    }
   }
 
   /** Show a subtitle line and hold for `ms` (used only for any unvoiced beat). */
@@ -3283,7 +3288,18 @@ class PrologueCafeteriaScene implements IScene {
         narration: clip.narration,
       });
     }
-    await this.ctx.audio.playVoice(id);
+    await this.awaitVoice(id);
+  }
+
+  /**
+   * Play a voice clip but never wait longer than its known length plus a buffer.
+   * Voiced beats gate movement (input is locked while a line plays), so if an
+   * <audio> element stalls and its "ended" event never fires, this cap still
+   * lets the beat advance and returns control instead of freezing the player.
+   */
+  private awaitVoice(id: string): Promise<void> {
+    const cap = this.ctx.audio.getVoiceDuration(id) + 2500;
+    return Promise.race([this.ctx.audio.playVoice(id), this.wait(cap)]);
   }
 
   /** USE on the dropped badge: has_badge = true and the badge prop disappears. */
@@ -3306,11 +3322,17 @@ class PrologueCafeteriaScene implements IScene {
     void this.playBadgeFoundLine();
   }
 
-  /** Speak the badge-found line, then re-arm the glass-door badge reader. */
+  /** Speak the badge-found line, then re-arm the glass-door badge reader. Uses
+   *  the bounded speakClip so a stalled clip can't leave the reader locked. */
   private async playBadgeFoundLine(): Promise<void> {
-    await this.director.play(badgeFound);
-    if (this.disposed) return;
-    this.phase = "to-glass";
+    try {
+      await this.speakClip("jack_badge_found");
+    } finally {
+      if (!this.disposed) {
+        this.ctx.dialogue.hideSubtitle();
+        this.phase = "to-glass";
+      }
+    }
   }
 
 
