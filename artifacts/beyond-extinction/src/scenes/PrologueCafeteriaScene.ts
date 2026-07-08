@@ -1585,9 +1585,14 @@ class PrologueCafeteriaScene implements IScene {
    * are mapped onto this scene's ×M world and re-centred on the existing ring
    * (RING_CENTER), so everything lines up with the ring/vortex already built.
    *
-   * Dressing is VISUAL-ONLY (no colliders) except the east bank, so it can never
-   * block the scripted glass-door → Sarah → power-unit walk lines; the player and
-   * the cinematic navigator move freely through the open deck.
+   * The physical props are SOLID (pedestal, magnet housings, pylons, the six
+   * consoles, the DNA terminal base, the east bank + racks) so the player can't
+   * walk through them. Only non-obstacles stay pass-through: the waist-high
+   * railing (its west gap must stay open for the glass-door entry), the flat
+   * floor hazard stripes, the overhead ceiling panels (isBlocked ignores Y, so a
+   * ceiling box would wrongly block its floor footprint), and the fill lights.
+   * The accident is player-driven first person, so the open deck between props
+   * stays wide enough to steer Sarah around them to the flashlight and power unit.
    */
   private buildLabInterior(): void {
     const scene = this.scene;
@@ -1626,15 +1631,15 @@ class PrologueCafeteriaScene implements IScene {
       return m;
     };
 
-    // ── Accelerator centre: pedestal + 6 magnet housings + 4 pylons ──
-    box(gp(LCX, 0.35, LCZ), 1.2, 0.7, 1.2, mMetal); // central pedestal/target
+    // ── Accelerator centre: pedestal + 6 magnet housings + 4 pylons (all solid) ──
+    box(gp(LCX, 0.35, LCZ), 1.2, 0.7, 1.2, mMetal, true); // central pedestal/target
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2;
-      box(gp(LCX + Math.sin(a) * 3.0, 0.9, LCZ + Math.cos(a) * 3.0), 0.55, 1.1, 0.55, mMetal);
+      box(gp(LCX + Math.sin(a) * 3.0, 0.9, LCZ + Math.cos(a) * 3.0), 0.55, 1.1, 0.55, mMetal, true);
     }
     for (let i = 0; i < 4; i++) {
       const a = ((i + 0.5) / 4) * Math.PI * 2;
-      box(gp(LCX + Math.sin(a) * 3.0, 0.45, LCZ + Math.cos(a) * 3.0), 0.14, 0.9, 0.14, mMetal);
+      box(gp(LCX + Math.sin(a) * 3.0, 0.45, LCZ + Math.cos(a) * 3.0), 0.14, 0.9, 0.14, mMetal, true);
     }
 
     // ── Six operator consoles ringing the accelerator, facing centre ──
@@ -1647,6 +1652,7 @@ class PrologueCafeteriaScene implements IScene {
       const body = new THREE.Mesh(new THREE.BoxGeometry(1.4 * M, 0.9 * M, 0.6 * M), mMetal);
       body.position.y = 0.45 * M;
       body.castShadow = true;
+      body.userData.solid = true; // consoles are waist-high — walk around them
       const scr = new THREE.Mesh(new THREE.BoxGeometry(1.2 * M, 0.55 * M, 0.05 * M), mScreen);
       scr.position.set(0, 1.15 * M, -0.22 * M);
       scr.rotation.x = -0.314; // ~ -18°
@@ -1654,8 +1660,8 @@ class PrologueCafeteriaScene implements IScene {
       scene.add(grp);
     }
 
-    // ── Holographic DNA terminal, north of the ring ──
-    box(gp(LCX, 0.6, LCZ - 4.6), 0.6, 1.2, 0.6, mMetal);
+    // ── Holographic DNA terminal, north of the ring (base is solid) ──
+    box(gp(LCX, 0.6, LCZ - 4.6), 0.6, 1.2, 0.6, mMetal, true);
     box(gp(LCX, 1.7, LCZ - 4.6), 0.5, 0.8, 0.5, mScreen);
 
     // ── East-wall mainframe bank (solid — safely at the back wall) + racks ──
@@ -1958,7 +1964,9 @@ class PrologueCafeteriaScene implements IScene {
     this.powerUnitPanel = panelMat;
     this.addHighlight(
       box,
-      { color: "tech", icon: "\u{26A1}", radius: 2, markerHeight: 5.5 },
+      // Marker floats WELL ABOVE the 10u-tall housing (anchor is the box centre
+      // at y≈5) so the ⚡ isn't buried inside it; the panel also glows below.
+      { color: "tech", icon: "\u{26A1}", radius: 2, markerHeight: 9 },
       () => this.phase === "sarah-power",
     );
   }
@@ -4008,6 +4016,15 @@ class PrologueCafeteriaScene implements IScene {
         this.badgeSpotted = true;
         this.badgeFoundVo = this.playBadgeSpottedLine();
       }
+    }
+
+    // Power unit beacon: while it's the objective (dark, red-lit lab), pulse its
+    // panel bright red so the unit itself reads as the target — its floating
+    // marker sits above the tall housing, but the glow marks the box you walk to.
+    if (this.powerUnitPanel && this.phase === "sarah-power") {
+      const pulse = 0.5 + 0.5 * Math.sin(elapsed * 4);
+      this.powerUnitPanel.emissive.setHex(0xff3a2a);
+      this.powerUnitPanel.emissiveIntensity = 1.4 + pulse * 2.2;
     }
 
     // Sarah's flashlight cone during the blackout. While the player controls
