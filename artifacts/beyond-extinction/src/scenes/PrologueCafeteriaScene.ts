@@ -24,11 +24,7 @@ import { loadModel } from "../engine/assets";
 import { bakeHumanoidClips, RIGS, STD_CLIPS } from "../engine/proceduralAnimator";
 import { ClipLibrary } from "../engine/ClipLibrary";
 import { SequenceDirector } from "../engine/SequenceDirector";
-import {
-  labOpeningNarration,
-  introSequence,
-  portalClimax,
-} from "../data/prologueSequences";
+import { labOpeningNarration, introSequence } from "../data/prologueSequences";
 import { VOICE_CLIPS } from "../data/voiceClips";
 import { VOICE_DURATIONS } from "../data/voiceDurations";
 import { createChapterOneScene } from "./ChapterOnePlaceholderScene";
@@ -239,6 +235,11 @@ class PrologueCafeteriaScene implements IScene {
   private badgeReaderLight?: THREE.MeshStandardMaterial; // the reader's LED
   private glassDenied = false; // first ACCESS DENIED has fired (knock beat)
   private knockInProgress = false; // guards the 3s knock beat from re-firing
+  // Godot's server-room "spotted" trigger: Jack's "There it is..." line fires
+  // once when he comes into range of the dropped badge (not on pickup), and the
+  // glass-door reader stays locked until that line finishes.
+  private badgeSpotted = false;
+  private badgeFoundVo: Promise<void> | null = null;
   // Accident-sequence props: the flashlight Sarah picks up (+ its cone) and the
   // emergency power unit she crosses the lab to restore.
   private flashlight?: THREE.Object3D;
@@ -3315,23 +3316,31 @@ class PrologueCafeteriaScene implements IScene {
     this.currentFpTarget = null;
     this.ctx.quest.complete("find-badge", { nextId: "scan-badge" });
     this.ctx.overlays.showHint("Badge found. Return to the Lab Seven door and scan in");
-    // Jack's "There it is..." line plays (VOICED: jack_badge_found). Matching
-    // Godot, the glass-door badge reader stays LOCKED until this line finishes —
-    // the player can walk back but can't re-scan mid-audio. The reader only
-    // responds in the "to-glass" phase, so we defer that flip until the line ends.
-    void this.playBadgeFoundLine();
+    // The "There it is..." line already fired on proximity; matching Godot, the
+    // glass-door reader stays LOCKED until it finishes — the player can walk back
+    // but can't re-scan mid-audio. The reader only responds in the "to-glass"
+    // phase, so we defer that flip until the line ends.
+    void this.rearmReaderAfterBadgeLine();
   }
 
-  /** Speak the badge-found line, then re-arm the glass-door badge reader. Uses
-   *  the bounded speakClip so a stalled clip can't leave the reader locked. */
-  private async playBadgeFoundLine(): Promise<void> {
+  /** Jack's "There it is..." line, fired on proximity. Movement stays free. */
+  private async playBadgeSpottedLine(): Promise<void> {
+    await this.speakClip("jack_badge_found");
+    if (!this.disposed) this.ctx.dialogue.hideSubtitle();
+  }
+
+  /** After pickup, re-arm the glass-door reader once the badge-found line ends.
+   *  Bounded via speakClip, so a stalled clip can never leave the reader locked. */
+  private async rearmReaderAfterBadgeLine(): Promise<void> {
+    // Edge case: badge grabbed before the proximity line fired — play it now.
+    if (!this.badgeSpotted) {
+      this.badgeSpotted = true;
+      this.badgeFoundVo = this.playBadgeSpottedLine();
+    }
     try {
-      await this.speakClip("jack_badge_found");
+      if (this.badgeFoundVo) await this.badgeFoundVo;
     } finally {
-      if (!this.disposed) {
-        this.ctx.dialogue.hideSubtitle();
-        this.phase = "to-glass";
-      }
+      if (!this.disposed) this.phase = "to-glass";
     }
   }
 
@@ -3500,22 +3509,24 @@ class PrologueCafeteriaScene implements IScene {
     // Ring + vortex go white-hot; the portal light ramps up.
     const ring = (this.console.userData as { ring?: THREE.Mesh }).ring;
     const ringMat = ring?.material as THREE.MeshStandardMaterial | undefined;
-    // Both are pulled to the core while it charges (Godot glides them over ~7s;
-    // web pacing is tighter). The portal light ramp runs alongside. The VOICED
-    // climax (portalClimax = wall-glow narration → the hand-reach → closing line)
-    // plays CONCURRENTLY: the ~3 s visual completes and holds white-hot while the
-    // narration finishes, so the pull-in reads as the emotional peak, not a rush.
+    // PHASE 1 — both are DRAWN INTO the ring: they glide all the way to the exact
+    // core (converging, not just leaning in) while it charges white-hot and the
+    // portal light ramps. No dialogue here — Godot plays no VO over the portal;
+    // the pull-in itself is the beat. vortex-pull fires as the ring collapses.
+    const PULL_MS = 4200;
+    window.setTimeout(() => {
+      if (!this.disposed) this.ctx.audio.playSfx("vortex-pull");
+    }, Math.round(PULL_MS * 0.7));
     await Promise.all([
-      this.director.play(portalClimax),
-      this.growVortex(1, 3000),
-      this.tween(this.jack.position, core.clone().add(new THREE.Vector3(-2, 0, 0)), 3000),
-      this.tween(this.sarah.position, core.clone().add(new THREE.Vector3(2, 0, 0)), 3000),
+      this.growVortex(1, PULL_MS),
+      this.tween(this.jack.position, core.clone(), PULL_MS),
+      this.tween(this.sarah.position, core.clone(), PULL_MS),
       new Promise<void>((resolve) => {
         const t0 = performance.now();
         const tick = () => {
           if (this.disposed) return resolve();
-          const k = Math.min((performance.now() - t0) / 3000, 1);
-          this.portalLight.intensity = k * 40;
+          const k = Math.min((performance.now() - t0) / PULL_MS, 1);
+          this.portalLight.intensity = k * 60;
           if (ringMat) {
             ringMat.emissive.setHex(0xffffff);
             ringMat.emissiveIntensity = k * 6;
@@ -3527,14 +3538,18 @@ class PrologueCafeteriaScene implements IScene {
       }),
     ]);
     if (this.disposed) return;
-    this.ctx.dialogue.hideSubtitle();
-    this.ctx.audio.playSfx("vortex-pull");
-    // Collapse to a singularity.
-    this.portalLight.intensity = 90;
-    await this.wait(400);
+
+    // PHASE 2 — hold on the blinding pulled-in singularity for a couple seconds
+    // (them "gone into" the core) BEFORE any fade.
+    this.portalLight.intensity = 120;
+    await this.wait(1600);
     if (this.disposed) return;
 
-    // Fade to WHITE (1.2s) → hold (0.7s) → cross-fade to BLACK (1.8s). No title.
+    // They've been pulled through — hide both, THEN flash to white, hold, and
+    // cross-fade straight to black (Godot lab_builder.gd portal cutscene). The
+    // next scene (Chapter Two — the beach) opens from that black.
+    this.jack.visible = false;
+    this.sarah.visible = false;
     await this.ctx.overlays.fadeToColor("#ffffff", 1200);
     if (this.disposed) return;
     await this.wait(700);
@@ -3544,7 +3559,7 @@ class PrologueCafeteriaScene implements IScene {
     await this.wait(600);
     if (this.disposed) return;
 
-    // No title card (matches the Godot code) — straight to Chapter One.
+    // No title card (matches the Godot code) — straight to Chapter One (beach).
     this.phase = "done";
     this.ctx.scenes.goTo(createChapterOneScene, false);
   }
@@ -3983,6 +3998,17 @@ class PrologueCafeteriaScene implements IScene {
     // controlled actor's position (which mirrors the player in first person) and
     // play a hiss on the opening edge. Their closed gaps block via isBlocked().
     for (const d of this.doors) d.update(dt, this.controlledActor.position);
+
+    // Server room: the moment Jack comes into range of his dropped badge during
+    // the find-badge beat, his "There it is..." line plays — once (Godot's
+    // spotted-trigger). Movement stays free; only the glass-door reader waits on
+    // this line (see onPickUpBadge).
+    if (this.phase === "to-badge" && !this.badgeSpotted && this.badgeProp) {
+      if (this.controlledActor.position.distanceTo(this.badgeProp.position) <= 10) {
+        this.badgeSpotted = true;
+        this.badgeFoundVo = this.playBadgeSpottedLine();
+      }
+    }
 
     // Sarah's flashlight cone during the blackout. While the player controls
     // Sarah (first person) it follows the camera aim; during the scripted outro
