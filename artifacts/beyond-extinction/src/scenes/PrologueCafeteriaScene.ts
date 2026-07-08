@@ -177,6 +177,12 @@ class PrologueCafeteriaScene implements IScene {
   // Lab Seven; switches to Sarah for the accident blackout (flashlight + power).
   private controlledActor!: THREE.Group;
   private coffeeMachine!: THREE.Mesh;
+  // Real GLB prop prototypes (loaded once in loadProps, cloned per instance).
+  // Each is a normalized wrapper Group with scale 1 so callers can scale/place
+  // the clone freely; left undefined if the GLB fails to load, in which case the
+  // scene falls back to its procedural geometry.
+  private cupProto?: THREE.Object3D;
+  private tableProto?: THREE.Object3D;
   private console!: THREE.Group;
   // The tagged desk child of the console group (userData.kind === "console").
   // This — not the group — is the first-person interact target, so its world
@@ -487,6 +493,12 @@ class PrologueCafeteriaScene implements IScene {
     // cups) — mirrors the Godot PlayerInventory autoload being reset on new game.
     PlayerInventory.reset();
 
+    // Load the real prop GLBs (cafeteria table + coffee cup) before the room and
+    // coffee-station dressing so those builders can clone the real models. On
+    // failure each proto stays undefined and the builder falls back to its
+    // procedural geometry — the scene never blocks on a missing asset.
+    await this.loadProps();
+
     this.buildRoom();
     this.buildServerRoom();
     this.buildCoffeeMachine();
@@ -719,17 +731,35 @@ class PrologueCafeteriaScene implements IScene {
     // ---- Cafeteria dressing: two tables + two vending machines (per blueprint). ----
     const caf = ROOMS.cafeteria;
     const tableMat = new THREE.MeshStandardMaterial({ color: 0x33445c, roughness: 0.6 });
-    for (const [tx, tz] of [
-      [bpx(3), bpz(6.5)],
-      [bpx(3.5), bpz(10.5)],
-    ] as Array<[number, number]>) {
-      const t = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.4, 0.4, 16), tableMat);
-      t.position.set(tx, 4, tz);
-      t.castShadow = true;
-      t.userData.solid = true;
-      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 4, 8), tableMat);
-      leg.position.set(tx, 2, tz);
-      scene.add(t, leg);
+    const tableSpots: Array<[number, number, number]> = [
+      // [x, z, yaw] — face the two sets slightly differently so the pair reads
+      // as arranged furniture rather than clones.
+      [bpx(3), bpz(6.5), 0],
+      [bpx(3.5), bpz(10.5), Math.PI / 2],
+    ];
+    for (const [tx, tz, yaw] of tableSpots) {
+      if (this.tableProto) {
+        const tbl = this.tableProto.clone(true);
+        tbl.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (m.isMesh) {
+            m.castShadow = true;
+            m.receiveShadow = true;
+          }
+        });
+        tbl.position.set(tx, 0, tz);
+        tbl.rotation.y = yaw;
+        tbl.userData.solid = true;
+        scene.add(tbl);
+      } else {
+        const t = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.4, 0.4, 16), tableMat);
+        t.position.set(tx, 4, tz);
+        t.castShadow = true;
+        t.userData.solid = true;
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 4, 8), tableMat);
+        leg.position.set(tx, 2, tz);
+        scene.add(t, leg);
+      }
     }
     const vendMat = new THREE.MeshStandardMaterial({ color: 0x1c2740, roughness: 0.5, metalness: 0.4 });
     const vendGlowMat = new THREE.MeshStandardMaterial({
@@ -1176,17 +1206,81 @@ class PrologueCafeteriaScene implements IScene {
   }
 
   /**
-   * Generic to-go coffee cup, matching the confirmed Godot design: a tapered
-   * white body (wider at the rim), a green #51e460 sleeve band low on the body
-   * (blueprint places the band at 64–87% down the cup), and a short dark closed
-   * lid on top. No handle, no visible liquid — it's a lidded to-go cup.
-   *
-   * Modelled at the same pre-scale magnitude the counter/grip code expects (the
-   * caller applies scale 0.4, landing the ~1.2u body at ≈0.12 m for the 7.2u ≈
-   * 1.8 m characters), so the hand-grip offsets stay valid. Blueprint radii
-   * (top 0.035 m, bottom 0.028 m — a 1.25 taper) drive the body's proportions.
+   * Load the real prop GLBs once and cache normalized prototypes. Each proto is
+   * a wrapper Group (scale 1, origin at a useful pivot) so a clone can be scaled
+   * and placed exactly like the procedural mesh it replaces. A failed load
+   * leaves the proto undefined; makeCup()/the table dressing then fall back to
+   * their procedural geometry.
    */
-  private makeCup(): THREE.Group {
+  private async loadProps(): Promise<void> {
+    // Coffee cup — normalized so a clone is vertically centred on its origin at
+    // ~1.4u tall, matching the procedural cup makeCup() built (body + lid). The
+    // caller's ×0.4 scale then lands it at cup-in-hand size, keeping every grip
+    // offset (attachCupToHand / gripPoint) valid without re-tuning.
+    const cup = await loadModel("assets/models/coffee_cup.glb", () => new THREE.Group());
+    if (!cup.userData.isPlaceholder) {
+      this.cupProto = this.normalizeProp(cup, 1.4, "center");
+    }
+    // Cafeteria table + chairs — normalized to sit on the floor (base at y=0),
+    // XZ-centred on its origin, ~4.6u (≈1.15 m) tall so the set reads at true
+    // scale beside the 7.2u characters.
+    const table = await loadModel("assets/models/cafeteria_table.glb", () => new THREE.Group());
+    if (!table.userData.isPlaceholder) {
+      this.tableProto = this.normalizeProp(table, 4.6, "base");
+    }
+  }
+
+  /**
+   * Wrap a loaded GLB in a normalized pivot: uniformly scale it so its bounding
+   * box is `targetHeight` tall, then recentre so the wrapper's origin sits at
+   * the model's XZ centre and either its vertical centre ("center", for props
+   * held/placed by their middle like the cup) or its base ("base", for props
+   * that stand on the floor like the table). Returns the outer wrapper (scale 1)
+   * so callers manipulate scale/position without disturbing the normalization.
+   */
+  private normalizeProp(
+    model: THREE.Object3D,
+    targetHeight: number,
+    anchor: "center" | "base",
+  ): THREE.Group {
+    const wrapper = new THREE.Group();
+    const pivot = new THREE.Group();
+    wrapper.add(pivot);
+    pivot.add(model);
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const s = size.y > 1e-6 ? targetHeight / size.y : 1;
+    pivot.scale.setScalar(s);
+    pivot.position.set(
+      -center.x * s,
+      anchor === "base" ? -box.min.y * s : -center.y * s,
+      -center.z * s,
+    );
+    return wrapper;
+  }
+
+  /**
+   * A cafeteria coffee cup. Returns a clone of the real GLB prop when it loaded,
+   * otherwise builds the procedural fallback matching the confirmed Godot
+   * design: a tapered white body (wider at the rim), a green #51e460 sleeve band
+   * low on the body (64–87% down), and a short dark closed lid. Either way the
+   * result is ~1.4u tall and centred on its origin, so the caller's ×0.4 scale
+   * and the hand-grip offsets stay valid.
+   */
+  private makeCup(): THREE.Object3D {
+    if (this.cupProto) {
+      const clone = this.cupProto.clone(true);
+      clone.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) m.castShadow = true;
+      });
+      return clone;
+    }
+    return this.makeCupProcedural();
+  }
+
+  private makeCupProcedural(): THREE.Group {
     const cup = new THREE.Group();
     const H = 1.2; // body height (pre-scale); ≈0.12 m after the caller's ×0.4
     const rTop = 0.35; // wider rim  (0.035 m)
