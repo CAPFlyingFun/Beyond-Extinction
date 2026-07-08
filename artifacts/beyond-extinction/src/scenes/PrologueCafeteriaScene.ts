@@ -1244,6 +1244,7 @@ class PrologueCafeteriaScene implements IScene {
     // offset (attachCupToHand / gripPoint) valid without re-tuning.
     const cup = await loadModel("assets/models/coffee_cup.glb", () => new THREE.Group());
     if (!cup.userData.isPlaceholder) {
+      this.sanitizePropMaterials(cup);
       this.cupProto = this.normalizeProp(cup, 1.4, "center");
     }
     // Cafeteria table + chairs — normalized to sit on the floor (base at y=0),
@@ -1251,6 +1252,7 @@ class PrologueCafeteriaScene implements IScene {
     // scale beside the 7.2u characters.
     const table = await loadModel("assets/models/cafeteria_table.glb", () => new THREE.Group());
     if (!table.userData.isPlaceholder) {
+      this.sanitizePropMaterials(table);
       this.tableProto = this.normalizeProp(table, 4.6, "base");
       // The source Meshy scan didn't reconstruct the tabletop's underside, so it
       // has torn holes that show through when the camera dips below the top. Cap
@@ -1295,6 +1297,32 @@ class PrologueCafeteriaScene implements IScene {
       -center.z * s,
     );
     return wrapper;
+  }
+
+  /**
+   * Neutralise the Meshy prop materials the same way the Godot build's
+   * _fix_materials does. Meshy exports these props as fully metallic
+   * (metalness = 1, with a baked metallic-roughness map) and slightly emissive.
+   * A metal surface with no environment map to reflect renders dark/grey — which
+   * is exactly the "grey spots" the props showed here but not in Godot (Godot
+   * forces metallic = 0). Zeroing metalness + emissive makes them read as the
+   * clean matte surfaces they are, WITHOUT touching the colour texture.
+   */
+  private sanitizePropMaterials(obj: THREE.Object3D): void {
+    obj.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        const sm = m as THREE.MeshStandardMaterial;
+        if (sm.isMeshStandardMaterial) {
+          sm.metalness = 0;
+          sm.metalnessMap = null;
+          sm.emissiveIntensity = 0;
+          sm.needsUpdate = true;
+        }
+      }
+    });
   }
 
   /**
