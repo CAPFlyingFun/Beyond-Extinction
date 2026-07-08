@@ -1333,6 +1333,12 @@ class PrologueCafeteriaScene implements IScene {
           sm.metalness = 0;
           sm.metalnessMap = null;
           sm.emissiveIntensity = 0;
+          // Drop the normal map + go matte: the Meshy scan's noisy normal map was
+          // shading the white plastic gray/grainy under the lab lights (the "still
+          // gray on the chairs" the albedo lift couldn't fix). Without it the props
+          // read as clean smooth white plastic.
+          sm.normalMap = null;
+          sm.roughness = Math.max(sm.roughness, 0.9);
           sm.needsUpdate = true;
         }
       }
