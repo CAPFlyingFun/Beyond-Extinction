@@ -2029,6 +2029,17 @@ class PrologueCafeteriaScene implements IScene {
           mat.opacity = 1;
           mat.depthWrite = true;
           mat.alphaTest = 0;
+          // Same Meshy-export fix as the props (and Godot's _fix_materials):
+          // these characters ship fully metallic (metalness = 1 + a baked
+          // metallic-roughness map), which with no environment map renders as
+          // dark/grey patches on skin and clothing. Zero metalness + emissive so
+          // they read as the matte surfaces they are, without touching textures.
+          const sm = mat as THREE.MeshStandardMaterial;
+          if (sm.isMeshStandardMaterial) {
+            sm.metalness = 0;
+            sm.metalnessMap = null;
+            sm.emissiveIntensity = 0;
+          }
           mat.needsUpdate = true;
         }
       }
