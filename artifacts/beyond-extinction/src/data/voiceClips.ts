@@ -82,6 +82,10 @@ export const VOICE_CLIP_LIST: VoiceClip[] = [
   // line text is copied verbatim from lab_builder.gd — the single source of
   // truth — so the web plays exactly what the Godot prologue does.
   // ===================================================================
+  narrate(
+    "jack_journal_entry_zero",
+    "The lab journal, entry zero. Before the island. Before everything. I keep this because Sarah asked me to. She said engineers make terrible storytellers because we skip the human parts. So here are the human parts.",
+  ),
   jack("jack_get_coffee", "It's almost midnight, let me get Sarah some coffee and bring it to her."),
   jack("jack_to_sarah", "Nice. Now to Sarah."),
   jack("jack_no_response", "Hmm, that's strange. No response, but I do need to find my badge to make sure everything is okay."),

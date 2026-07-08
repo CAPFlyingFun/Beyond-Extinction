@@ -10,7 +10,10 @@ import { createPrologueScene } from "./PrologueCafeteriaScene";
  * the cold open of an interactive audiobook. New Game routes here first (see
  * MainMenuScene), then this scene hands off to the prologue.
  */
-const JOURNAL_CLIPS = ["intro_01", "intro_02"] as const;
+// One recording, one block of text (the uploaded jack_journal_entry_zero from
+// the assets pack) — the whole entry-zero paragraph types out in sync with the
+// single VO clip, rather than the earlier two-part split.
+const JOURNAL_CLIPS = ["jack_journal_entry_zero"] as const;
 
 class JournalIntroScene implements IScene {
   readonly name = "journal-intro";

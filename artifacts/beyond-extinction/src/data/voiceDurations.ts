@@ -30,6 +30,7 @@ export const VOICE_DURATIONS: Record<string, number> = {
   // Prologue VO imported from the uploaded assets pack (Godot jack_*/sarah_*).
   // These are the per-line hint durations from lab_builder.gd (ms) used only as
   // a pacing fallback — the real clip length is read from the audio at runtime.
+  "jack_journal_entry_zero": 13500,
   "jack_get_coffee": 4000,
   "jack_to_sarah": 2000,
   "jack_no_response": 5500,
