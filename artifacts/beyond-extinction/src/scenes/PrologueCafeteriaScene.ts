@@ -102,7 +102,9 @@ type Phase =
   | "to-glass" // approach Lab Seven glass door + use the badge reader
   | "to-badge" // door denied → find the lost badge in the server room
   | "to-sarah" // badge scans, door opens → reach Sarah at the console
-  | "accident" // scripted accident sequence (character switches to Sarah)
+  | "accident" // scripted accident beats (flicker/black/switch, restore, etc.)
+  | "sarah-flashlight" // PLAYER controls Sarah: find + grab the console flashlight
+  | "sarah-power" // PLAYER controls Sarah: cross to the power unit and restore
   | "cutscene" // closing pull-to-core tableau
   | "done";
 
@@ -168,6 +170,10 @@ class PrologueCafeteriaScene implements IScene {
 
   private jack!: THREE.Group;
   private sarah!: THREE.Group;
+  // Which character first-person control currently drives (mirrors the player's
+  // ground position and is hidden — camera in its head). Jack for the walk to
+  // Lab Seven; switches to Sarah for the accident blackout (flashlight + power).
+  private controlledActor!: THREE.Group;
   private coffeeMachine!: THREE.Mesh;
   private console!: THREE.Group;
   // The tagged desk child of the console group (userData.kind === "console").
@@ -220,7 +226,12 @@ class PrologueCafeteriaScene implements IScene {
   private flashlightSpot?: THREE.SpotLight;
   private flashlightActive = false;
   private powerUnit!: THREE.Object3D;
+  private powerUnitPanel?: THREE.MeshStandardMaterial;
   private accidentStarted = false;
+  // Baseline main-light intensities captured at the accident, so the blackout
+  // and the power-restore ramp can scale them uniformly across the interactive
+  // Sarah segment that runs between those two scripted beats.
+  private mainLightBase: number[] = [];
   // True once the emergency (red) lights should be lit; alarmOn adds the pulse.
   private emergencyOn = false;
 
@@ -480,6 +491,7 @@ class PrologueCafeteriaScene implements IScene {
 
     // ---- Characters ----
     this.jack = await this.buildCharacter("Jack", 0x3a78d0);
+    this.controlledActor = this.jack; // player drives Jack until the accident switch
     // Spawn at the far-west end of the hallway lane, facing east straight down
     // the lane toward the coffee counter — clear of every collider grown by
     // PLAYER_RADIUS. Jack walks a single straight line east to the counter,
@@ -1521,9 +1533,15 @@ class PrologueCafeteriaScene implements IScene {
     panel.position.set(-1.7, 6.5, 0);
     g.add(box, panel);
     g.position.copy(this.powerUnitWorld);
+    box.userData.kind = "power-unit"; // the USE target (the group origin is at floor)
     this.scene.add(g);
-    this.powerUnit = g;
-    (g.userData as { panel?: THREE.MeshStandardMaterial }).panel = panelMat;
+    this.powerUnit = box; // the tagged mesh is the FP interact target
+    this.powerUnitPanel = panelMat;
+    this.addHighlight(
+      box,
+      { color: "tech", icon: "\u{26A1}", radius: 2, markerHeight: 5.5 },
+      () => this.phase === "sarah-power",
+    );
   }
 
   /** Sarah's flashlight — rests on the console, grabbed during the blackout. */
@@ -1544,9 +1562,16 @@ class PrologueCafeteriaScene implements IScene {
     lens.position.x = 0.9;
     fl.add(body, lens);
     fl.position.set(3, 4.95, 2); // on the console desk top
+    fl.userData.kind = "flashlight";
     this.scene.add(fl);
     this.flashlight = fl;
     (fl.userData as { lens?: THREE.MeshStandardMaterial }).lens = lensMat;
+    // Story Focus marker so the player can find it in the dark, red-lit lab.
+    this.addHighlight(
+      fl,
+      { color: "story", icon: "\u{1F526}", radius: 1.3, markerHeight: 2.4 },
+      () => this.phase === "sarah-flashlight",
+    );
     // The cone light (off until she clicks it on), aimed by updateFlashlight().
     const spot = new THREE.SpotLight(0xfff2d0, 0, 70, Math.PI / 6, 0.45, 1.2);
     spot.visible = false;
@@ -2243,6 +2268,7 @@ class PrologueCafeteriaScene implements IScene {
    * layer alone owns the pointer.
    */
   private enterFirstPerson(): void {
+    this.controlledActor = this.jack;
     this.ownership.set("player");
     this.player.placeAt(this.jack.position.x, this.jack.position.z, 90);
     // Keep InputManager enabled so WASD/arrows still register; first-person mode
@@ -2257,6 +2283,18 @@ class PrologueCafeteriaScene implements IScene {
   }
 
   /**
+   * Seamless character switch: hand first-person control to `actor` (Sarah for
+   * the accident). Whoever was being controlled is revealed where they stand so
+   * they remain in the world (Jack stays at the console), then control, camera
+   * and body-hide move to the new actor via resumeFirstPerson.
+   */
+  private switchControlTo(actor: THREE.Group, lookAt?: THREE.Vector3): void {
+    if (this.controlledActor) this.controlledActor.visible = true;
+    this.controlledActor = actor;
+    this.resumeFirstPerson(lookAt);
+  }
+
+  /**
    * Temporarily hand the camera back to the cinematic director for a scripted
    * interlude (a dialogue or narration beat), hiding the first-person HUD and
    * showing Jack's body so the third-person framing and any scripted movement
@@ -2266,14 +2304,14 @@ class PrologueCafeteriaScene implements IScene {
    * the closing cutscene stay cinematic without a resume.
    */
   private suspendFirstPerson(): void {
-    // Snap Jack to the player's ground position so the cinematic framing and any
-    // scripted walk that follows start exactly where the player was standing.
-    this.jack.position.x = this.player.position.x;
-    this.jack.position.z = this.player.position.z;
+    // Snap the controlled actor to the player's ground position so the cinematic
+    // framing and any scripted walk that follows start exactly where they stood.
+    this.controlledActor.position.x = this.player.position.x;
+    this.controlledActor.position.z = this.player.position.z;
     this.player.setInteractPrompt(null);
     this.player.setActive(false);
     this.currentFpTarget = null;
-    this.jack.visible = true;
+    this.controlledActor.visible = true;
     this.ownership.set("cinematic");
     this.applyFov();
     this.cameraDirector.cut();
@@ -2286,13 +2324,14 @@ class PrologueCafeteriaScene implements IScene {
    * player starts oriented toward where they need to go.
    */
   private resumeFirstPerson(lookAt?: THREE.Vector3): void {
+    const actor = this.controlledActor;
     const facing = lookAt
-      ? this.headingTo(this.jack.position, lookAt)
+      ? this.headingTo(actor.position, lookAt)
       : this.player.headingDegrees();
     this.ownership.set("player");
-    this.player.placeAt(this.jack.position.x, this.jack.position.z, facing);
+    this.player.placeAt(actor.position.x, actor.position.z, facing);
     this.player.setActive(true);
-    this.jack.visible = false;
+    actor.visible = false;
     this.currentFpTarget = null;
     this.ctx.input.setEnabled(true);
     this.camera.fov = 75;
@@ -2331,6 +2370,10 @@ class PrologueCafeteriaScene implements IScene {
       this.badgeItem?.interact();
     } else if (this.phase === "to-sarah" && kind === "sarah") {
       void this.triggerReachSarah();
+    } else if (this.phase === "sarah-flashlight" && kind === "flashlight") {
+      this.onGrabFlashlight();
+    } else if (this.phase === "sarah-power" && kind === "power-unit") {
+      void this.onRestorePower();
     }
   }
 
@@ -2348,6 +2391,10 @@ class PrologueCafeteriaScene implements IScene {
         return this.badgeProp ?? null;
       case "to-sarah":
         return this.sarah;
+      case "sarah-flashlight":
+        return this.flashlight ?? null;
+      case "sarah-power":
+        return this.powerUnit;
       default:
         return null;
     }
@@ -2364,6 +2411,10 @@ class PrologueCafeteriaScene implements IScene {
         return "Pick up your badge";
       case "to-sarah":
         return "Talk to Sarah";
+      case "sarah-flashlight":
+        return "Grab the flashlight";
+      case "sarah-power":
+        return "Restore power";
       default:
         return "Interact";
     }
@@ -2376,6 +2427,8 @@ class PrologueCafeteriaScene implements IScene {
         return this.pickupRadius;
       case "to-glass":
         return 8; // ≈2 m — at the badge reader
+      case "sarah-power":
+        return 8; // the power unit is a big cabinet
       default:
         return 6.5;
     }
@@ -2388,9 +2441,10 @@ class PrologueCafeteriaScene implements IScene {
    */
   private updateFirstPerson(dt: number): void {
     const { moving } = this.player.update(dt, this.fpResolveMove);
-    this.jack.position.x = this.player.position.x;
-    this.jack.position.z = this.player.position.z;
-    this.applyLocomotion(this.jack, moving, dt);
+    const actor = this.controlledActor;
+    actor.position.x = this.player.position.x;
+    actor.position.z = this.player.position.z;
+    this.applyLocomotion(actor, moving, dt);
 
     const active = this.fpActiveTarget();
     let target: THREE.Object3D | null = null;
@@ -2731,13 +2785,19 @@ class PrologueCafeteriaScene implements IScene {
     void this.runAccidentSequence();
   }
 
+  /** Scale every main (non-emergency) light by `k` off its captured baseline. */
+  private scaleMainLights(k: number): void {
+    this.mainLights.forEach((l, i) => (l.intensity = (this.mainLightBase[i] ?? 0) * k));
+  }
+
   /**
-   * The accident sequence, beat-for-beat from the confirmed Godot design:
-   * lights flicker and cut to black → seamless switch to Sarah in the dark →
-   * red emergency lights → Sarah takes the console flashlight → crosses the lab
-   * walkway to the power unit → power restores, lab lights return → alarms →
-   * Sarah's comms get no answer from Jack → both are pulled into the accelerator
-   * core and touch it → slow fade to BLACK (never white) → "Beyond Extinction".
+   * The accident sequence, beat-for-beat from the confirmed Godot design.
+   * SCRIPTED intro: lights flicker and cut to black → seamless switch to Sarah
+   * in the dark → red emergency lights. Then control is handed to the PLAYER as
+   * SARAH: grab the console flashlight (onGrabFlashlight) and cross the walkway
+   * to the power unit (onRestorePower), which resumes the scripted outro:
+   * power/lights return → alarms → comms get no answer → both pulled into the
+   * core → slow fade to BLACK (never white) → "Beyond Extinction".
    */
   private async runAccidentSequence(): Promise<void> {
     if (this.accidentStarted) return;
@@ -2748,53 +2808,67 @@ class PrologueCafeteriaScene implements IScene {
     this.dropAllCoffees();
 
     // --- 1. Lights flicker, then cut to black -------------------------------
-    const base = this.mainLights.map((l) => l.intensity);
-    const scaleLights = (k: number) =>
-      this.mainLights.forEach((l, i) => (l.intensity = base[i] * k));
+    this.mainLightBase = this.mainLights.map((l) => l.intensity);
     this.ctx.audio.playSfx("power-fail");
     for (const k of [0.15, 1, 0.05, 0.7, 0, 0.4, 0]) {
-      scaleLights(k);
+      this.scaleMainLights(k);
       await this.wait(110);
       if (this.disposed) return;
     }
-    scaleLights(0); // full blackout
+    this.scaleMainLights(0); // full blackout
     await this.ctx.overlays.fadeToBlack(260);
     if (this.disposed) return;
 
     // --- 2. Seamless switch to Sarah while the screen is dark ---------------
-    // No loading screen: reposition the camera onto Sarah and turn the emergency
-    // lights on behind the black, then lift the black to reveal the red-lit lab.
-    this.setCameraMoment("sarah-follow", { cut: true });
+    // No loading screen: the emergency lights come up behind the black and
+    // first-person control moves from Jack (who stays at the console) to Sarah.
     this.emergencyOn = true; // red emergency lights come up (see update())
-    await this.wait(500);
+    this.faceTowards(this.jack, this.coreWorld);
+    this.switchControlTo(this.sarah, this.flashlight?.position);
+    this.phase = "sarah-flashlight";
+    await this.wait(400);
     if (this.disposed) return;
     await this.ctx.overlays.fadeFromBlack(600);
     if (this.disposed) return;
 
-    // --- 3 & 4. Sarah finds the flashlight on the console and clicks it on ---
-    this.faceTowards(this.sarah, this.powerUnitWorld);
+    // --- 3. PLAYER now controls Sarah: find and grab the flashlight. --------
+    this.ctx.overlays.showHint("Power's out. Find the flashlight on the console");
+    // Control stays with the player until they USE the flashlight (onGrabFlashlight),
+    // then the power unit (onRestorePower) resumes the scripted outro.
+  }
+
+  /**
+   * PLAYER-Sarah grabs the console flashlight (USE). The cone switches on and the
+   * objective becomes crossing to the power unit. Control stays with the player.
+   */
+  private onGrabFlashlight(): void {
+    if (this.flashlightActive) return;
     this.grabFlashlight();
     this.ctx.audio.playSfx("flashlight-click");
-    await this.wait(700);
-    if (this.disposed) return;
+    this.currentFpTarget = null;
+    this.phase = "sarah-power";
+    this.ctx.overlays.showHint("Cross the walkway to the emergency power unit");
+  }
 
-    // --- 5. Sarah crosses the lab walkway to the power unit -----------------
-    this.ctx.overlays.showHint("Power's out — reach the emergency power unit");
-    await new Promise<void>((resolve) => {
-      this.sarahNav.goTo(this.powerUnitWorld.clone().add(new THREE.Vector3(-3, 0, 0)), resolve);
-    });
-    if (this.disposed) return;
+  /**
+   * PLAYER-Sarah reaches the power unit (USE) and restores power — this ends the
+   * playable segment and resumes the scripted accident outro.
+   */
+  private async onRestorePower(): Promise<void> {
+    if (this.phase !== "sarah-power") return;
+    // Back to cinematic for the closing beats.
+    this.suspendFirstPerson();
+    this.phase = "accident";
+    this.setCameraMoment("sarah-follow", { cut: true });
     this.faceTowards(this.sarah, this.powerUnitWorld);
-    await this.wait(500);
-    if (this.disposed) return;
+    this.ctx.overlays.hideHint();
 
     // --- 6. Power restores: lab lights return, flashlight off ---------------
     this.ctx.audio.playSfx("power-restore");
     this.stowFlashlight();
-    const panel = (this.powerUnit.userData as { panel?: THREE.MeshStandardMaterial }).panel;
-    if (panel) {
-      panel.emissive.setHex(0x2ad24a);
-      panel.emissiveIntensity = 1.4;
+    if (this.powerUnitPanel) {
+      this.powerUnitPanel.emissive.setHex(0x2ad24a);
+      this.powerUnitPanel.emissiveIntensity = 1.4;
     }
     // Ramp the main lights back up over ~700 ms.
     await new Promise<void>((resolve) => {
@@ -2802,7 +2876,7 @@ class PrologueCafeteriaScene implements IScene {
       const tick = () => {
         if (this.disposed) return resolve();
         const k = Math.min((performance.now() - t0) / 700, 1);
-        scaleLights(k);
+        this.scaleMainLights(k);
         if (k < 1) requestAnimationFrame(tick);
         else resolve();
       };
@@ -3296,19 +3370,32 @@ class PrologueCafeteriaScene implements IScene {
     // evenly so neither character's deliberate movement "wins" outright.
     this.resolveCharacterOverlap();
 
-    // Auto proximity + badge-gated doors: slide open/closed against Jack's
-    // position (which mirrors the player in first person) and play a hiss on the
-    // opening edge. Their closed gaps block movement via isBlocked().
-    for (const d of this.doors) d.update(dt, this.jack.position);
+    // Auto proximity + badge-gated doors: slide open/closed against the
+    // controlled actor's position (which mirrors the player in first person) and
+    // play a hiss on the opening edge. Their closed gaps block via isBlocked().
+    for (const d of this.doors) d.update(dt, this.controlledActor.position);
 
-    // Sarah's flashlight cone during the blackout: sit it at her head and aim it
-    // a few metres ahead along her facing.
+    // Sarah's flashlight cone during the blackout. While the player controls
+    // Sarah (first person) it follows the camera aim; during the scripted outro
+    // it sits at her head and points along her facing.
     if (this.flashlightActive && this.flashlightSpot) {
-      const head = this.sarah.position.clone();
-      head.y += 6;
-      this.flashlightSpot.position.copy(head);
-      const fwd = new THREE.Vector3(Math.sin(this.sarah.rotation.y), -0.15, -Math.cos(this.sarah.rotation.y));
-      this.flashlightSpot.target.position.copy(head).addScaledVector(fwd, 14);
+      if (this.ownership.is("player")) {
+        this.flashlightSpot.position.copy(this.camera.position);
+        this.camera.getWorldDirection(this.fpTmp);
+        this.flashlightSpot.target.position
+          .copy(this.camera.position)
+          .addScaledVector(this.fpTmp, 16);
+      } else {
+        const head = this.sarah.position.clone();
+        head.y += 6;
+        this.flashlightSpot.position.copy(head);
+        const fwd = new THREE.Vector3(
+          Math.sin(this.sarah.rotation.y),
+          -0.15,
+          -Math.cos(this.sarah.rotation.y),
+        );
+        this.flashlightSpot.target.position.copy(head).addScaledVector(fwd, 14);
+      }
     }
 
     // Emergency lighting: red lights come up when the power fails, and pulse once
