@@ -108,6 +108,16 @@ body {
 .be-splash-bg.show {
   opacity: 1;
 }
+/* Animated splash video, covering the still key art it sits over. The bottom
+   scrim (::after, painted after this in DOM order) still lands on top. */
+.be-splash-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
 /* Bottom scrim so the menu buttons stay legible over any key art. */
 .be-splash-bg::after {
   content: "";

@@ -17,6 +17,13 @@ const SFX_TRACKS: Record<string, string> = {
   alarm: "assets/audio/alarm.mp3",
   "vortex-open": "assets/audio/vortex-open.mp3",
   "vortex-pull": "assets/audio/vortex-pull.mp3",
+  // Prologue interaction cues (scene cue name → uploaded file). The scene names
+  // predate the files, so the mapping bridges them: badge scan accept/deny, the
+  // knock on the lab door, and the badge/item pickup.
+  "badge-accept": "assets/audio/badge-ok.mp3",
+  "buzz-deny": "assets/audio/badge-deny.mp3",
+  "door-knock": "assets/audio/door-knock.mp3",
+  "badge-pickup": "assets/audio/item-pickup.mp3",
 };
 
 // Base music level. Kept deliberately low so the score is atmosphere, not a

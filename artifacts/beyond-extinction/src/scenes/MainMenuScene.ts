@@ -7,6 +7,7 @@ import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 
 const SPLASH_LANDSCAPE = assetUrl("assets/branding/splash-landscape.jpg");
 const SPLASH_PORTRAIT = assetUrl("assets/branding/splash-portrait.jpg");
+const SPLASH_VIDEO = assetUrl("assets/branding/splash.mp4");
 
 /**
  * Title screen. The branded key art is the backdrop (portrait art on tall
@@ -58,6 +59,27 @@ class MainMenuScene implements IScene {
     this.ctx.uiLayer.appendChild(el);
     this.backdropEl = el;
     this.updateBackdrop();
+
+    // Animated splash video layered over the still key art. The still image
+    // stays behind it as the poster/fallback, so a blocked or unsupported video
+    // (or the moment before it buffers) always shows the branded art. Muted +
+    // playsinline + autoplay so it starts without a user gesture on mobile; the
+    // bottom scrim (.be-splash-bg::after) still paints on top to keep the menu
+    // legible. Removed with the backdrop in dispose().
+    const video = document.createElement("video");
+    video.className = "be-splash-video";
+    video.src = SPLASH_VIDEO;
+    video.muted = true;
+    video.loop = true;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.setAttribute("playsinline", ""); // iOS honours the attribute form
+    video.setAttribute("aria-hidden", "true");
+    el.appendChild(video);
+    video.play().catch(() => {
+      /* Autoplay blocked / codec unsupported — the still key art shows. */
+    });
+
     requestAnimationFrame(() => el.classList.add("show"));
   }
 
