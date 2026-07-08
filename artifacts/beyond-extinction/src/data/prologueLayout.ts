@@ -19,8 +19,11 @@ export const bpx = (mx: number): number => (mx - BP_CENTER_X) * M;
 export const bpz = (mz: number): number => (mz - BP_CENTER_Z) * M;
 
 export const WALL_THICKNESS = 0.2 * M; // 0.8u
-export const WALL_HEIGHT = 24; // cafeteria / hallway / server
-export const LAB_WALL_HEIGHT = 34; // the lab has a taller ceiling
+// Ceiling heights at this scene's ×4 scale (1 m = 4u, Jack 1.8 m = 7.2u): the
+// cafeteria, hallway and server room are 3 m (12u); only Lab Seven is taller at
+// 5 m (20u) — exactly as in the Godot build.
+export const WALL_HEIGHT = 12; // 3 m — cafeteria / hallway / server
+export const LAB_WALL_HEIGHT = 20; // 5 m — Lab Seven
 export const LEDGE_WIDTH = 1.2 * M; // 4.8u walkway ledge along interior lab walls
 export const LEDGE_HEIGHT = 0.8;
 /** Door openings are widened to 1.5m (6u) from the blueprint's 1m so the
