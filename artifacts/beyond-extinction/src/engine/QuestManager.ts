@@ -67,23 +67,46 @@ export class QuestManager {
   complete(id: string, opts?: { holdMs?: number; nextId?: string }): void {
     const def = this.defs.get(id);
     if (!def) return;
-    // Only the currently active objective can complete — guards against a
-    // double-fire or an out-of-sequence call replaying the ✓ tick.
-    if (this.states.get(id) !== "active") return;
+    // Guard only against a genuine double-fire (already completed). Crucially we
+    // do NOT require `id` to still be the visibly-active objective: the previous
+    // beat's completion tick delays the NEXT activate by holdMs, and beats can
+    // finish faster than that (e.g. grabbing both coffees quickly). Advancing the
+    // logical active id immediately (below) means a rapid follow-up complete is
+    // never dropped — which is exactly what left the HUD stuck on "one more to go".
+    if (this.states.get(id) === "completed") return;
     this.cancelTimer();
     this.states.set(id, "completed");
-    this.activeId = id;
+
+    const nextId = opts?.nextId;
+    // Advance the LOGICAL current objective right away so the next complete()
+    // sees its target as active even while this one's ✓ tick is still showing.
+    if (nextId && this.defs.has(nextId) && this.states.get(nextId) !== "completed") {
+      this.states.set(nextId, "active");
+      this.activeId = nextId;
+    } else {
+      this.activeId = null;
+    }
+
+    // Visual: brief ✓ on the just-finished objective, then reveal the next one
+    // (or hide the HUD). A later complete() cancels this timer, so the HUD always
+    // catches up to the newest objective rather than replaying a stale one.
     this.render(def.text, "completed");
     const holdMs = opts?.holdMs ?? 1000;
-    const nextId = opts?.nextId;
     this.completionTimer = window.setTimeout(() => {
       this.completionTimer = null;
-      if (nextId) {
-        this.activate(nextId);
-      } else {
+      const nextDef = nextId ? this.defs.get(nextId) : undefined;
+      if (nextDef && this.activeId === nextId && this.states.get(nextId) === "active") {
+        this.render(nextDef.text, "active");
+      } else if (!nextId && this.activeId === null) {
         this.clear();
       }
     }, holdMs);
+  }
+
+  /** The current active objective's text (for the inventory panel), or "". */
+  activeText(): string {
+    if (!this.activeId) return "";
+    return this.defs.get(this.activeId)?.text ?? "";
   }
 
   /** Ad-hoc single-line objective (compatibility shim, no completion state). */

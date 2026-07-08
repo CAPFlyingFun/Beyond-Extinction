@@ -27,6 +27,8 @@ import { SequenceDirector } from "../engine/SequenceDirector";
 import { labOpeningNarration, introSequence } from "../data/prologueSequences";
 import { VOICE_CLIPS } from "../data/voiceClips";
 import { VOICE_DURATIONS } from "../data/voiceDurations";
+import { Minimap } from "../engine/Minimap";
+import { InventoryOverlay } from "../engine/InventoryOverlay";
 import { createChapterOneScene } from "./ChapterOnePlaceholderScene";
 import {
   getSettings,
@@ -259,6 +261,8 @@ class PrologueCafeteriaScene implements IScene {
   // gestures). The Phase machine still gates BETWEEN beats; the director drives
   // what happens within one. See SequenceDirector / prologueSequences.
   private director!: SequenceDirector;
+  private minimap?: Minimap;
+  private inventory?: InventoryOverlay;
   // When set, a top-priority camera zone (see buildCameraZones) frames this
   // named scripted moment instead of the phase-based zones. Cleared back to
   // null to hand framing back to gameplay.
@@ -630,6 +634,25 @@ class PrologueCafeteriaScene implements IScene {
 
     this.phase = "coffee";
     this.ctx.quest.configure(prologueObjectives);
+
+    // HUD: the blueprint minimap (top-right) + the ARK-style inventory (I / 🎒).
+    const dw = DOOR_WIDTH / 2;
+    const doorSeg = (d: DoorSpec) =>
+      d.axis === "z"
+        ? { x0: d.x, z0: d.z - dw, x1: d.x, z1: d.z + dw }
+        : { x0: d.x - dw, z0: d.z, x1: d.x + dw, z1: d.z };
+    this.minimap = new Minimap(this.ctx.uiLayer, {
+      bounds: WORLD_BOUNDS,
+      rooms: [ROOMS.cafeteria, ROOMS.hallway, ROOMS.server, ROOMS.lab],
+      doors: [doorSeg(DOORS.cafeteriaHall), doorSeg(DOORS.serverHall), doorSeg(DOORS.labGlass)],
+      circles: [{ x: RING_CENTER.x, z: RING_CENTER.z, r: RING_RADIUS }],
+    });
+    this.inventory = new InventoryOverlay(this.ctx.uiLayer, {
+      getObjective: () => this.ctx.quest.activeText(),
+      setFrozen: (frozen) => this.ctx.input.setEnabled(!frozen),
+      canOpen: () => this.canOpenInventory(),
+      playSfx: (n) => this.ctx.audio.playSfx(n),
+    });
     // Snap straight to Camera 1 (the hallway-follow third-person zone, which is
     // active throughout the coffee phase) on the very first rendered frame, so
     // the cold open opens ON Jack instead of easing in from the default framing.
@@ -4100,6 +4123,56 @@ class PrologueCafeteriaScene implements IScene {
     }
 
     this.updateHighlights(dt);
+
+    // Minimap: feed the active actor's position + look direction and the current
+    // objective marker, then redraw.
+    if (this.minimap) {
+      this.camera.getWorldDirection(this.fpTmp);
+      const a = this.controlledActor.position;
+      this.minimap.setPlayer(a.x, a.z, this.fpTmp.x, this.fpTmp.z);
+      this.minimap.setMarker(this.markerForPhase());
+      this.minimap.render(dt);
+    }
+  }
+
+  /** World XZ of the current objective for the minimap dot (null if none). */
+  private markerForPhase(): { x: number; z: number } | null {
+    const p = (v: THREE.Vector3) => ({ x: v.x, z: v.z });
+    switch (this.phase) {
+      case "coffee":
+        return p(this.coffeeCounterWorld);
+      case "to-glass":
+      case "knock":
+        return { x: DOORS.labGlass.x, z: DOORS.labGlass.z };
+      case "to-badge":
+        return p(ANCHORS.badge);
+      case "to-sarah":
+        return p(ANCHORS.sarah);
+      case "sarah-flashlight":
+        return this.flashlight ? p(this.flashlight.position) : null;
+      case "sarah-power":
+        return p(this.powerUnitWorld);
+      default:
+        return null;
+    }
+  }
+
+  /** The inventory may open only during free-roam moments (never mid-cutscene). */
+  private canOpenInventory(): boolean {
+    const freeRoam =
+      this.phase === "coffee" ||
+      this.phase === "to-glass" ||
+      this.phase === "knock" ||
+      this.phase === "to-badge" ||
+      this.phase === "to-sarah" ||
+      this.phase === "sarah-flashlight" ||
+      this.phase === "sarah-power";
+    return (
+      freeRoam &&
+      this.ctx.input.inputEnabled &&
+      !this.ctx.dialogue.isActive &&
+      !this.confirmOpen
+    );
   }
 
   resize(width: number, height: number): void {
@@ -4143,6 +4216,8 @@ class PrologueCafeteriaScene implements IScene {
     this.gearEl?.remove();
     this.gripTunerEl?.remove();
     this.unbindTunerGesture?.();
+    this.minimap?.dispose();
+    this.inventory?.dispose();
     this.ctx.overlays.hideClock();
     this.ctx.input.setEnabled(true);
     this.scene.traverse((o) => {
