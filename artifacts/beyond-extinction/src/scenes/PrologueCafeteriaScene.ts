@@ -311,9 +311,10 @@ class PrologueCafeteriaScene implements IScene {
   private consoleDeskWorld = ANCHORS.deliveryConsole.clone();
   /** Sarah's spot at the console (blueprint anchor, just west of the ring). */
   private readonly sarahConsoleSpot = ANCHORS.sarah.clone();
-  /** The emergency power unit on the FAR (east) side of the lab walkway that
-   * Sarah crosses to during the accident to restore power. Blueprint anchor. */
-  private readonly powerUnitWorld = ANCHORS.rebootConsole.clone();
+  /** Approach point on the deck in front of the east-wall mainframe that Sarah
+   * crosses to during the accident to restore power. Set from the mainframe's
+   * position in buildLabInterior (the mainframe IS the reboot target). */
+  private powerUnitWorld = ANCHORS.rebootConsole.clone();
   // Where the coffee counter sits, for the coffee-counter camera zone's
   // proximity trigger and the FP pickup reach (see buildCoffeeMachine). At the
   // blueprint's coffee-cart spot against the cafeteria's south wall — visible on
@@ -651,6 +652,10 @@ class PrologueCafeteriaScene implements IScene {
       getObjective: () => this.ctx.quest.activeText(),
       setFrozen: (frozen) => this.ctx.input.setEnabled(!frozen),
       canOpen: () => this.canOpenInventory(),
+      getRole: () =>
+        this.controlledActor === this.sarah
+          ? "SARAH · Lead Scientist"
+          : "JACK · Lab Technician",
       playSfx: (n) => this.ctx.audio.playSfx(n),
     });
     // Snap straight to Camera 1 (the hallway-follow third-person zone, which is
@@ -1688,16 +1693,30 @@ class PrologueCafeteriaScene implements IScene {
     box(gp(LCX, 0.6, LCZ - 4.6), 0.6, 1.2, 0.6, mMetal, true);
     box(gp(LCX, 1.7, LCZ - 4.6), 0.5, 0.8, 0.5, mScreen);
 
-    // ── East-wall mainframe bank (solid — safely at the back wall) + racks ──
+    // ── East-wall mainframe bank (solid) + racks. The mainframe tower IS the
+    // emergency power-unit reboot target (Godot) — not a freestanding box. ──
     const bxc = 24.5;
-    box(gp(bxc, 1.35, LCZ), 0.55, 2.7, 1.9, mMetal, true); // tower
+    const mainframe = box(gp(bxc, 1.35, LCZ), 0.55, 2.7, 1.9, mMetal, true); // tower
     box(gp(bxc - 0.31, 1.65, LCZ), 0.05, 1.66, 1.66, mCool); // bezel glow
-    box(gp(bxc - 0.33, 1.65, LCZ), 0.05, 1.48, 1.48, mScreen); // display
+    // Dedicated material (not shared mScreen) so the display can pulse red while
+    // it's the objective, then flip green on reboot.
+    const mfPanel = new THREE.MeshStandardMaterial({
+      color: 0x0a1828,
+      emissive: 0xff3a2a,
+      emissiveIntensity: 0,
+    });
+    box(gp(bxc - 0.33, 1.65, LCZ), 0.05, 1.48, 1.48, mfPanel); // display
     box(gp(bxc - 0.33, 2.86, LCZ), 0.04, 0.1, 1.9, mWarm); // status strip
     for (const z of [4.6, 5.9, 10.1, 11.4]) {
       box(gp(bxc, 1.05, z), 0.55, 2.1, 1.05, mMetal, true); // rack body
       box(gp(bxc - 0.33, 1.28, z), 0.05, 1.42, 0.74, mScreen); // rack panel
     }
+    // Wire it up: the tower is the USE target, its display glows/greens, and the
+    // player approaches from the deck just west of it (through the east rail gap).
+    mainframe.userData.kind = "power-unit";
+    this.powerUnit = mainframe;
+    this.powerUnitPanel = mfPanel;
+    this.powerUnitWorld = gp(bxc - 1.6, 0, LCZ);
 
     // ── Walkway railing (SOLID) with a west entry gap aligned to the glass door ──
     const ix0 = 10.0 + 1.2;
@@ -1975,34 +1994,16 @@ class PrologueCafeteriaScene implements IScene {
     );
   }
 
-  /** Emergency power unit on the far (east) side of the lab walkway. */
+  /**
+   * The emergency power-unit reboot target is the east-wall MAINFRAME (built in
+   * buildLabInterior, which set this.powerUnit / this.powerUnitPanel). Here we
+   * just add its objective marker — the ⚡ floats above the tall tower (anchor is
+   * the tower centre at y≈5.4) while the display panel glows below.
+   */
   private buildPowerUnit(): void {
-    const g = new THREE.Group();
-    const box = new THREE.Mesh(
-      new THREE.BoxGeometry(3, 10, 3),
-      new THREE.MeshStandardMaterial({ color: 0x1c2634, roughness: 0.6, metalness: 0.5 }),
-    );
-    box.position.y = 5;
-    box.castShadow = true;
-    box.userData.solid = true;
-    const panelMat = new THREE.MeshStandardMaterial({
-      color: 0x0a1828,
-      emissive: 0xff3a2a,
-      emissiveIntensity: 0, // dark until the accident (then blinks, then green)
-    });
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2.4, 2), panelMat);
-    panel.position.set(-1.7, 6.5, 0);
-    g.add(box, panel);
-    g.position.copy(this.powerUnitWorld);
-    box.userData.kind = "power-unit"; // the USE target (the group origin is at floor)
-    this.scene.add(g);
-    this.powerUnit = box; // the tagged mesh is the FP interact target
-    this.powerUnitPanel = panelMat;
     this.addHighlight(
-      box,
-      // Marker floats WELL ABOVE the 10u-tall housing (anchor is the box centre
-      // at y≈5) so the ⚡ isn't buried inside it; the panel also glows below.
-      { color: "tech", icon: "\u{26A1}", radius: 2, markerHeight: 9 },
+      this.powerUnit,
+      { color: "tech", icon: "\u{26A1}", radius: 2.4, markerHeight: 7 },
       () => this.phase === "sarah-power",
     );
   }
@@ -3640,6 +3641,7 @@ class PrologueCafeteriaScene implements IScene {
   /** Move the console flashlight into Sarah's hand and switch its cone on. */
   private grabFlashlight(): void {
     if (!this.flashlight) return;
+    PlayerInventory.hold("flashlight"); // show it in the inventory once grabbed
     const hand = this.handBone(this.sarah, "right") ?? this.sarah;
     hand.attach(this.flashlight);
     this.flashlight.position.set(0, 0, 0);

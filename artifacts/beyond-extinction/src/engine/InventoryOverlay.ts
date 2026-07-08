@@ -26,6 +26,8 @@ function itemInfo(id: string): ItemInfo {
       return { name: "Coffee", tint: "#754c2e" };
     case "badge":
       return { name: "Keycard", tint: "#1a7af2" };
+    case "flashlight":
+      return { name: "Flashlight", tint: "#d9c04a" };
     default:
       return { name: id, tint: "#4d5a66" };
   }
@@ -38,6 +40,8 @@ export interface InventoryHooks {
   setFrozen: (frozen: boolean) => void;
   /** Whether the inventory may open right now (free roam, no cutscene). */
   canOpen: () => boolean;
+  /** Current character label for the "YOU" column (e.g. "SARAH · Lead Scientist"). */
+  getRole?: () => string;
   playSfx?: (name: string) => void;
 }
 
@@ -46,6 +50,7 @@ export class InventoryOverlay {
   private readonly button: HTMLButtonElement;
   private gridEl!: HTMLDivElement;
   private objEl!: HTMLDivElement;
+  private roleEl!: HTMLDivElement;
   private weightFill!: HTMLDivElement;
   private weightVal!: HTMLSpanElement;
   private open = false;
@@ -61,6 +66,7 @@ export class InventoryOverlay {
     parent.appendChild(this.root);
     this.gridEl = this.root.querySelector(".be-inv__grid")!;
     this.objEl = this.root.querySelector(".be-inv__obj")!;
+    this.roleEl = this.root.querySelector(".be-inv__role")!;
     this.weightFill = this.root.querySelector(".be-inv__weightfill")!;
     this.weightVal = this.root.querySelector(".be-inv__weightval")!;
 
@@ -121,6 +127,8 @@ export class InventoryOverlay {
     const cups = PlayerInventory.count("coffee");
     if (cups > 0) items.push({ id: "coffee", qty: cups });
     if (PlayerInventory.hasBadge) items.push({ id: "badge", qty: 1 });
+    const torches = PlayerInventory.count("flashlight");
+    if (torches > 0) items.push({ id: "flashlight", qty: torches });
 
     const total = COLS * ROWS;
     let html = "";
@@ -137,7 +145,9 @@ export class InventoryOverlay {
     this.gridEl.innerHTML = html;
 
     this.objEl.textContent = this.hooks.getObjective() || "—";
-    const weight = cups * 0.3 + (PlayerInventory.hasBadge ? 0.1 : 0);
+    if (this.hooks.getRole && this.roleEl) this.roleEl.textContent = this.hooks.getRole();
+    const weight =
+      cups * 0.3 + (PlayerInventory.hasBadge ? 0.1 : 0) + torches * 0.5;
     this.weightVal.textContent = `${weight.toFixed(1)} / 80`;
     this.weightFill.style.width = `${Math.min(weight / 80, 1) * 100}%`;
   }
