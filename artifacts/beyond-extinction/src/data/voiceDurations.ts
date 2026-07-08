@@ -26,5 +26,22 @@ export const VOICE_DURATIONS: Record<string, number> = {
   "lab_narr_05": 10684,
   "lab_c_04": 549,
   "lab_c_05": 1437,
-  "lab_narr_06": 10527
+  "lab_narr_06": 10527,
+  // Prologue VO imported from the uploaded assets pack (Godot jack_*/sarah_*).
+  // These are the per-line hint durations from lab_builder.gd (ms) used only as
+  // a pacing fallback — the real clip length is read from the audio at runtime.
+  "jack_get_coffee": 4000,
+  "jack_to_sarah": 2000,
+  "jack_no_response": 5500,
+  "jack_badge_found": 5000,
+  "sarah_dont_have_to": 2000,
+  "jack_i_did_it_anyway": 1800,
+  "sarah_look_at_readings": 2200,
+  "jack_should_i_call": 1500,
+  "sarah_im_the_someone": 2000,
+  "jack_how_bad": 1000,
+  "sarah_dont_know_yet": 1800,
+  "jack_what_happened": 2000,
+  "sarah_cascade_failing": 2800,
+  "sarah_find_flashlight": 2600
 };

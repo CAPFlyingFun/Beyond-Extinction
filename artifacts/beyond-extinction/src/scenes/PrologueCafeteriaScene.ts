@@ -28,9 +28,9 @@ import {
   labOpeningNarration,
   badgeFound,
   introSequence,
-  alarmNarration,
   portalClimax,
 } from "../data/prologueSequences";
+import { VOICE_CLIPS } from "../data/voiceClips";
 import { VOICE_DURATIONS } from "../data/voiceDurations";
 import { createChapterOneScene } from "./ChapterOnePlaceholderScene";
 import {
@@ -3253,11 +3253,7 @@ class PrologueCafeteriaScene implements IScene {
     this.ctx.audio.playSfx("door-knock");
     await this.wait(3000); // exactly three seconds, no answer
     if (this.disposed) return;
-    await this.sayLine(
-      "Jack",
-      "Hmm, that's strange. No response — but I do need to find my badge to make sure everything's okay.",
-      4600,
-    );
+    await this.speakClip("jack_no_response");
     if (this.disposed) return;
     this.ctx.dialogue.hideSubtitle();
     this.ctx.quest.complete("knock", { nextId: "find-badge" });
@@ -3266,10 +3262,28 @@ class PrologueCafeteriaScene implements IScene {
     this.ctx.input.setEnabled(true);
   }
 
-  /** Show a subtitle line and hold for `ms` (no VO yet — Replit re-voices). */
+  /** Show a subtitle line and hold for `ms` (used only for any unvoiced beat). */
   private async sayLine(speaker: string, text: string, ms: number): Promise<void> {
     this.ctx.dialogue.showSubtitle({ speaker, text });
     await this.wait(ms);
+  }
+
+  /**
+   * Speak a single manifest VO clip: show its subtitle (respecting the CC
+   * setting) and await the actual audio, so pacing follows the voice. Mirrors
+   * the SequenceDirector's "say" step for the beats that play outside a timeline
+   * (the knock and the accident, which interleave gameplay between lines).
+   */
+  private async speakClip(id: string): Promise<void> {
+    const clip = VOICE_CLIPS[id];
+    if (clip) {
+      this.ctx.dialogue.showSubtitle({
+        speaker: clip.speaker,
+        text: clip.text,
+        narration: clip.narration,
+      });
+    }
+    await this.ctx.audio.playVoice(id);
   }
 
   /** USE on the dropped badge: has_badge = true and the badge prop disappears. */
@@ -3374,7 +3388,7 @@ class PrologueCafeteriaScene implements IScene {
     this.ctx.audio.playSfx("alarm");
     // Jack reacts in the dark, still first person (his camera, control not yet
     // swapped).
-    await this.sayLine("Jack", "What happened?", 1800);
+    await this.speakClip("jack_what_happened");
     if (this.disposed) return;
     this.ctx.dialogue.hideSubtitle();
 
@@ -3392,14 +3406,11 @@ class PrologueCafeteriaScene implements IScene {
     await this.ctx.overlays.fadeFromBlack(800);
     if (this.disposed) return;
 
-    // The red-lit lab is revealed — Jack's journal narration of the alarms
-    // ("Every light in Lab Seven turned red.") plays over it (VOICED: lab_narr_03).
-    await this.director.play(alarmNarration);
+    // Sarah's two lines, voiced with the uploaded recordings (Godot
+    // lab_builder.gd:916-918).
+    await this.speakClip("sarah_cascade_failing");
     if (this.disposed) return;
-
-    await this.sayLine("Sarah", "The cascade is failing — I need to get to the manual override.", 2800);
-    if (this.disposed) return;
-    await this.sayLine("Sarah", "There's an emergency flashlight on my station. Go — find it!", 2600);
+    await this.speakClip("sarah_find_flashlight");
     if (this.disposed) return;
     this.ctx.dialogue.hideSubtitle();
 

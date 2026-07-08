@@ -39,20 +39,23 @@ export const labOpeningNarration: TimelineStep[] = [
  * sequence resolves (see PrologueCafeteriaScene.onPickUpBadge).
  */
 export const badgeFound: TimelineStep[] = [
-  { kind: "say", clip: "lab_badge_found" },
+  { kind: "say", clip: "jack_badge_found" },
 ];
 
-/** Coffee delivery / first exchange at Sarah's side (intro-dialogue phase). */
+/**
+ * The coffee-ritual exchange at Sarah's console, voiced with the uploaded
+ * Godot recordings — verbatim from lab_builder.gd:866-872.
+ */
 export const introSequence: TimelineStep[] = [
-  { kind: "say", clip: "lab_a_01" }, // Jack: Sarah.
-  { kind: "say", clip: "lab_a_02" }, // Jack: What's happening?
+  { kind: "say", clip: "sarah_dont_have_to" }, // Sarah: You don't have to do that.
+  { kind: "say", clip: "jack_i_did_it_anyway" }, // Jack: I know. I did it anyway.
   { kind: "gesture", actor: "sarah", clip: "Checkout_Gesture" },
-  { kind: "say", clip: "lab_a_03" }, // Sarah: A resonance cascade...
-  { kind: "say", clip: "lab_a_04" }, // Jack: Should I call someone?
-  { kind: "say", clip: "lab_a_05" }, // Sarah: I'm the someone they would call.
-  { kind: "say", clip: "lab_a_06" }, // Jack: How bad?
+  { kind: "say", clip: "sarah_look_at_readings" }, // Sarah: Look at these readings...
+  { kind: "say", clip: "jack_should_i_call" }, // Jack: Should I call someone?
+  { kind: "say", clip: "sarah_im_the_someone" }, // Sarah: I'm the someone they would call.
+  { kind: "say", clip: "jack_how_bad" }, // Jack: How bad?
   { kind: "gesture", actor: "sarah", clip: "Shrug" },
-  { kind: "say", clip: "lab_a_07" }, // Sarah: I don't know yet.
+  { kind: "say", clip: "sarah_dont_know_yet" }, // Sarah: I don't know yet.
 ];
 
 /** Console work as the cascade goes critical (console-dialogue phase). */

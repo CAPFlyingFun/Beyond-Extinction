@@ -76,13 +76,30 @@ export const VOICE_CLIP_LIST: VoiceClip[] = [
     "The Tuesday it all ended started like every other Tuesday. But this time, when I knocked on the glass, Sarah didn't look up.",
   ),
 
-  // --- Server room: Jack spots his dropped badge (Godot jack_badge_found) ---
-  jack(
-    "lab_badge_found",
-    "There it is... Ah, that's right; I was working here a few minutes ago. Now let's try that again.",
-  ),
+  // ===================================================================
+  // Prologue VO imported from the uploaded assets pack. These mp3s are the
+  // Godot project's own recordings (assets/audio/vo/jack_*·sarah_*) and the
+  // line text is copied verbatim from lab_builder.gd — the single source of
+  // truth — so the web plays exactly what the Godot prologue does.
+  // ===================================================================
+  jack("jack_get_coffee", "It's almost midnight, let me get Sarah some coffee and bring it to her."),
+  jack("jack_to_sarah", "Nice. Now to Sarah."),
+  jack("jack_no_response", "Hmm, that's strange. No response, but I do need to find my badge to make sure everything is okay."),
+  jack("jack_badge_found", "There it is... Ah, that's right; I was working here a few minutes ago. Now let's try that again."),
+  // Coffee-ritual exchange at Sarah's console (Godot lab_builder.gd:866-872).
+  sarah("sarah_dont_have_to", "You don't have to do that."),
+  jack("jack_i_did_it_anyway", "I know. I did it anyway."),
+  sarah("sarah_look_at_readings", "Look at these readings. Something's wrong."),
+  jack("jack_should_i_call", "Should I call someone?"),
+  sarah("sarah_im_the_someone", "I'm the someone they would call."),
+  jack("jack_how_bad", "How bad?"),
+  sarah("sarah_dont_know_yet", "I don't know yet."),
+  // The accident (Godot lab_builder.gd:907-918).
+  jack("jack_what_happened", "What happened?"),
+  sarah("sarah_cascade_failing", "The cascade is failing — I need to get to the manual override."),
+  sarah("sarah_find_flashlight", "There's an emergency flashlight on my station. Go — find it!"),
 
-  // --- At Sarah's console ---
+  // --- At Sarah's console (earlier web-scripted alt take, kept for the opening) ---
   jack("lab_a_01", "Sarah."),
   jack("lab_a_02", "What's happening?"),
   sarah(
