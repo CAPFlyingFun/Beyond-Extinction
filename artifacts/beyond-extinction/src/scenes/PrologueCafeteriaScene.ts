@@ -641,21 +641,13 @@ class PrologueCafeteriaScene implements IScene {
       this.player?.setLookSensitivity(s.lookSensitivity);
     });
     this.buildSettingsButton();
-    // Visible in any build (including the deployed GitHub Pages site) via
-    // ?tune=1, not just `pnpm dev` — DEV-only code is stripped from
-    // production bundles, which would make the panel unreachable there.
-    // ?tune=1 also flips a persistent "developer mode" flag (localStorage),
-    // so once enabled the panel keeps showing on later visits without the
-    // query param, and can be toggled by triple-tapping anywhere on screen —
-    // handy for ongoing tuning during early development without needing to
-    // re-type the URL each time.
+    // Dev grip-tuner: shown ONLY when ?tune is in the URL for this load. No
+    // localStorage persistence and no triple-tap-to-toggle gesture (that was
+    // firing accidentally during play) — the panel and bindTunerGesture() code
+    // are kept for later, just not wired up by default.
     if (new URLSearchParams(location.search).has("tune")) {
-      localStorage.setItem(PrologueCafeteriaScene.TUNER_STORAGE_KEY, "1");
-    }
-    if (localStorage.getItem(PrologueCafeteriaScene.TUNER_STORAGE_KEY) === "1") {
       this.buildGripTuner();
     }
-    this.bindTunerGesture();
   }
 
   // ---------- World building ----------
@@ -2372,6 +2364,13 @@ class PrologueCafeteriaScene implements IScene {
   private switchControlTo(actor: THREE.Group, lookAt?: THREE.Vector3): void {
     if (this.controlledActor) this.controlledActor.visible = true;
     this.controlledActor = actor;
+    // Nudge the new controlled actor out of any collider before handing over —
+    // Sarah's console spot overlaps the (player-grown) desk collider, which would
+    // otherwise wedge her so resolveMove blocks every step (she could look but
+    // not walk). Step west toward the open floor until clear.
+    for (let i = 0; i < 40 && this.isBlocked(actor.position.x, actor.position.z); i++) {
+      actor.position.x -= 1;
+    }
     this.resumeFirstPerson(lookAt);
   }
 
@@ -2518,25 +2517,27 @@ class PrologueCafeteriaScene implements IScene {
     }
   }
 
-  /** First-person crosshair prompt label for the current phase's objective. */
+  /** First-person interact prompt for the current phase — always leads with the
+   * "press & hold" gesture so the touch control reads clearly. */
   private fpPromptText(): string {
+    const hold = (action: string) => `Press & hold to ${action}`;
     switch (this.phase) {
       case "coffee":
-        return "Pick up coffee";
+        return hold("pick up the coffee");
       case "to-glass":
-        return PlayerInventory.hasBadge ? "Scan badge" : "Use badge reader";
+        return hold(PlayerInventory.hasBadge ? "scan your badge" : "use the badge reader");
       case "knock":
-        return "Knock on the door";
+        return hold("knock on the door");
       case "to-badge":
-        return "Pick up your badge";
+        return hold("pick up your badge");
       case "to-sarah":
-        return "Talk to Sarah";
+        return hold("talk to Sarah");
       case "sarah-flashlight":
-        return "Grab the flashlight";
+        return hold("grab the flashlight");
       case "sarah-power":
-        return "Restore power";
+        return hold("restore power");
       default:
-        return "Interact";
+        return hold("interact");
     }
   }
 
@@ -2569,32 +2570,17 @@ class PrologueCafeteriaScene implements IScene {
     const active = this.fpActiveTarget();
     let target: THREE.Object3D | null = null;
     if (active) {
-      // Measure to the objective's world position so parented cups and grouped
-      // characters/props all gate correctly.
+      // Interaction is now "press & hold the item" and also works whenever the
+      // objective is simply within reach (see onLongPressInteract), so surface
+      // the prompt on horizontal distance alone — no precise crosshair aim
+      // needed. Ignore the ~6u eye height so floor/counter-height objectives
+      // aren't pushed out of range by the vertical gap.
       active.getWorldPosition(this.fpAim);
-      this.fpTmp.copy(this.fpAim).sub(this.player.position);
-      // Gate on horizontal (standing) distance, ignoring the ~6u eye height:
-      // objectives sit at different heights (a cup up on the counter, Sarah at
-      // floor level), and a full 3D distance would let that vertical gap
-      // dominate — pushing floor-level targets permanently out of reach.
-      const dist = Math.hypot(this.fpTmp.x, this.fpTmp.z);
-      const reach = this.fpReach();
-      if (dist <= reach) {
-        this.player.getInteractRay(this.fpRay);
-        // Primary test: a real center-crosshair raycast hit on the objective.
-        // Cap the ray by the true 3D distance (plus slack), not the horizontal
-        // reach, so looking down at a floor-level target isn't clipped short.
-        const rayLen = this.fpTmp.length();
-        this.fpRaycaster.set(this.fpRay.origin, this.fpRay.direction);
-        this.fpRaycaster.far = rayLen + 6;
-        const hit = this.fpRaycaster.intersectObject(active, true).length > 0;
-        // Fallback for targets the ray can slip past: dot > 0.7 ~ within ~45°
-        // of the crosshair. Uses the full 3D direction so looking slightly down
-        // at a floor-level objective still counts as aligned.
-        const aligned =
-          rayLen > 0 && this.fpTmp.normalize().dot(this.fpRay.direction) > 0.7;
-        if (hit || aligned) target = active;
-      }
+      const dist = Math.hypot(
+        this.fpAim.x - this.player.position.x,
+        this.fpAim.z - this.player.position.z,
+      );
+      if (dist <= this.fpReach()) target = active;
     }
     if (target !== this.currentFpTarget) {
       this.currentFpTarget = target;
