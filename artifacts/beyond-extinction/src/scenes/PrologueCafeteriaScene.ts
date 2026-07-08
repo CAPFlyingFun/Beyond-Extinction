@@ -1586,13 +1586,14 @@ class PrologueCafeteriaScene implements IScene {
    * (RING_CENTER), so everything lines up with the ring/vortex already built.
    *
    * The physical props are SOLID (pedestal, magnet housings, pylons, the six
-   * consoles, the DNA terminal base, the east bank + racks) so the player can't
-   * walk through them. Only non-obstacles stay pass-through: the waist-high
-   * railing (its west gap must stay open for the glass-door entry), the flat
-   * floor hazard stripes, the overhead ceiling panels (isBlocked ignores Y, so a
-   * ceiling box would wrongly block its floor footprint), and the fill lights.
-   * The accident is player-driven first person, so the open deck between props
-   * stays wide enough to steer Sarah around them to the flashlight and power unit.
+   * consoles, the DNA terminal base, the east bank + racks, and the walkway
+   * railing) so the player can't walk through them. The railing's west gap is
+   * aligned to the glass door so a solid rail never seals the entrance. Only
+   * true non-obstacles stay pass-through: the flat floor hazard stripes and the
+   * overhead ceiling panels (isBlocked ignores Y, so a ceiling box would wrongly
+   * block its floor footprint), plus the fill lights. The accident is
+   * player-driven first person, so the open deck between props stays wide enough
+   * to steer Sarah around them to the flashlight and power unit.
    */
   private buildLabInterior(): void {
     const scene = this.scene;
@@ -1675,7 +1676,7 @@ class PrologueCafeteriaScene implements IScene {
       box(gp(bxc - 0.33, 1.28, z), 0.05, 1.42, 0.74, mScreen); // rack panel
     }
 
-    // ── Walkway railing (visual) with a west entry gap aligned to the glass door ──
+    // ── Walkway railing (SOLID) with a west entry gap aligned to the glass door ──
     const ix0 = 10.0 + 1.2;
     const ix1 = 25.0 - 1.2;
     const iz0 = 0.5 + 1.2;
@@ -1689,6 +1690,10 @@ class PrologueCafeteriaScene implements IScene {
         mMetal,
       );
       rail.position.copy(mid);
+      // Solid barrier — Godot builds an invisible floor→rail collision wall per
+      // run. isBlocked ignores Y, so tagging the (waist-high) rail box solid gives
+      // the same full-height wall along the run, minus the entry gaps below.
+      rail.userData.solid = true;
       scene.add(rail);
       const posts = Math.max(1, Math.round(len / (2 * M)));
       for (let i = 0; i <= posts; i++) {
@@ -1699,14 +1704,22 @@ class PrologueCafeteriaScene implements IScene {
         scene.add(post);
       }
     };
-    const ga = 7.0;
-    const gb = 9.0; // west entry gap (Godot)
+    // Entry gaps. The WEST gap must line up with the glass door so a solid rail
+    // never walls off the entrance: convert the door's world z into this
+    // builder's frame (world z = (gz - 8)*M). The EAST gap stays at the mainframe
+    // deck (Godot). A ~2.5 m opening is still walkable after buildColliders grows
+    // each rail by the player radius (~1.5 u each side).
+    const doorGz = DOORS.labGlass.z / M + 8.0;
+    const wGa = doorGz - 1.25;
+    const wGb = doorGz + 1.25; // west entry gap, centred on the glass door
+    const eGa = 7.0;
+    const eGb = 9.0; // east gap → mainframe deck (Godot)
     railSeg(ix0, iz0, ix1, iz0); // north
-    railSeg(ix1, iz0, ix1, ga); // east, north of gap
-    railSeg(ix1, gb, ix1, iz1); // east, south of gap
+    railSeg(ix1, iz0, ix1, eGa); // east, north of gap
+    railSeg(ix1, eGb, ix1, iz1); // east, south of gap
     railSeg(ix0, iz1, ix1, iz1); // south
-    railSeg(ix0, iz0, ix0, ga); // west, north of gap
-    railSeg(ix0, gb, ix0, iz1); // west, south of gap
+    railSeg(ix0, iz0, ix0, wGa); // west, north of gap
+    railSeg(ix0, wGb, ix0, iz1); // west, south of gap
     // Hazard stripes along the inner deck edge.
     box(gp(LCX, 0.06, iz0), ix1 - ix0, 0.02, 0.1, mHazard);
     box(gp(LCX, 0.06, iz1), ix1 - ix0, 0.02, 0.1, mHazard);
