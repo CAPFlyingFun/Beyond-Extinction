@@ -20,6 +20,7 @@ import {
 } from "../data/prologueLayout";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { loadModel } from "../engine/assets";
+import { bakeHumanoidClips, RIGS, STD_CLIPS } from "../engine/proceduralAnimator";
 import { ClipLibrary } from "../engine/ClipLibrary";
 import { SequenceDirector } from "../engine/SequenceDirector";
 import { labOpeningNarration } from "../data/prologueSequences";
@@ -1866,6 +1867,22 @@ class PrologueCafeteriaScene implements IScene {
     // This keeps the camera framing correct and makes future (animated) model
     // swaps drop-in without re-tuning.
     this.groundAndScale(model, PrologueCafeteriaScene.CHARACTER_HEIGHT);
+    // The uploaded Jack/Sarah are Meshy auto-rigs: a skinned skeleton with
+    // anonymous Bone_NNN names and NO baked clips. Synthesize the idle/walk/run
+    // procedurally from the ported Godot rig (see proceduralAnimator.ts) so the
+    // blend code below drives them exactly like a natively-animated model. The
+    // pose channels in the rig also drop the arms out of the raw T-pose.
+    if (
+      (!model.animations || model.animations.length === 0) &&
+      !model.userData.isPlaceholder &&
+      RIGS[name]
+    ) {
+      model.animations = bakeHumanoidClips(model, RIGS[name], {
+        Idle: STD_CLIPS.Idle,
+        Walking: STD_CLIPS.Walking,
+        Running: STD_CLIPS.Running,
+      });
+    }
     if (model.animations && model.animations.length > 0) {
       const mixer = new THREE.AnimationMixer(model);
       const clips = model.animations;
