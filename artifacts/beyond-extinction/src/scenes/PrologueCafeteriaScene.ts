@@ -437,16 +437,19 @@ class PrologueCafeteriaScene implements IScene {
       roughness: 0.6,
       metalness: 0.3,
     });
+    // `cy` = the room's ceiling height (3 m rooms = 12u, the 5 m lab = 20u), so
+    // fixtures hang just under the true ceiling rather than at a fixed height.
     const addCeiling = (
       x: number,
       z: number,
+      cy: number,
       lightColor: number,
       intensity: number,
       fixtureColor: number,
       fixtureEmissive: number,
     ) => {
       const light = new THREE.PointLight(lightColor, intensity, 80, 2);
-      light.position.set(x, 14, z);
+      light.position.set(x, cy - 1.1, z);
       scene.add(light);
       this.mainLights.push(light);
       const fixtureMat = new THREE.MeshStandardMaterial({
@@ -457,22 +460,24 @@ class PrologueCafeteriaScene implements IScene {
       });
       const fixture = new THREE.Mesh(new THREE.BoxGeometry(5, 0.4, 1.6), fixtureMat);
       const housing = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.3, 2), fixtureHousingMat);
-      fixture.position.set(x, 13.6, z);
-      housing.position.set(x, 13.95, z);
+      fixture.position.set(x, cy - 0.5, z);
+      housing.position.set(x, cy - 0.15, z);
       scene.add(fixture, housing);
     };
+    const H3 = WALL_HEIGHT; // 3 m ceiling (cafeteria / hallway / server)
+    const H5 = LAB_WALL_HEIGHT; // 5 m lab ceiling
     // Warm cafeteria (west) — normal brightness, warm overhead lights.
-    addCeiling(bpx(2.5), bpz(6.5), 0xffe1b8, 24, 0xfff0d8, 0xffcf8f);
-    addCeiling(bpx(5.5), bpz(9.5), 0xffe1b8, 24, 0xfff0d8, 0xffcf8f);
+    addCeiling(bpx(2.5), bpz(6.5), H3, 0xffe1b8, 24, 0xfff0d8, 0xffcf8f);
+    addCeiling(bpx(5.5), bpz(9.5), H3, 0xffe1b8, 24, 0xfff0d8, 0xffcf8f);
     // Hallway connector — slightly cooler AND darker than the cafeteria.
-    addCeiling(bpx(8.5), bpz(8), 0x9fbae4, 11, 0xc4d6f4, 0x8fb0f0);
+    addCeiling(bpx(8.5), bpz(8), H3, 0x9fbae4, 11, 0xc4d6f4, 0x8fb0f0);
     // Cool DIM blue-gray Lab Seven (east) — low ceiling fill over the four
     // quadrants around the ring; the accelerator's own #0044FF glow does the
     // rest. Deliberately dim so the blackout/emergency beats have somewhere to
     // fall from and the ring reads as the brightest thing in the room.
     for (const lx of [14, 21]) {
       for (const lz of [5, 10]) {
-        addCeiling(bpx(lx), bpz(lz), 0x9fb2d6, 6.5, 0xbcccea, 0x8fa6cf);
+        addCeiling(bpx(lx), bpz(lz), H5, 0x9fb2d6, 6.5, 0xbcccea, 0x8fa6cf);
       }
     }
     // The server room lights itself atmospherically (blue rack strips + red
@@ -767,7 +772,7 @@ class PrologueCafeteriaScene implements IScene {
       new THREE.PlaneGeometry(10, 2.5),
       new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(signCanvas) }),
     );
-    sign.position.set(DOORS.labGlass.x - 0.6, 14, DOORS.labGlass.z);
+    sign.position.set(DOORS.labGlass.x - 0.6, 10.8, DOORS.labGlass.z);
     sign.rotation.y = -Math.PI / 2;
     scene.add(sign);
   }
@@ -795,7 +800,7 @@ class PrologueCafeteriaScene implements IScene {
       emissive: 0xff2a1a,
       emissiveIntensity: 2.2,
     });
-    const RACK_H = 15;
+    const RACK_H = 9; // ~2.25 m — fits under the 3 m (12u) server ceiling
     // A rack standing against a wall, facing `faceX/faceZ` (unit inward normal):
     // a dark cabinet, a blue light strip down its front, and a column of red LEDs.
     const mkRack = (cx: number, cz: number, w: number, d: number, faceX: number, faceZ: number) => {
@@ -821,7 +826,7 @@ class PrologueCafeteriaScene implements IScene {
         const off = 0.9; // sit the LEDs to one side of the strip along the wall
         led.position.set(
           front.x + (faceZ !== 0 ? off : 0),
-          3 + i * 2.4,
+          1.6 + i * 1.4,
           front.z + (faceX !== 0 ? off : 0),
         );
         scene.add(led);
@@ -835,7 +840,7 @@ class PrologueCafeteriaScene implements IScene {
 
     // Low blue fill so the room is navigable without a warm ceiling light.
     const fill = new THREE.PointLight(0x3f7bff, 7, 34, 2);
-    fill.position.set((srv.minX + srv.maxX) / 2, 12, (srv.minZ + srv.maxZ) / 2);
+    fill.position.set((srv.minX + srv.maxX) / 2, 10.5, (srv.minZ + srv.maxZ) / 2);
     scene.add(fill);
     this.mainLights.push(fill);
   }
@@ -1412,51 +1417,53 @@ class PrologueCafeteriaScene implements IScene {
   /** A two-leaf sliding door filling a wall gap; returns its ProximityDoor. */
   private mkDoor(spec: DoorSpec, glass: boolean, auto: boolean): ProximityDoor {
     const half = DOOR_WIDTH / 2; // each leaf covers half the gap
-    const H = (glass ? LAB_WALL_HEIGHT : WALL_HEIGHT) - 2;
+    // A real doorway height (Godot doors ≈2.2 m, glass ≈2.4 m), NOT the full
+    // wall height — the earlier full-height leaf put the metal sill above eye
+    // level, so every door read as a solid metal slab. An opaque header fills
+    // the wall above the door to the ceiling.
+    const DOOR_H = glass ? 9.6 : 8.8;
+    const wallTop = glass ? LAB_WALL_HEIGHT : WALL_HEIGHT;
     const th = WALL_THICKNESS * 0.9;
-    const mat = glass
-      ? new THREE.MeshStandardMaterial({
-          color: 0x8fc7e6,
-          transparent: true,
-          opacity: 0.34,
-          roughness: 0.1,
-          metalness: 0.2,
-          // Faint self-lit blue so it reads as GLASS even in a dim room (Godot
-          // _mat_glass emits ~#4c99e6); without this it looks like dark metal.
-          emissive: 0x4c99e6,
-          emissiveIntensity: 0.55,
-          side: THREE.DoubleSide,
-        })
-      : new THREE.MeshStandardMaterial({ color: 0x39485f, roughness: 0.5, metalness: 0.55 });
     const alongZ = spec.axis === "z"; // wall runs along Z → leaves span Z
-    // Solid box dims per leaf; for glass the leaf is split into a metal sill
-    // (lower 44%) + a glass upper (56%), matching the Godot auto_door build.
-    const boxGeo = (h: number) =>
-      alongZ ? new THREE.BoxGeometry(th, h, half) : new THREE.BoxGeometry(half, h, th);
-    const sillMat = new THREE.MeshStandardMaterial({
-      color: 0x808795,
-      roughness: 0.35,
-      metalness: 0.7,
+    const boxGeo = (w: number, h: number) =>
+      alongZ ? new THREE.BoxGeometry(th, h, w) : new THREE.BoxGeometry(w, h, th);
+    const metalMat = new THREE.MeshStandardMaterial({ color: 0x8a929e, roughness: 0.35, metalness: 0.7 });
+    const solidMat = new THREE.MeshStandardMaterial({ color: 0x39485f, roughness: 0.5, metalness: 0.55 });
+    // Clear, self-lit blue glass — transparent so the lab reads through it, with
+    // depthWrite off so it layers cleanly (Godot _mat_glass equivalent).
+    const glassMat = new THREE.MeshStandardMaterial({
+      color: 0x9fd6f2,
+      transparent: true,
+      opacity: 0.24,
+      roughness: 0.05,
+      metalness: 0.1,
+      emissive: 0x3f9bd8,
+      emissiveIntensity: 0.5,
+      side: THREE.DoubleSide,
+      depthWrite: false,
     });
-    const SILL_FRAC = 0.44;
     const panels: DoorPanel[] = [];
     for (const s of [-1, 1] as const) {
       let leaf: THREE.Object3D;
       if (glass) {
-        // Framed glass leaf: metal sill on the bottom, glass on top. Group origin
-        // at the floor so the children sit at true heights.
+        // Framed glass leaf: short metal kickplate + big glass pane + thin top
+        // rail — so the glass sits AT eye level (~6.3u), not above the head.
         const grp = new THREE.Group();
-        const sillH = H * SILL_FRAC;
-        const glassH = H - sillH;
-        const sill = new THREE.Mesh(boxGeo(sillH), sillMat);
+        const sillH = DOOR_H * 0.28; // ~kickplate, well below eye height
+        const railH = 0.8;
+        const glassBot = sillH;
+        const glassH = DOOR_H - railH - glassBot;
+        const sill = new THREE.Mesh(boxGeo(half, sillH), metalMat);
         sill.position.y = sillH / 2;
-        const glassMesh = new THREE.Mesh(boxGeo(glassH), mat);
-        glassMesh.position.y = sillH + glassH / 2;
-        grp.add(sill, glassMesh);
+        const rail = new THREE.Mesh(boxGeo(half, railH), metalMat);
+        rail.position.y = DOOR_H - railH / 2;
+        const pane = new THREE.Mesh(boxGeo(half, glassH), glassMat);
+        pane.position.y = glassBot + glassH / 2;
+        grp.add(sill, rail, pane);
         leaf = grp;
       } else {
-        const m = new THREE.Mesh(boxGeo(H), mat);
-        m.position.y = H / 2;
+        const m = new THREE.Mesh(boxGeo(half, DOOR_H), solidMat);
+        m.position.y = DOOR_H / 2;
         m.castShadow = true;
         leaf = m;
       }
@@ -1467,6 +1474,15 @@ class PrologueCafeteriaScene implements IScene {
         mesh: leaf,
         openOffset: alongZ ? new THREE.Vector3(0, 0, s * half) : new THREE.Vector3(s * half, 0, 0),
       });
+    }
+    // Opaque header filling the wall above the door to the ceiling (so there is
+    // no open gap over the doorway). Static — it does not slide with the leaves.
+    const headerH = wallTop - DOOR_H;
+    if (headerH > 0.5) {
+      const header = new THREE.Mesh(boxGeo(DOOR_WIDTH, headerH), solidMat);
+      header.position.set(spec.x, DOOR_H + headerH / 2, spec.z);
+      header.receiveShadow = true;
+      this.scene.add(header);
     }
     const gap = alongZ
       ? { minX: spec.x - th, maxX: spec.x + th, minZ: spec.z - half, maxZ: spec.z + half }
