@@ -122,7 +122,7 @@ export const DOORS: Record<"cafeteriaHall" | "serverHall" | "labGlass", DoorSpec
 
 /** Gameplay anchor points (world units). */
 export const ANCHORS = {
-  jackSpawn: new THREE.Vector3(bpx(2), 0, bpz(8)), // cafeteria, west end
+  jackSpawn: new THREE.Vector3(bpx(3), 0, bpz(8)), // cafeteria west lane (clear of the west-wall vending machines)
   jackFacing: Math.PI / 2, // east
   coffeeCart: new THREE.Vector3(bpx(5), 0, bpz(10.5)), // cafeteria, south
   badge: new THREE.Vector3(bpx(8), 0, bpz(4)), // server room

@@ -157,6 +157,26 @@ body {
     width: 100%;
   }
 }
+/* Short landscape (phones held sideways): the menu is normally bottom-anchored
+   with a tall bottom padding, which pushes the top button(s) off-screen when the
+   viewport is short. Centre the column, tighten spacing, and drop the decorative
+   footer so all five buttons always fit and stay legible. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .be-menu {
+    justify-content: center;
+    padding-top: 1.2rem;
+    padding-bottom: 1.2rem;
+  }
+  .be-menu__buttons {
+    gap: 0.5rem;
+  }
+  .be-btn {
+    padding: 0.7rem 1.3rem;
+  }
+  .be-menu__footer {
+    display: none;
+  }
+}
 .be-menu__brand {
   pointer-events: none;
   margin-bottom: 2.6rem;

@@ -525,14 +525,8 @@ class PrologueCafeteriaScene implements IScene {
     scene.add(this.jack);
     // Safety net: with the player radius baked into the colliders, never let
     // Jack spawn wedged inside one — a future prop/spawn tweak shouldn't be able
-    // to soft-lock the opening. Nudge him toward the open floor until clear.
-    for (
-      let i = 0;
-      i < 40 && this.isBlocked(this.jack.position.x, this.jack.position.z);
-      i++
-    ) {
-      this.jack.position.z -= 1;
-    }
+    // to soft-lock the opening. Nudge him to the nearest open interior floor.
+    this.nudgeToOpenFloor(this.jack);
 
     this.jackNav = new Navigator(this.jack, {
       speed: 16,
@@ -1117,6 +1111,36 @@ class PrologueCafeteriaScene implements IScene {
   }
 
   /**
+   * Move an actor to the nearest open interior floor if its current spot is
+   * blocked. Searches outward in rings so the actor lands at the closest valid
+   * point in ANY direction — never blindly along one axis, which could (and did)
+   * march a wedged spawn straight through a wall and out of the building. Points
+   * outside the world bounds are rejected so the result is always interior.
+   */
+  private nudgeToOpenFloor(actor: THREE.Object3D): void {
+    const { x: x0, z: z0 } = actor.position;
+    if (!this.isBlocked(x0, z0)) return;
+    for (let radius = 1; radius <= 30; radius++) {
+      for (let a = 0; a < 24; a++) {
+        const ang = (a / 24) * Math.PI * 2;
+        const x = x0 + Math.cos(ang) * radius;
+        const z = z0 + Math.sin(ang) * radius;
+        if (
+          x > WORLD_BOUNDS.minX &&
+          x < WORLD_BOUNDS.maxX &&
+          z > WORLD_BOUNDS.minZ &&
+          z < WORLD_BOUNDS.maxZ &&
+          !this.isBlocked(x, z)
+        ) {
+          actor.position.x = x;
+          actor.position.z = z;
+          return;
+        }
+      }
+    }
+  }
+
+  /**
    * Step from (curX,curZ) toward (nx,nz) one axis at a time so the player
    * slides along an obstacle instead of sticking to it, and can always back
    * out the way they came in.
@@ -1228,6 +1252,18 @@ class PrologueCafeteriaScene implements IScene {
     const table = await loadModel("assets/models/cafeteria_table.glb", () => new THREE.Group());
     if (!table.userData.isPlaceholder) {
       this.tableProto = this.normalizeProp(table, 4.6, "base");
+      // The source Meshy scan didn't reconstruct the tabletop's underside, so it
+      // has torn holes that show through when the camera dips below the top. Cap
+      // it with a solid white puck filling the tabletop slab (measured at the
+      // normalized proto: disc y≈3.5–3.8, radius≈2.5), so any hole reads as the
+      // white tabletop from every angle instead of see-through gaps.
+      const cap = new THREE.Mesh(
+        new THREE.CylinderGeometry(2.5, 2.5, 0.34, 32),
+        new THREE.MeshStandardMaterial({ color: 0xece9e2, roughness: 0.9 }),
+      );
+      cap.position.y = 3.62;
+      cap.receiveShadow = true;
+      this.tableProto.add(cap);
     }
   }
 
@@ -2478,10 +2514,8 @@ class PrologueCafeteriaScene implements IScene {
     // Nudge the new controlled actor out of any collider before handing over —
     // Sarah's console spot overlaps the (player-grown) desk collider, which would
     // otherwise wedge her so resolveMove blocks every step (she could look but
-    // not walk). Step west toward the open floor until clear.
-    for (let i = 0; i < 40 && this.isBlocked(actor.position.x, actor.position.z); i++) {
-      actor.position.x -= 1;
-    }
+    // not walk). Move her to the nearest open interior floor.
+    this.nudgeToOpenFloor(actor);
     this.resumeFirstPerson(lookAt);
   }
 
