@@ -1954,9 +1954,18 @@ class PrologueCafeteriaScene implements IScene {
   /** Sarah's flashlight — rests on the console, grabbed during the blackout. */
   private buildFlashlight(): void {
     const fl = new THREE.Group();
+    // Body GLOWS (Godot: emission energy 0.7) so it's findable on the dark desk
+    // during the blackout — it was previously a matte-dark cylinder that vanished
+    // against the console.
     const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.22, 0.26, 1.6, 12),
-      new THREE.MeshStandardMaterial({ color: 0x111418, roughness: 0.5, metalness: 0.6 }),
+      new THREE.CylinderGeometry(0.24, 0.28, 1.7, 12),
+      new THREE.MeshStandardMaterial({
+        color: 0xe6e6b8,
+        emissive: 0xfff2b0,
+        emissiveIntensity: 0.7,
+        roughness: 0.5,
+        metalness: 0.1,
+      }),
     );
     body.rotation.z = Math.PI / 2; // lie along X
     const lensMat = new THREE.MeshStandardMaterial({
@@ -1964,11 +1973,12 @@ class PrologueCafeteriaScene implements IScene {
       emissive: 0xfff2d0,
       emissiveIntensity: 0,
     });
-    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.22, 0.2, 12), lensMat);
+    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.24, 0.22, 12), lensMat);
     lens.rotation.z = Math.PI / 2;
-    lens.position.x = 0.9;
+    lens.position.x = 0.95;
     fl.add(body, lens);
-    fl.position.set(3, 4.95, 2); // on the console desk top
+    // Rest clearly ON TOP of the console desk (top ≈ y 4.6), near Sarah's side.
+    fl.position.set(2.2, 4.9, 4.4);
     fl.userData.kind = "flashlight";
     this.scene.add(fl);
     this.flashlight = fl;
@@ -3200,7 +3210,9 @@ class PrologueCafeteriaScene implements IScene {
     if (this.glassDenied) return; // already denied — advance to the knock beat
     this.glassDenied = true;
     // ACCESS DENIED buzz; the reader flashes red and the door does NOT move.
-    // (Godot: buzz_deny → set_active(false) → advance KNOCK_ON_DOOR → 1.4 s.)
+    // (Godot: dialogue_frozen = true → buzz_deny → advance KNOCK_ON_DOOR → 1.4 s
+    // → unfreeze.) Jack is locked in place for the whole deny beat.
+    this.ctx.input.setEnabled(false);
     this.ctx.audio.playSfx("buzz-deny");
     this.ctx.overlays.showToast("ACCESS DENIED");
     if (this.badgeReaderLight) this.badgeReaderLight.emissiveIntensity = 4;
@@ -3211,6 +3223,7 @@ class PrologueCafeteriaScene implements IScene {
     this.ctx.overlays.showHint("Access denied. Knock on the lab door");
     this.phase = "knock";
     this.currentFpTarget = null;
+    this.ctx.input.setEnabled(true);
   }
 
   /**
@@ -3223,6 +3236,8 @@ class PrologueCafeteriaScene implements IScene {
     this.knockInProgress = true;
     this.currentFpTarget = null;
     if (this.knockZone) this.dismissHighlight(this.knockZone);
+    // Jack is locked in place for the knock beat (Godot dialogue_frozen).
+    this.ctx.input.setEnabled(false);
     this.ctx.audio.playSfx("door-knock");
     await this.wait(3000); // exactly three seconds, no answer
     if (this.disposed) return;
@@ -3236,6 +3251,7 @@ class PrologueCafeteriaScene implements IScene {
     this.ctx.quest.complete("knock", { nextId: "find-badge" });
     this.ctx.overlays.showHint("Find your badge — check the server room");
     this.phase = "to-badge";
+    this.ctx.input.setEnabled(true);
   }
 
   /** Show a subtitle line and hold for `ms` (no VO yet — Replit re-voices). */
@@ -3273,14 +3289,19 @@ class PrologueCafeteriaScene implements IScene {
   private async triggerReachSarah(): Promise<void> {
     this.ctx.quest.complete("reach-sarah");
     this.ctx.overlays.hideHint();
-    // Hand control to the cinematic director for good — the rest of the prologue
-    // is the coffee ritual + accident sequence (no resume to first person).
-    this.suspendFirstPerson();
     this.phase = "accident";
     this.sarahNav.stop();
-    this.faceTowards(this.jack, this.sarah.position);
     this.faceTowards(this.sarah, this.jack.position);
-    this.setCameraMoment("climax", { cut: true });
+    // Keep JACK'S FIRST-PERSON camera for the whole exchange (Godot keeps the
+    // player's camera + dialogue_frozen). Lock movement/look and aim his view at
+    // Sarah — the camera never cuts to a cinematic two-shot (which clipped into
+    // the glass), so the chat and the coming blackout read from Jack's eyes.
+    this.ctx.input.setEnabled(false);
+    this.player.placeAt(
+      this.jack.position.x,
+      this.jack.position.z,
+      this.headingTo(this.jack.position, this.sarah.position),
+    );
     // Jack sets the coffees down with Sarah (inventory toggle) and the seven-line
     // COFFEE_RITUAL plays (Godot lab_builder.gd:866-872). Replit re-voices later.
     await this.handCoffeeToSarah();
@@ -3336,19 +3357,28 @@ class PrologueCafeteriaScene implements IScene {
     }
     this.scaleMainLights(0); // dark
     this.ctx.audio.playSfx("alarm");
-    // Jack reacts, still cinematic + visible (control hasn't swapped yet).
-    this.faceTowards(this.jack, this.sarah.position);
+    // Jack reacts in the dark, still first person (his camera, control not yet
+    // swapped).
     await this.sayLine("Jack", "What happened?", 1800);
     if (this.disposed) return;
+    this.ctx.dialogue.hideSubtitle();
 
-    // --- Seamless control swap to Sarah (Jack stays where he is). First person
-    // becomes Sarah; her first line plays over the dark before the red lights.
-    this.faceTowards(this.jack, this.coreWorld);
+    // --- SEAMLESS SWITCH under a full screen-black. The screen goes completely
+    // black, and while it is black Jack's first-person control is swapped to
+    // Sarah's and the red emergency lights come up — so the player never sees the
+    // character change, just fades back in as Sarah in the red-lit lab.
+    await this.ctx.overlays.fadeToBlack(700);
+    if (this.disposed) return;
+    this.faceTowards(this.jack, this.coreWorld); // Jack stays, facing the ring
     this.switchControlTo(this.sarah, this.powerUnitWorld);
+    this.emergencyOn = true;
+    await this.wait(2000); // hold full black ≥2 s (covers the swap)
+    if (this.disposed) return;
+    await this.ctx.overlays.fadeFromBlack(800);
+    if (this.disposed) return;
+
     await this.sayLine("Sarah", "The cascade is failing — I need to get to the manual override.", 2800);
     if (this.disposed) return;
-    // Red emergency lights come up (Godot emergency_lights_on()).
-    this.emergencyOn = true;
     await this.sayLine("Sarah", "There's an emergency flashlight on my station. Go — find it!", 2600);
     if (this.disposed) return;
     this.ctx.dialogue.hideSubtitle();
