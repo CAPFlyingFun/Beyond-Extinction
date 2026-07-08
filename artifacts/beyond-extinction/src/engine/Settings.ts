@@ -16,17 +16,25 @@ export interface GameplaySettings {
    * pause for the player — Auto Play never decides the story for you.
    */
   autoPlay: boolean;
+  /**
+   * First-person look sensitivity (radians per pixel of drag). Higher = the
+   * press-and-swipe camera turns faster. Player-tunable so the pan feel isn't
+   * one-size-fits-all.
+   */
+  lookSensitivity: number;
 }
 
 export const SETTINGS_RANGES = {
   fov: { min: 40, max: 75, step: 1, default: 75 },
   zoom: { min: 0.7, max: 1.8, step: 0.01, default: 1.3 },
+  lookSensitivity: { min: 0.002, max: 0.013, step: 0.0005, default: 0.006 },
 } as const;
 
 const DEFAULTS: GameplaySettings = {
   fov: SETTINGS_RANGES.fov.default,
   zoom: SETTINGS_RANGES.zoom.default,
   autoPlay: false,
+  lookSensitivity: SETTINGS_RANGES.lookSensitivity.default,
 };
 
 // v3: the default lab framing baseline moved to FOV 75 / zoom 1.3, so a reset
@@ -54,6 +62,11 @@ function sanitize(raw: Partial<GameplaySettings>): GameplaySettings {
     ),
     autoPlay:
       typeof raw.autoPlay === "boolean" ? raw.autoPlay : DEFAULTS.autoPlay,
+    lookSensitivity: clamp(
+      raw.lookSensitivity ?? DEFAULTS.lookSensitivity,
+      SETTINGS_RANGES.lookSensitivity.min,
+      SETTINGS_RANGES.lookSensitivity.max,
+    ),
   };
 }
 

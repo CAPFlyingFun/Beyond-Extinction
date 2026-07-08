@@ -83,7 +83,23 @@ export class Overlays {
 
   setBlackInstant(on: boolean): void {
     this.fade.style.transitionDuration = "0ms";
+    this.fade.style.backgroundColor = "";
     this.fade.classList.toggle("show", on);
+  }
+
+  /** Fade the full-screen veil IN using an arbitrary fill colour (e.g. white). */
+  async fadeToColor(color: string, durationMs = 1000): Promise<void> {
+    this.fade.style.backgroundColor = color;
+    this.fade.style.transition = `opacity ${durationMs}ms ease`;
+    this.fade.classList.add("show");
+    await this.wait(durationMs);
+  }
+
+  /** While the veil is already opaque, cross-fade its fill colour (white→black). */
+  async recolorTo(color: string, durationMs = 1000): Promise<void> {
+    this.fade.style.transition = `background-color ${durationMs}ms ease`;
+    this.fade.style.backgroundColor = color;
+    await this.wait(durationMs);
   }
 
   async whiteFlash(): Promise<void> {

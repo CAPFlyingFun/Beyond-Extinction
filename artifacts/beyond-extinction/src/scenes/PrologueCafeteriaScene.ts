@@ -100,6 +100,7 @@ function lerpPath(points: readonly THREE.Vector3[], t: number): THREE.Vector3 {
 type Phase =
   | "coffee" // grab both cups at the cafeteria cart
   | "to-glass" // approach Lab Seven glass door + use the badge reader
+  | "knock" // badge denied → knock on the glass, no answer
   | "to-badge" // door denied → find the lost badge in the server room
   | "to-sarah" // badge scans, door opens → reach Sarah at the console
   | "accident" // scripted accident beats (flicker/black/switch, restore, etc.)
@@ -125,7 +126,8 @@ const prologueObjectives = [
   },
   { id: "coffee-2", text: "Get two coffees — one more to go." },
   { id: "reach-lab", text: "Take the coffees to Lab Seven — badge in at the door." },
-  { id: "find-badge", text: "Access denied. Find your badge — try the server room." },
+  { id: "knock", text: "Access denied. Knock on the lab door." },
+  { id: "find-badge", text: "No answer. Find your badge — try the server room." },
   { id: "scan-badge", text: "Return to the Lab Seven door and scan your badge." },
   { id: "reach-sarah", text: "Enter Lab Seven and reach Sarah at the console." },
 ] as const;
@@ -183,6 +185,7 @@ class PrologueCafeteriaScene implements IScene {
   private consoleDesk!: THREE.Object3D;
   private vortex!: THREE.Group;
   private vortexUniforms!: { uTime: { value: number } };
+  private portalLight!: THREE.PointLight; // core light for the portal cutscene
   private redLights: THREE.PointLight[] = [];
   private coffees: THREE.Mesh[] = [];
   // Sarah's coffee (handed to her at the intro) so it can be set on the console.
@@ -202,6 +205,7 @@ class PrologueCafeteriaScene implements IScene {
   private coffeeCount = 0;
   private interactables: THREE.Object3D[] = [];
   private unsubClick?: () => void;
+  private unsubLongPress?: () => void;
   private disposed = false;
 
   // ---- Doors, badge gate & accident props (confirmed Godot design) ----
@@ -217,9 +221,11 @@ class PrologueCafeteriaScene implements IScene {
   private glassReader?: Interactable;
   private badgeItem?: Interactable;
   private badgeReaderMesh!: THREE.Object3D;
+  private knockZone?: THREE.Object3D; // the "knock on the glass" target (Godot KnockPrompt)
   private badgeProp?: THREE.Object3D;
   private badgeReaderLight?: THREE.MeshStandardMaterial; // the reader's LED
   private glassDenied = false; // first ACCESS DENIED has fired (knock beat)
+  private knockInProgress = false; // guards the 3s knock beat from re-firing
   // Accident-sequence props: the flashlight Sarah picks up (+ its cone) and the
   // emergency power unit she crosses the lab to restore.
   private flashlight?: THREE.Object3D;
@@ -565,9 +571,11 @@ class PrologueCafeteriaScene implements IScene {
     this.player = new PlayerController(this.camera, this.ctx.input, {
       eyeHeight: 6.3,
       moveSpeed: 14,
-      lookSensitivity: 0.0028,
+      lookSensitivity: this.lookSensitivity(),
     });
     this.player.onInteract(() => this.fpTryInteract());
+    // Touch: long-press directly on the highlighted item to interact.
+    this.unsubLongPress = this.ctx.input.onLongPress((p) => this.onLongPressInteract(p));
 
     this.director = new SequenceDirector({
       playVoice: (id) => this.ctx.audio.playVoice(id),
@@ -624,6 +632,8 @@ class PrologueCafeteriaScene implements IScene {
       // Keep the stored prefs current, but don't let a live FOV/distance change
       // stomp the fixed first-person FOV — it only applies to the cinematic cams.
       this.applyFovForOwner();
+      // Live-apply the look-sensitivity slider to the first-person camera.
+      this.player?.setLookSensitivity(s.lookSensitivity);
     });
     this.buildSettingsButton();
     // Visible in any build (including the deployed GitHub Pages site) via
@@ -1415,18 +1425,39 @@ class PrologueCafeteriaScene implements IScene {
         })
       : new THREE.MeshStandardMaterial({ color: 0x39485f, roughness: 0.5, metalness: 0.55 });
     const alongZ = spec.axis === "z"; // wall runs along Z → leaves span Z
-    const geo = alongZ
-      ? new THREE.BoxGeometry(th, H, half)
-      : new THREE.BoxGeometry(half, H, th);
+    // Solid box dims per leaf; for glass the leaf is split into a metal sill
+    // (lower 44%) + a glass upper (56%), matching the Godot auto_door build.
+    const boxGeo = (h: number) =>
+      alongZ ? new THREE.BoxGeometry(th, h, half) : new THREE.BoxGeometry(half, h, th);
+    const sillMat = new THREE.MeshStandardMaterial({
+      color: 0x808795,
+      roughness: 0.35,
+      metalness: 0.7,
+    });
+    const SILL_FRAC = 0.44;
     const panels: DoorPanel[] = [];
     for (const s of [-1, 1] as const) {
-      const leaf = new THREE.Mesh(geo, mat);
-      leaf.position.set(
-        spec.x + (alongZ ? 0 : (s * half) / 2),
-        H / 2,
-        spec.z + (alongZ ? (s * half) / 2 : 0),
-      );
-      leaf.castShadow = !glass;
+      let leaf: THREE.Object3D;
+      if (glass) {
+        // Framed glass leaf: metal sill on the bottom, glass on top. Group origin
+        // at the floor so the children sit at true heights.
+        const grp = new THREE.Group();
+        const sillH = H * SILL_FRAC;
+        const glassH = H - sillH;
+        const sill = new THREE.Mesh(boxGeo(sillH), sillMat);
+        sill.position.y = sillH / 2;
+        const glassMesh = new THREE.Mesh(boxGeo(glassH), mat);
+        glassMesh.position.y = sillH + glassH / 2;
+        grp.add(sill, glassMesh);
+        leaf = grp;
+      } else {
+        const m = new THREE.Mesh(boxGeo(H), mat);
+        m.position.y = H / 2;
+        m.castShadow = true;
+        leaf = m;
+      }
+      leaf.position.x = spec.x + (alongZ ? 0 : (s * half) / 2);
+      leaf.position.z = spec.z + (alongZ ? (s * half) / 2 : 0);
       this.scene.add(leaf);
       panels.push({
         mesh: leaf,
@@ -1450,18 +1481,22 @@ class PrologueCafeteriaScene implements IScene {
   private buildBadgeReader(): void {
     const g = DOORS.labGlass;
     const body = new THREE.Mesh(
-      new THREE.BoxGeometry(0.6, 2.2, 1.2),
+      new THREE.BoxGeometry(0.6, 1.6, 1.0),
       new THREE.MeshStandardMaterial({ color: 0x1a2230, roughness: 0.5, metalness: 0.5 }),
     );
-    // On the south jamb, hallway (west) side, at hand height.
-    body.position.set(g.x - 0.5, 9, g.z - DOOR_WIDTH / 2 - 1);
+    // Chest height on the south jamb, hallway (west) side. Godot mounts it at
+    // Y=1.3 m; at this scene's ×4 scale that's ≈5.2 world units — NOT up by the
+    // ceiling (the earlier ~9u placement read as "way too high").
+    const READER_Y = 5.2;
+    const rz = g.z + DOOR_WIDTH / 2 + 0.2; // beside the door, south jamb
+    body.position.set(g.x - 0.6, READER_Y, rz);
     const ledMat = new THREE.MeshStandardMaterial({
       color: 0x2a0808,
       emissive: 0xff2a1a, // red = locked; flips green on a valid scan
       emissiveIntensity: 2.5,
     });
-    const led = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.5, 0.5), ledMat);
-    led.position.set(g.x - 0.82, 9.4, g.z - DOOR_WIDTH / 2 - 1);
+    const led = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.42, 0.42), ledMat);
+    led.position.set(g.x - 0.95, READER_Y + 0.35, rz);
     this.scene.add(body, led);
     this.badgeReaderMesh = body;
     this.badgeReaderLight = ledMat;
@@ -1476,8 +1511,24 @@ class PrologueCafeteriaScene implements IScene {
     });
     this.addHighlight(
       body,
-      { color: "tech", icon: "\u{1F512}", radius: 1.6, markerHeight: 3.6 },
+      { color: "tech", icon: "\u{1F512}", radius: 1.6, markerHeight: 7.2 },
       () => this.phase === "to-glass",
+    );
+
+    // Invisible "knock on the glass" target at the door, hallway side — the web
+    // mirror of the Godot KnockPrompt. Only live during the knock beat.
+    const knock = new THREE.Mesh(
+      new THREE.BoxGeometry(1.2, 4, 2),
+      new THREE.MeshBasicMaterial({ visible: false }),
+    );
+    knock.position.set(g.x - 1.2, 4, g.z);
+    knock.userData.kind = "knock";
+    this.scene.add(knock);
+    this.knockZone = knock;
+    this.addHighlight(
+      knock,
+      { color: "story", icon: "\u{270A}", radius: 1.8, markerHeight: 7 },
+      () => this.phase === "knock",
     );
   }
 
@@ -1646,6 +1697,13 @@ class PrologueCafeteriaScene implements IScene {
     g.scale.setScalar(0.01);
     this.vortex = g;
     this.scene.add(g);
+
+    // Portal light — created up-front at zero intensity (like the red emergency
+    // lights) so the climax never adds a light mid-scene (mobile shader-recompile
+    // hazard). The portal cutscene ramps it to a white-out at the core.
+    this.portalLight = new THREE.PointLight(0xffffff, 0, 60, 2);
+    this.portalLight.position.set(RING_CENTER.x, 2, RING_CENTER.z);
+    this.scene.add(this.portalLight);
   }
 
   /**
@@ -2349,23 +2407,58 @@ class PrologueCafeteriaScene implements IScene {
    * story beat (deliver to Sarah / stabilise the console / reach Sarah) once the
    * player has walked up to that objective in first person.
    */
+  /** Desktop E/Space: act on whatever the crosshair currently frames. */
   private fpTryInteract(): void {
     const target = this.currentFpTarget;
     if (!target) return;
     // Consume the target immediately so a repeated interact in the same frame
-    // (E/Space key-repeat or a double button tap) can't fire the same beat
-    // twice before updateFirstPerson recomputes the crosshair target next frame.
+    // (E/Space key-repeat) can't fire the same beat twice before
+    // updateFirstPerson recomputes the crosshair target next frame.
     this.currentFpTarget = null;
     this.player.setInteractPrompt(null);
+    this.performInteract(target);
+  }
+
+  /**
+   * Touch: a long-press. Interaction is "long-press the item" — so if the touch
+   * ray hits the current objective, OR the player is simply within reach of it
+   * (fingers are imprecise), act on it. One objective is live per phase, so this
+   * reads as "long-press the glowing thing." Future multi-item scenes (the
+   * island) can branch here into a radial menu instead of interacting directly.
+   */
+  private onLongPressInteract(pointer: THREE.Vector2): void {
+    if (!this.ownership.is("player")) return;
+    const active = this.fpActiveTarget();
+    if (!active) return;
+    const hits = this.ctx.input.intersect(this.camera, [active], pointer);
+    let hit = hits.length > 0;
+    if (!hit) {
+      // Reach fallback: long-press anywhere while standing at the objective.
+      active.getWorldPosition(this.fpAim);
+      const d = Math.hypot(
+        this.fpAim.x - this.player.position.x,
+        this.fpAim.z - this.player.position.z,
+      );
+      hit = d <= this.fpReach();
+    }
+    if (!hit) return;
+    this.currentFpTarget = null;
+    this.player.setInteractPrompt(null);
+    this.performInteract(active);
+  }
+
+  /** Run the interaction for `target` in the current phase (shared by the
+   * crosshair E-key path and the long-press-on-item touch path). */
+  private performInteract(target: THREE.Object3D): void {
     const kind = target.userData.kind as string | undefined;
     if (this.phase === "coffee") {
       // Guard against a stale target: only the next uncollected cup is valid.
       if (target.userData.index !== this.coffeeCount) return;
-      // pickUpCoffee advances to "to-glass" once the second cup is collected;
-      // first person is retained — the player walks the coffee to the lab door.
       this.pickUpCoffee(target);
     } else if (this.phase === "to-glass" && kind === "badge-reader") {
       this.glassReader?.interact();
+    } else if (this.phase === "knock" && kind === "knock") {
+      void this.onKnock();
     } else if (this.phase === "to-badge" && kind === "badge") {
       this.badgeItem?.interact();
     } else if (this.phase === "to-sarah" && kind === "sarah") {
@@ -2387,6 +2480,8 @@ class PrologueCafeteriaScene implements IScene {
         );
       case "to-glass":
         return this.badgeReaderMesh;
+      case "knock":
+        return this.knockZone ?? null;
       case "to-badge":
         return this.badgeProp ?? null;
       case "to-sarah":
@@ -2407,6 +2502,8 @@ class PrologueCafeteriaScene implements IScene {
         return "Pick up coffee";
       case "to-glass":
         return PlayerInventory.hasBadge ? "Scan badge" : "Use badge reader";
+      case "knock":
+        return "Knock on the door";
       case "to-badge":
         return "Pick up your badge";
       case "to-sarah":
@@ -2717,26 +2814,51 @@ class PrologueCafeteriaScene implements IScene {
       this.currentFpTarget = null;
       return;
     }
-    if (this.glassDenied) return; // knock beat already played; door still locked
+    if (this.glassDenied) return; // already denied — advance to the knock beat
     this.glassDenied = true;
-    // ACCESS DENIED: beep, the reader flashes, the door does not move.
-    this.ctx.audio.playSfx("badge-denied");
+    // ACCESS DENIED buzz; the reader flashes red and the door does NOT move.
+    // (Godot: buzz_deny → set_active(false) → advance KNOCK_ON_DOOR → 1.4 s.)
+    this.ctx.audio.playSfx("buzz-deny");
     this.ctx.overlays.showToast("ACCESS DENIED");
     if (this.badgeReaderLight) this.badgeReaderLight.emissiveIntensity = 4;
-    await this.knockOnGlass();
+    await this.wait(1400);
     if (this.disposed) return;
     if (this.badgeReaderLight) this.badgeReaderLight.emissiveIntensity = 2.5;
-    // No answer — go find the badge.
-    this.ctx.quest.complete("reach-lab", { nextId: "find-badge" });
-    this.ctx.overlays.showHint("No answer. Find your badge — check the server room");
-    this.phase = "to-badge";
+    this.ctx.quest.complete("reach-lab", { nextId: "knock" });
+    this.ctx.overlays.showHint("Access denied. Knock on the lab door");
+    this.phase = "knock";
     this.currentFpTarget = null;
   }
 
-  /** Jack knocks on the glass; exactly 3 seconds pass with no answer. */
-  private async knockOnGlass(): Promise<void> {
-    this.ctx.audio.playSfx("glass-knock");
-    await new Promise((r) => setTimeout(r, 3000));
+  /**
+   * The knock beat (Godot KNOCK_ON_DOOR): Jack knocks three times, exactly 3
+   * seconds pass with no answer, he mutters, then the quest sends him to find
+   * his badge in the server room.
+   */
+  private async onKnock(): Promise<void> {
+    if (this.knockInProgress || this.phase !== "knock") return;
+    this.knockInProgress = true;
+    this.currentFpTarget = null;
+    if (this.knockZone) this.dismissHighlight(this.knockZone);
+    this.ctx.audio.playSfx("door-knock");
+    await this.wait(3000); // exactly three seconds, no answer
+    if (this.disposed) return;
+    await this.sayLine(
+      "Jack",
+      "Hmm, that's strange. No response — but I do need to find my badge to make sure everything's okay.",
+      4600,
+    );
+    if (this.disposed) return;
+    this.ctx.dialogue.hideSubtitle();
+    this.ctx.quest.complete("knock", { nextId: "find-badge" });
+    this.ctx.overlays.showHint("Find your badge — check the server room");
+    this.phase = "to-badge";
+  }
+
+  /** Show a subtitle line and hold for `ms` (no VO yet — Replit re-voices). */
+  private async sayLine(speaker: string, text: string, ms: number): Promise<void> {
+    this.ctx.dialogue.showSubtitle({ speaker, text });
+    await this.wait(ms);
   }
 
   /** USE on the dropped badge: has_badge = true and the badge prop disappears. */
@@ -2769,18 +2891,33 @@ class PrologueCafeteriaScene implements IScene {
     this.ctx.quest.complete("reach-sarah");
     this.ctx.overlays.hideHint();
     // Hand control to the cinematic director for good — the rest of the prologue
-    // is the accident sequence (no resume to first person).
+    // is the coffee ritual + accident sequence (no resume to first person).
     this.suspendFirstPerson();
     this.phase = "accident";
     this.sarahNav.stop();
     this.faceTowards(this.jack, this.sarah.position);
     this.faceTowards(this.sarah, this.jack.position);
     this.setCameraMoment("climax", { cut: true });
-    // Jack hands Sarah one of the coffees.
+    // Jack sets the coffees down with Sarah (inventory toggle) and the seven-line
+    // COFFEE_RITUAL plays (Godot lab_builder.gd:866-872). Replit re-voices later.
     await this.handCoffeeToSarah();
     if (this.disposed) return;
     this.ctx.overlays.showClock("11:46 PM");
-    await this.wait(1400);
+    const ritual: Array<[string, string, number]> = [
+      ["Sarah", "You don't have to do that.", 2200],
+      ["Jack", "I know. I did it anyway.", 2000],
+      ["Sarah", "Look at these readings. Something's wrong.", 2400],
+      ["Jack", "Should I call someone?", 1700],
+      ["Sarah", "I'm the someone they would call.", 2200],
+      ["Jack", "How bad?", 1400],
+      ["Sarah", "I don't know yet.", 2000],
+    ];
+    for (const [who, text, ms] of ritual) {
+      await this.sayLine(who, text, ms);
+      if (this.disposed) return;
+    }
+    this.ctx.dialogue.hideSubtitle();
+    await this.wait(600);
     if (this.disposed) return;
     void this.runAccidentSequence();
   }
@@ -2791,55 +2928,57 @@ class PrologueCafeteriaScene implements IScene {
   }
 
   /**
-   * The accident sequence, beat-for-beat from the confirmed Godot design.
-   * SCRIPTED intro: lights flicker and cut to black → seamless switch to Sarah
-   * in the dark → red emergency lights. Then control is handed to the PLAYER as
-   * SARAH: grab the console flashlight (onGrabFlashlight) and cross the walkway
-   * to the power unit (onRestorePower), which resumes the scripted outro:
-   * power/lights return → alarms → comms get no answer → both pulled into the
-   * core → slow fade to BLACK (never white) → "Beyond Extinction".
+   * The accident sequence, matching the Godot lab_builder.gd code exactly.
+   * A lighting blackout (NOT a screen fade) with an alarm → Jack reacts in the
+   * dark → seamless swap of first-person control to Sarah → red emergency lights
+   * → Sarah's two lines → hand to the PLAYER as Sarah to find the flashlight
+   * (onGrabFlashlight) and reach the power unit (onRestorePower → portal).
    */
   private async runAccidentSequence(): Promise<void> {
     if (this.accidentStarted) return;
     this.accidentStarted = true;
     this.ctx.input.setEnabled(false);
 
-    // Both drop their coffees (inventory toggle only — no cups spawned in world).
+    // Both set their coffees down (inventory toggle only — nothing spawned).
     this.dropAllCoffees();
 
-    // --- 1. Lights flicker, then cut to black -------------------------------
+    // --- CASCADE_FAILURE → BLACKOUT: main lights cut out, alarm sounds. The
+    // scene goes dark (Godot set_power(false)); there is NO screen fade.
     this.mainLightBase = this.mainLights.map((l) => l.intensity);
     this.ctx.audio.playSfx("power-fail");
-    for (const k of [0.15, 1, 0.05, 0.7, 0, 0.4, 0]) {
+    for (const k of [0.2, 1, 0.05, 0.6, 0]) {
       this.scaleMainLights(k);
-      await this.wait(110);
+      await this.wait(90);
       if (this.disposed) return;
     }
-    this.scaleMainLights(0); // full blackout
-    await this.ctx.overlays.fadeToBlack(260);
+    this.scaleMainLights(0); // dark
+    this.ctx.audio.playSfx("alarm");
+    // Jack reacts, still cinematic + visible (control hasn't swapped yet).
+    this.faceTowards(this.jack, this.sarah.position);
+    await this.sayLine("Jack", "What happened?", 1800);
     if (this.disposed) return;
 
-    // --- 2. Seamless switch to Sarah while the screen is dark ---------------
-    // No loading screen: the emergency lights come up behind the black and
-    // first-person control moves from Jack (who stays at the console) to Sarah.
-    this.emergencyOn = true; // red emergency lights come up (see update())
+    // --- Seamless control swap to Sarah (Jack stays where he is). First person
+    // becomes Sarah; her first line plays over the dark before the red lights.
     this.faceTowards(this.jack, this.coreWorld);
-    this.switchControlTo(this.sarah, this.flashlight?.position);
-    this.phase = "sarah-flashlight";
-    await this.wait(400);
+    this.switchControlTo(this.sarah, this.powerUnitWorld);
+    await this.sayLine("Sarah", "The cascade is failing — I need to get to the manual override.", 2800);
     if (this.disposed) return;
-    await this.ctx.overlays.fadeFromBlack(600);
+    // Red emergency lights come up (Godot emergency_lights_on()).
+    this.emergencyOn = true;
+    await this.sayLine("Sarah", "There's an emergency flashlight on my station. Go — find it!", 2600);
     if (this.disposed) return;
+    this.ctx.dialogue.hideSubtitle();
 
-    // --- 3. PLAYER now controls Sarah: find and grab the flashlight. --------
-    this.ctx.overlays.showHint("Power's out. Find the flashlight on the console");
-    // Control stays with the player until they USE the flashlight (onGrabFlashlight),
-    // then the power unit (onRestorePower) resumes the scripted outro.
+    // --- FIND_FLASHLIGHT: hand to the player as Sarah.
+    this.phase = "sarah-flashlight";
+    this.currentFpTarget = null;
+    this.ctx.overlays.showHint("Find the emergency flashlight on the console");
   }
 
   /**
-   * PLAYER-Sarah grabs the console flashlight (USE). The cone switches on and the
-   * objective becomes crossing to the power unit. Control stays with the player.
+   * PLAYER-Sarah grabs the console flashlight. Its cone switches on and the
+   * objective becomes reaching the mainframe power unit (RESTORE_POWER).
    */
   private onGrabFlashlight(): void {
     if (this.flashlightActive) return;
@@ -2847,100 +2986,93 @@ class PrologueCafeteriaScene implements IScene {
     this.ctx.audio.playSfx("flashlight-click");
     this.currentFpTarget = null;
     this.phase = "sarah-power";
-    this.ctx.overlays.showHint("Cross the walkway to the emergency power unit");
+    this.ctx.overlays.showHint("Reach the mainframe and attempt the manual override");
   }
 
   /**
-   * PLAYER-Sarah reaches the power unit (USE) and restores power — this ends the
-   * playable segment and resumes the scripted accident outro.
+   * PLAYER-Sarah reaches the mainframe power unit and reboots. Matching the Godot
+   * code, this does NOT relight the lab or re-alarm — it plays the power-on cue,
+   * kills the red strobes, and goes straight into the portal cutscene.
    */
   private async onRestorePower(): Promise<void> {
     if (this.phase !== "sarah-power") return;
-    // Back to cinematic for the closing beats.
     this.suspendFirstPerson();
     this.phase = "accident";
-    this.setCameraMoment("sarah-follow", { cut: true });
-    this.faceTowards(this.sarah, this.powerUnitWorld);
+    this.currentFpTarget = null;
     this.ctx.overlays.hideHint();
-
-    // --- 6. Power restores: lab lights return, flashlight off ---------------
     this.ctx.audio.playSfx("power-restore");
-    this.stowFlashlight();
     if (this.powerUnitPanel) {
       this.powerUnitPanel.emissive.setHex(0x2ad24a);
       this.powerUnitPanel.emissiveIntensity = 1.4;
     }
-    // Ramp the main lights back up over ~700 ms.
-    await new Promise<void>((resolve) => {
-      const t0 = performance.now();
-      const tick = () => {
-        if (this.disposed) return resolve();
-        const k = Math.min((performance.now() - t0) / 700, 1);
-        this.scaleMainLights(k);
-        if (k < 1) requestAnimationFrame(tick);
-        else resolve();
-      };
-      tick();
-    });
-    if (this.disposed) return;
+    // Stop the red strobes (Godot _stop_emergency_strobes) — the lab stays dark;
+    // the portal light takes over from here.
+    this.emergencyOn = false;
+    for (const rl of this.redLights) rl.intensity = 0;
+    this.stowFlashlight();
+    await this.playPortalCutscene();
+  }
 
-    // --- 7. Alarms trigger immediately -------------------------------------
-    this.alarmOn = true;
-    this.ctx.audio.playSfx("alarm");
-    this.ctx.audio.playMusic("lab-suspense");
-    this.ctx.overlays.showClock("11:47 PM", true);
-    this.ctx.overlays.hideHint();
-    await this.wait(900);
-    if (this.disposed) return;
-
-    // --- 8. Sarah tries comms — no response from Jack ----------------------
-    this.setCameraMoment("sarah-follow");
-    this.playGesture(this.sarah, "Checkout_Gesture");
-    this.ctx.audio.playSfx("comms-static");
-    this.ctx.overlays.showToast("Jack? Do you copy?");
-    await this.wait(2400);
-    if (this.disposed) return;
-    this.ctx.overlays.showToast("...no response.");
-    await this.wait(1600);
-    if (this.disposed) return;
-
-    // --- 9, 10. Both are pulled to the accelerator core and touch it -------
+  /**
+   * PORTAL_CUTSCENE (Godot code): both are drawn into the accelerator core, the
+   * ring goes white-hot and collapses, then the screen fades to WHITE, holds,
+   * and cross-fades to BLACK (no "Beyond Extinction" title card) before Chapter
+   * One. White→black is deliberate here — it matches lab_builder.gd.
+   */
+  private async playPortalCutscene(): Promise<void> {
     this.phase = "cutscene";
-    this.vortex.visible = true;
-    this.ctx.audio.playSfx("vortex-open");
-    this.setCameraMoment("core-pull", { cut: true });
+    this.ctx.input.setEnabled(false);
+    this.ctx.overlays.hideClock();
     const core = this.coreWorld;
-    // Grow the core vortex while dragging both toward it — involuntarily.
-    const jackTo = core.clone().add(new THREE.Vector3(-2.5, 0, 0));
-    const sarahTo = core.clone().add(new THREE.Vector3(2.5, 0, 0));
     this.faceTowards(this.jack, core);
     this.faceTowards(this.sarah, core);
+    this.setCameraMoment("core-pull", { cut: true });
+    this.vortex.visible = true;
+    this.jack.visible = true;
+    this.ctx.audio.playSfx("vortex-open");
+
+    // Ring + vortex go white-hot; the portal light ramps up.
+    const ring = (this.console.userData as { ring?: THREE.Mesh }).ring;
+    const ringMat = ring?.material as THREE.MeshStandardMaterial | undefined;
+    // Both are pulled to the core while it charges (Godot glides them over ~7s;
+    // web pacing is tighter). The portal light ramp runs alongside.
     await Promise.all([
-      this.growVortex(1, 2200),
-      this.tween(this.jack.position, jackTo, 2200),
-      this.tween(this.sarah.position, sarahTo, 2200),
+      this.growVortex(1, 3000),
+      this.tween(this.jack.position, core.clone().add(new THREE.Vector3(-2, 0, 0)), 3000),
+      this.tween(this.sarah.position, core.clone().add(new THREE.Vector3(2, 0, 0)), 3000),
+      new Promise<void>((resolve) => {
+        const t0 = performance.now();
+        const tick = () => {
+          if (this.disposed) return resolve();
+          const k = Math.min((performance.now() - t0) / 3000, 1);
+          this.portalLight.intensity = k * 40;
+          if (ringMat) {
+            ringMat.emissive.setHex(0xffffff);
+            ringMat.emissiveIntensity = k * 6;
+          }
+          if (k < 1) requestAnimationFrame(tick);
+          else resolve();
+        };
+        tick();
+      }),
     ]);
     if (this.disposed) return;
     this.ctx.audio.playSfx("vortex-pull");
-    await this.wait(500); // both touch the core
+    // Collapse to a singularity.
+    this.portalLight.intensity = 90;
+    await this.wait(400);
     if (this.disposed) return;
 
-    // --- 11. Slow fade to BLACK — never white ------------------------------
-    this.setCameraMoment("finale");
-    await Promise.all([
-      this.dissolveCharacter(this.jack, 2200),
-      this.dissolveCharacter(this.sarah, 2200),
-      this.ctx.overlays.fadeToBlack(2600),
-    ]);
+    // Fade to WHITE (1.2s) → hold (0.7s) → cross-fade to BLACK (1.8s). No title.
+    await this.ctx.overlays.fadeToColor("#ffffff", 1200);
+    if (this.disposed) return;
+    await this.wait(700);
+    await this.ctx.overlays.recolorTo("#000000", 1800);
     if (this.disposed) return;
     this.ctx.overlays.setBlackInstant(true);
-    this.ctx.overlays.hideClock();
-
-    // --- 12. Title card ----------------------------------------------------
-    await this.ctx.overlays.showCaption("BEYOND EXTINCTION", 3200);
+    await this.wait(600);
     if (this.disposed) return;
 
-    // --- 13. Into Chapter One ----------------------------------------------
     this.phase = "done";
     this.ctx.scenes.goTo(createChapterOneScene, false);
   }
@@ -3071,6 +3203,11 @@ class PrologueCafeteriaScene implements IScene {
    * opens up around the subject instead of just rendering the same crop from
    * further away.
    */
+  /** Current first-person look sensitivity from the player's settings. */
+  private lookSensitivity(): number {
+    return getSettings().lookSensitivity;
+  }
+
   private applyFov(): void {
     this.camera.fov = this.settings.fov + portraitFovBoost(this.camera.aspect);
     this.camera.updateProjectionMatrix();
@@ -3470,6 +3607,7 @@ class PrologueCafeteriaScene implements IScene {
     this.mixers = [];
     this.player?.dispose();
     this.unsubClick?.();
+    this.unsubLongPress?.();
     this.unsubSettings?.();
     closeSettingsPanel();
     this.gearEl?.remove();

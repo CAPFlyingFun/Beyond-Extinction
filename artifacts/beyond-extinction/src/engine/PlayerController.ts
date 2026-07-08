@@ -43,7 +43,7 @@ export class PlayerController {
   private readonly input: InputManager;
   private readonly eyeHeight: number;
   private readonly moveSpeed: number;
-  private readonly lookSensitivity: number;
+  private lookSensitivity: number;
   private active = false;
 
   private readonly forward = new THREE.Vector3();
@@ -74,6 +74,11 @@ export class PlayerController {
     this.yaw = THREE.MathUtils.degToRad(-facingDeg); // heading H -> yaw -H
     this.pitch = 0;
     this.applyToCamera();
+  }
+
+  /** Live-update the drag-look sensitivity (radians per pixel). */
+  setLookSensitivity(v: number): void {
+    if (Number.isFinite(v) && v > 0) this.lookSensitivity = v;
   }
 
   setActive(active: boolean): void {

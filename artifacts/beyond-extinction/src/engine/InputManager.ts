@@ -2,6 +2,8 @@ import * as THREE from "three";
 
 type ClickHandler = (pointer: THREE.Vector2, event: PointerEvent) => void;
 
+type LongPressHandler = (pointer: THREE.Vector2) => void;
+
 type FpPointerRole = "move" | "look";
 interface FpPointerState {
   role: FpPointerRole;
@@ -9,6 +11,10 @@ interface FpPointerState {
   startY: number;
   lastX: number;
   lastY: number;
+  /** Long-press timer id; cleared once the pointer moves or lifts. */
+  holdTimer: number | null;
+  /** True once the pointer moved past the long-press cancel threshold. */
+  moved: boolean;
 }
 
 /**
@@ -51,6 +57,12 @@ export class InputManager {
   private readonly fpLook = { x: 0, y: 0 }; // accumulated raw drag delta (px)
   private readonly fpJoyRadius = 56;
   private readonly interactHandlers = new Set<() => void>();
+  // Long-press-to-interact: a stationary hold fires these with the touch point
+  // (NDC) so the scene can raycast the item under the finger. Movement past
+  // LONG_PRESS_MOVE_PX cancels it (that gesture is a look-drag / joystick).
+  private readonly longPressHandlers = new Set<LongPressHandler>();
+  private readonly LONG_PRESS_MS = 420;
+  private readonly LONG_PRESS_MOVE_PX = 14;
 
   private onKeyDown = (e: KeyboardEvent) => {
     if (!this.enabled) return;
@@ -198,18 +210,19 @@ export class InputManager {
   }
 
   /**
-   * Show or hide the contextual interact prompt + button. Pass null to hide it
-   * (e.g. when nothing interactable is under the crosshair / in range).
+   * Show or hide the contextual interact hint. Interaction is now driven by a
+   * long-press directly on the item (see {@link onLongPress}), so the on-screen
+   * "Interact" BUTTON is never shown — the hint just tells the player what a
+   * long-press on the highlighted item will do. Pass null to hide it.
    */
   setInteractPrompt(text: string | null): void {
     if (!this.fpLayer || !this.fpPromptEl || !this.fpInteractBtn) return;
+    this.fpInteractBtn.style.display = "none"; // long-press replaces the button
     if (text) {
       this.fpPromptEl.textContent = text;
       this.fpPromptEl.style.display = "block";
-      this.fpInteractBtn.style.display = "block";
     } else {
       this.fpPromptEl.style.display = "none";
-      this.fpInteractBtn.style.display = "none";
     }
   }
 
@@ -218,6 +231,9 @@ export class InputManager {
   }
 
   private resetFpInput(): void {
+    for (const st of this.fpPointers.values()) {
+      if (st.holdTimer !== null) clearTimeout(st.holdTimer);
+    }
     this.fpPointers.clear();
     this.fpJoy.x = 0;
     this.fpJoy.y = 0;
@@ -287,12 +303,27 @@ export class InputManager {
     const role: FpPointerRole =
       e.clientX < window.innerWidth / 2 ? "move" : "look";
     this.fpLayer.setPointerCapture(e.pointerId);
+    // Arm a long-press: if this pointer stays put for LONG_PRESS_MS it becomes a
+    // "use the item under my finger" gesture (works on either half — a held
+    // joystick or a held look-touch both contribute no motion). Movement cancels.
+    const px = e.clientX;
+    const py = e.clientY;
+    const holdTimer = window.setTimeout(() => {
+      const st = this.fpPointers.get(e.pointerId);
+      if (!st || st.moved) return;
+      st.holdTimer = null;
+      st.moved = true; // consume: pointerup won't treat this as anything else
+      const p = this.clientToNdc(px, py);
+      this.longPressHandlers.forEach((h) => h(p));
+    }, this.LONG_PRESS_MS);
     this.fpPointers.set(e.pointerId, {
       role,
       startX: e.clientX,
       startY: e.clientY,
       lastX: e.clientX,
       lastY: e.clientY,
+      holdTimer,
+      moved: false,
     });
     if (role === "move" && this.fpJoyBase && this.fpJoyStick) {
       this.fpJoyBase.style.left = `${e.clientX}px`;
@@ -306,6 +337,14 @@ export class InputManager {
   private onFpPointerMove = (e: PointerEvent) => {
     const st = this.fpPointers.get(e.pointerId);
     if (!st) return;
+    // Past the threshold this is a drag (look / joystick), not a long-press.
+    if (!st.moved && Math.hypot(e.clientX - st.startX, e.clientY - st.startY) > this.LONG_PRESS_MOVE_PX) {
+      st.moved = true;
+      if (st.holdTimer !== null) {
+        clearTimeout(st.holdTimer);
+        st.holdTimer = null;
+      }
+    }
     if (st.role === "move") {
       let dx = e.clientX - st.startX;
       let dy = e.clientY - st.startY;
@@ -331,6 +370,7 @@ export class InputManager {
   private onFpPointerUp = (e: PointerEvent) => {
     const st = this.fpPointers.get(e.pointerId);
     if (!st) return;
+    if (st.holdTimer !== null) clearTimeout(st.holdTimer);
     this.fpPointers.delete(e.pointerId);
     if (st.role === "move") {
       this.fpJoy.x = 0;
@@ -338,6 +378,21 @@ export class InputManager {
       if (this.fpJoyBase) this.fpJoyBase.style.display = "none";
     }
   };
+
+  /** Convert client (screen) px to normalized device coords over the canvas. */
+  private clientToNdc(clientX: number, clientY: number): THREE.Vector2 {
+    const rect = this.dom.getBoundingClientRect();
+    return new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+  }
+
+  /** Register a handler fired on a stationary long-press, with the touch NDC. */
+  onLongPress(cb: LongPressHandler): () => void {
+    this.longPressHandlers.add(cb);
+    return () => this.longPressHandlers.delete(cb);
+  }
 
   dispose(): void {
     window.removeEventListener("keydown", this.onKeyDown);
@@ -352,7 +407,12 @@ export class InputManager {
       this.fpLayer.remove();
       this.fpLayer = null;
     }
+    for (const st of this.fpPointers.values()) {
+      if (st.holdTimer !== null) clearTimeout(st.holdTimer);
+    }
+    this.fpPointers.clear();
     this.interactHandlers.clear();
+    this.longPressHandlers.clear();
     this.clickHandlers.clear();
   }
 }

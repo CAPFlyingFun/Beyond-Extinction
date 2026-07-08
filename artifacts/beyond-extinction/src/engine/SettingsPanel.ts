@@ -61,6 +61,10 @@ export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void
         <span class="be-field__row"><span>Zoom (higher = closer)</span><b data-readout></b></span>
         <input type="range" />
       </label>
+      <label class="be-field" data-key="lookSensitivity">
+        <span class="be-field__row"><span>Camera speed (press &amp; swipe)</span><b data-readout></b></span>
+        <input type="range" />
+      </label>
       <div class="be-settings__actions">
         <button class="be-btn" data-action="reset">Reset</button>
         <button class="be-btn be-btn--primary" data-action="close">Done</button>
@@ -73,6 +77,11 @@ export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void
   const syncers = {
     fov: setupField("fov", (v) => `${Math.round(v)}°`),
     zoom: setupField("zoom", (v) => `${v.toFixed(2)}×`),
+    // Show the slider as a friendly 1–10 scale rather than raw radians/pixel.
+    lookSensitivity: setupField("lookSensitivity", (v) => {
+      const r = SETTINGS_RANGES.lookSensitivity;
+      return `${Math.round(((v - r.min) / (r.max - r.min)) * 9 + 1)}`;
+    }),
   };
 
   // Auto Play is a boolean, so it lives outside the numeric slider machinery.
@@ -88,7 +97,7 @@ export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void
   });
 
   function setupField(
-    key: "fov" | "zoom",
+    key: "fov" | "zoom" | "lookSensitivity",
     format: (v: number) => string,
   ): (v: number) => void {
     const wrap = el.querySelector(`[data-key="${key}"]`) as HTMLElement;
@@ -137,6 +146,7 @@ export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void
     const s = resetSettings();
     syncers.fov(s.fov);
     syncers.zoom(s.zoom);
+    syncers.lookSensitivity(s.lookSensitivity);
     syncAutoPlay(s.autoPlay);
   });
   el.addEventListener("click", (e) => {
