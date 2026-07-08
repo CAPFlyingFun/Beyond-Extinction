@@ -1418,9 +1418,13 @@ class PrologueCafeteriaScene implements IScene {
       ? new THREE.MeshStandardMaterial({
           color: 0x8fc7e6,
           transparent: true,
-          opacity: 0.26,
+          opacity: 0.34,
           roughness: 0.1,
           metalness: 0.2,
+          // Faint self-lit blue so it reads as GLASS even in a dim room (Godot
+          // _mat_glass emits ~#4c99e6); without this it looks like dark metal.
+          emissive: 0x4c99e6,
+          emissiveIntensity: 0.55,
           side: THREE.DoubleSide,
         })
       : new THREE.MeshStandardMaterial({ color: 0x39485f, roughness: 0.5, metalness: 0.55 });
@@ -1623,9 +1627,12 @@ class PrologueCafeteriaScene implements IScene {
       { color: "story", icon: "\u{1F526}", radius: 1.3, markerHeight: 2.4 },
       () => this.phase === "sarah-flashlight",
     );
-    // The cone light (off until she clicks it on), aimed by updateFlashlight().
-    const spot = new THREE.SpotLight(0xfff2d0, 0, 70, Math.PI / 6, 0.45, 1.2);
-    spot.visible = false;
+    // The cone light. Created VISIBLE with intensity 0 (not visible=false) so it
+    // is counted in every material's compiled shader from the start — turning a
+    // hidden light on mid-scene forces a shader recompile (a multi-second hitch
+    // on mobile). Aimed each frame by update(); brightened in grabFlashlight().
+    const spot = new THREE.SpotLight(0xfff4de, 0, 90, Math.PI / 7, 0.35, 1.0);
+    spot.intensity = 0;
     spot.target.position.set(0, 0, 0);
     this.scene.add(spot, spot.target);
     this.flashlightSpot = spot;
@@ -3114,10 +3121,11 @@ class PrologueCafeteriaScene implements IScene {
     hand.attach(this.flashlight);
     this.flashlight.position.set(0, 0, 0);
     const lens = (this.flashlight.userData as { lens?: THREE.MeshStandardMaterial }).lens;
-    if (lens) lens.emissiveIntensity = 3;
+    if (lens) lens.emissiveIntensity = 4;
     if (this.flashlightSpot) {
-      this.flashlightSpot.visible = true;
-      this.flashlightSpot.intensity = 9;
+      // Bright, dominant cone (Godot flashlight energy 6 + long range) so it
+      // clearly lights the dark, red-washed lab.
+      this.flashlightSpot.intensity = 90;
     }
     this.flashlightActive = true;
   }
@@ -3126,8 +3134,7 @@ class PrologueCafeteriaScene implements IScene {
   private stowFlashlight(): void {
     this.flashlightActive = false;
     if (this.flashlightSpot) {
-      this.flashlightSpot.visible = false;
-      this.flashlightSpot.intensity = 0;
+      this.flashlightSpot.intensity = 0; // stays visible (counted), just dark
     }
     const lens =
       this.flashlight && (this.flashlight.userData as { lens?: THREE.MeshStandardMaterial }).lens;
@@ -3536,20 +3543,19 @@ class PrologueCafeteriaScene implements IScene {
       }
     }
 
-    // Emergency lighting: red lights come up when the power fails, and pulse once
-    // the alarm sounds; the accelerator ring glows hot as the core goes critical.
+    // Emergency lighting: a dim RED ambient tints the WHOLE room (the
+    // night-vision wash from the Godot build), plus the red point lights. While
+    // the flashlight is out the wash + points dim down so the bright cone clearly
+    // dominates; the accelerator ring goes near-dark for the outage.
     if (this.emergencyOn) {
-      const pulse = this.alarmOn ? (Math.sin(elapsed * 8) * 0.5 + 0.5) * 4 : 0;
-      const baseRed = this.alarmOn ? 5 : 3.4;
-      for (const rl of this.redLights) rl.intensity = baseRed + pulse;
-      if (this.alarmOn) {
-        const ring = (this.console.userData as { ring?: THREE.Mesh }).ring;
-        if (ring) {
-          const m = ring.material as THREE.MeshStandardMaterial;
-          m.emissive.setHex(0xff3322);
-          m.emissiveIntensity = 0.6 + pulse * 0.25;
-        }
-      }
+      const dim = this.flashlightActive ? 0.5 : 1.0;
+      this.ambient.color.setHex(0x8a2a20);
+      this.ambient.intensity = 0.82 * dim;
+      const baseRed = this.flashlightActive ? 1.6 : 2.8;
+      for (const rl of this.redLights) rl.intensity = baseRed;
+      const ring = (this.console.userData as { ring?: THREE.Mesh }).ring;
+      const m = ring?.material as THREE.MeshStandardMaterial | undefined;
+      if (m) m.emissiveIntensity = 0.04; // accelerator off during the outage
     }
 
     // Camera: in first person the player owns the camera (set in
