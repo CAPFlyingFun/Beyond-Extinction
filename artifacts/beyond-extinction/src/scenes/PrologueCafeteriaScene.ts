@@ -1605,6 +1605,16 @@ class PrologueCafeteriaScene implements IScene {
       depthWrite: false,
     });
     const panels: DoorPanel[] = [];
+    // Anti-z-fight geometry for the transparent glass door, mirroring the Godot
+    // build (lab_builder._build_doors): the two leaves sit on DIFFERENT
+    // wall-normal planes (±dn) and are WIDER than half the gap so they overlap
+    // past the centre and bury their outer edges in the solid wall — so no two
+    // faces are ever coplanar as the camera moves (which is what fought before).
+    // Opaque doors keep their original meet-in-the-middle leaves.
+    const leafW = glass ? half * 1.2 : half; // glass leaves overlap; opaque meet
+    const bury = glass ? 0.24 : 0; // glass outer edge buries into the wall
+    const dn = glass ? 0.2 : 0; // wall-normal separation between the two leaves
+    const alongOff = (s: number) => s * (half + bury - leafW / 2); // centre along gap axis
     for (const s of [-1, 1] as const) {
       let leaf: THREE.Object3D;
       if (glass) {
@@ -1615,26 +1625,31 @@ class PrologueCafeteriaScene implements IScene {
         const railH = 0.8;
         const glassBot = sillH;
         const glassH = DOOR_H - railH - glassBot;
-        const sill = new THREE.Mesh(boxGeo(half, sillH), metalMat);
+        const sill = new THREE.Mesh(boxGeo(leafW, sillH), metalMat);
         sill.position.y = sillH / 2;
-        const rail = new THREE.Mesh(boxGeo(half, railH), metalMat);
+        const rail = new THREE.Mesh(boxGeo(leafW, railH), metalMat);
         rail.position.y = DOOR_H - railH / 2;
-        const pane = new THREE.Mesh(boxGeo(half, glassH), glassMat);
+        const pane = new THREE.Mesh(boxGeo(leafW, glassH), glassMat);
         pane.position.y = glassBot + glassH / 2;
         grp.add(sill, rail, pane);
         leaf = grp;
       } else {
-        const m = new THREE.Mesh(boxGeo(half, DOOR_H), solidMat);
+        const m = new THREE.Mesh(boxGeo(leafW, DOOR_H), solidMat);
         m.position.y = DOOR_H / 2;
         m.castShadow = true;
         leaf = m;
       }
-      leaf.position.x = spec.x + (alongZ ? 0 : (s * half) / 2);
-      leaf.position.z = spec.z + (alongZ ? (s * half) / 2 : 0);
+      if (alongZ) {
+        leaf.position.x = spec.x + s * dn;
+        leaf.position.z = spec.z + alongOff(s);
+      } else {
+        leaf.position.x = spec.x + alongOff(s);
+        leaf.position.z = spec.z + s * dn;
+      }
       this.scene.add(leaf);
       panels.push({
         mesh: leaf,
-        openOffset: alongZ ? new THREE.Vector3(0, 0, s * half) : new THREE.Vector3(s * half, 0, 0),
+        openOffset: alongZ ? new THREE.Vector3(0, 0, s * leafW) : new THREE.Vector3(s * leafW, 0, 0),
       });
     }
     // Opaque header filling the wall above the door to the ceiling (so there is
