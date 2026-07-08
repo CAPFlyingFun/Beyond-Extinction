@@ -3073,6 +3073,7 @@ class PrologueCafeteriaScene implements IScene {
     await this.wait(600);
     if (this.disposed) return;
 
+    // No title card (matches the Godot code) — straight to Chapter One.
     this.phase = "done";
     this.ctx.scenes.goTo(createChapterOneScene, false);
   }
