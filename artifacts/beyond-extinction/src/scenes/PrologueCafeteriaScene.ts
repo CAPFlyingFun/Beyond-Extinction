@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import {
+  M,
   ANCHORS,
   ROOMS,
   WALL_SEGMENTS,
@@ -723,14 +724,17 @@ class PrologueCafeteriaScene implements IScene {
     mkLedge(lab.minX + inset, lcz, LEDGE_WIDTH, ld);
     mkLedge(lab.maxX - inset, lcz, LEDGE_WIDTH, ld);
 
-    // ---- Cafeteria dressing: two tables + two vending machines (per blueprint). ----
-    const caf = ROOMS.cafeteria;
+    // ---- Cafeteria dressing — positions taken 1:1 from the Godot build
+    // (the_lab_incident.tscn + lab_builder._build_cafeteria), blueprint metres →
+    // world via bpx/bpz, metre sizes ×M. ----
     const tableMat = new THREE.MeshStandardMaterial({ color: 0x33445c, roughness: 0.6 });
+    // Two table+chairs sets. Godot gives each ONLY a 1.25 m tabletop collider
+    // (chairs are visual + walk-through), so the table group is NOT tagged solid;
+    // instead an invisible tabletop box carries the collision. This stops the
+    // chair-inclusive bounds from clipping walls / over-blocking the floor.
     const tableSpots: Array<[number, number, number]> = [
-      // [x, z, yaw] — face the two sets slightly differently so the pair reads
-      // as arranged furniture rather than clones.
-      [bpx(3), bpz(6.5), 0],
-      [bpx(3.5), bpz(10.5), Math.PI / 2],
+      [bpx(3.71), bpz(6.98), 0], // set #1 (hand-placed in the Godot .tscn)
+      [bpx(3.0), bpz(9.8), Math.PI / 2], // set #2 (_spawn_table_set)
     ];
     for (const [tx, tz, yaw] of tableSpots) {
       if (this.tableProto) {
@@ -744,8 +748,13 @@ class PrologueCafeteriaScene implements IScene {
         });
         tbl.position.set(tx, 0, tz);
         tbl.rotation.y = yaw;
-        tbl.userData.solid = true;
         scene.add(tbl);
+        // Tabletop-only collider (Godot: BoxShape 1.25×0.75×1.25 at y+0.375).
+        const col = new THREE.Mesh(new THREE.BoxGeometry(1.25 * M, 0.75 * M, 1.25 * M), tableMat);
+        col.visible = false;
+        col.position.set(tx, 0.375 * M, tz);
+        col.userData.solid = true;
+        scene.add(col);
       } else {
         const t = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.4, 0.4, 16), tableMat);
         t.position.set(tx, 4, tz);
@@ -756,20 +765,22 @@ class PrologueCafeteriaScene implements IScene {
         scene.add(t, leg);
       }
     }
+    // Two vending machines against the west wall (Godot: (1.25, .95, 6.2/7.4),
+    // size 0.75×1.90×0.70, blue screen on the front face at x=1.63).
     const vendMat = new THREE.MeshStandardMaterial({ color: 0x1c2740, roughness: 0.5, metalness: 0.4 });
     const vendGlowMat = new THREE.MeshStandardMaterial({
       color: 0x0a1828,
       emissive: 0x39c5ff,
       emissiveIntensity: 0.6,
     });
-    for (const vz of [bpz(6), bpz(8.5)]) {
-      const v = new THREE.Mesh(new THREE.BoxGeometry(2.4, 8, 3.2), vendMat);
-      v.position.set(caf.minX + 1.7, 4, vz);
+    for (const vz of [bpz(6.2), bpz(7.4)]) {
+      const v = new THREE.Mesh(new THREE.BoxGeometry(0.75 * M, 1.9 * M, 0.7 * M), vendMat);
+      v.position.set(bpx(1.25), 0.95 * M, vz);
       v.castShadow = true;
       v.userData.solid = true;
-      const screen = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 4), vendGlowMat);
-      screen.position.set(caf.minX + 2.95, 5, vz);
-      screen.rotation.y = Math.PI / 2;
+      const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.5 * M, 1.1 * M), vendGlowMat);
+      screen.position.set(bpx(1.63), 1.05 * M, vz);
+      screen.rotation.y = Math.PI / 2; // face east into the room
       scene.add(v, screen);
     }
 
@@ -1888,15 +1899,17 @@ class PrologueCafeteriaScene implements IScene {
    * where the resonance-cascade beat could crash.
    */
   private buildRedLights(): void {
-    // Four emergency lights spread across Lab Seven's quadrants around the
-    // centred accelerator ring, dark until the accident cuts the power.
+    // Four red emergency omnis around the accelerator ring — Godot places them at
+    // a 6 m radius (lab_builder: LCX+sin(a)*6, LCZ+cos(a)*6) with colour
+    // (1,0.15,0.05). They stay dark until the accident. Kept LOW (y≈9) with GENTLE
+    // decay so three.js' inverse-square falloff still lands visible red pools on
+    // the deck and on the characters — the old y=16 / decay-2 lights fell to
+    // ~nothing at floor level, which is why no red ever showed.
+    const R = 5.5 * M; // ≈22u, matches Godot's 6 m ring-radius offset
     for (let i = 0; i < 4; i++) {
-      const rl = new THREE.PointLight(0xff2d22, 0, 90);
-      rl.position.set(
-        RING_CENTER.x + (i % 2 ? 15 : -15),
-        16,
-        RING_CENTER.z + (i < 2 ? 15 : -15),
-      );
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      const rl = new THREE.PointLight(0xff2a12, 0, 70, 1.0);
+      rl.position.set(RING_CENTER.x + Math.sin(a) * R, 9, RING_CENTER.z + Math.cos(a) * R);
       this.scene.add(rl);
       this.redLights.push(rl);
     }
@@ -3735,9 +3748,12 @@ class PrologueCafeteriaScene implements IScene {
     // dominates; the accelerator ring goes near-dark for the outage.
     if (this.emergencyOn) {
       const dim = this.flashlightActive ? 0.5 : 1.0;
-      this.ambient.color.setHex(0x8a2a20);
-      this.ambient.intensity = 0.82 * dim;
-      const baseRed = this.flashlightActive ? 1.6 : 2.8;
+      // Saturated red wash (brighter/redder than the old near-black brown so the
+      // room clearly reads as emergency-lit), plus the red omni pools. Intensities
+      // are tuned for the new low, gentle-decay red lights.
+      this.ambient.color.setHex(0xb42417);
+      this.ambient.intensity = 0.7 * dim;
+      const baseRed = this.flashlightActive ? 9 : 20;
       for (const rl of this.redLights) rl.intensity = baseRed;
       const ring = (this.console.userData as { ring?: THREE.Mesh }).ring;
       const m = ring?.material as THREE.MeshStandardMaterial | undefined;
