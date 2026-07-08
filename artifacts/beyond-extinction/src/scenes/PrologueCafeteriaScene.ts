@@ -3299,7 +3299,7 @@ class PrologueCafeteriaScene implements IScene {
     this.currentFpTarget = null;
     this.ctx.quest.complete("find-badge", { nextId: "scan-badge" });
     this.ctx.overlays.showHint("Badge found. Return to the Lab Seven door and scan in");
-    // Jack's "There it is..." line plays (VOICED: lab_badge_found). Matching
+    // Jack's "There it is..." line plays (VOICED: jack_badge_found). Matching
     // Godot, the glass-door badge reader stays LOCKED until this line finishes —
     // the player can walk back but can't re-scan mid-audio. The reader only
     // responds in the "to-glass" phase, so we defer that flip until the line ends.
