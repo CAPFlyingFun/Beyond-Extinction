@@ -20,7 +20,7 @@ class JournalIntroScene implements IScene {
   private disposed = false;
   private root?: HTMLDivElement;
   private textEl?: HTMLDivElement;
-  private typeTimer: ReturnType<typeof setInterval> | null = null;
+  private typeRaf: number | null = null;
 
   constructor(private ctx: SceneContext) {}
 
@@ -49,7 +49,11 @@ class JournalIntroScene implements IScene {
     for (const id of JOURNAL_CLIPS) {
       if (this.disposed) return;
       const clipText = VOICE_CLIPS[id]?.text ?? "";
-      this.typewrite(clipText, this.ctx.audio.getVoiceDuration(id));
+      // Start revealing, then play the clip: the typewriter tracks the VO's
+      // actual playback position (see typewrite), so the words land with the
+      // voice. playVoice resolves when the audio ends (or an estimate if it's
+      // missing/blocked), which is also when the line has fully typed out.
+      this.typewrite(clipText, id);
       await this.ctx.audio.playVoice(id);
       if (this.disposed) return;
       await this.wait(900);
@@ -64,29 +68,43 @@ class JournalIntroScene implements IScene {
   }
 
   /**
-   * Reveal `text` one character at a time across ~70% of the spoken duration so
-   * the line finishes a beat before the voice does. Interval is clamped so very
-   * short or long lines stay readable.
+   * Reveal `text` in sync with the voice clip `id`. Each frame the revealed
+   * character count tracks the audio's real playback fraction (currentTime /
+   * duration), so the words match what's being said. The reveal is scaled to
+   * finish at ~92% of the clip so the last word lands a hair before the voice
+   * trails off. If the audio isn't actually playing yet (or is missing/blocked),
+   * it falls back to the clip's estimated duration for pacing.
    */
-  private typewrite(text: string, durationMs: number): void {
-    if (this.typeTimer) clearInterval(this.typeTimer);
+  private typewrite(text: string, id: string): void {
+    if (this.typeRaf !== null) cancelAnimationFrame(this.typeRaf);
     const el = this.textEl;
     if (!el) return;
     el.textContent = "";
-    const interval = THREE.MathUtils.clamp(
-      (durationMs * 0.7) / Math.max(text.length, 1),
-      16,
-      80,
-    );
-    let i = 0;
-    this.typeTimer = setInterval(() => {
-      i++;
-      el.textContent = text.slice(0, i);
-      if (i >= text.length && this.typeTimer) {
-        clearInterval(this.typeTimer);
-        this.typeTimer = null;
+    const len = Math.max(text.length, 1);
+    const LEAD = 0.92; // finish typing at 92% of the clip
+    const fallbackMs = Math.max(this.ctx.audio.getVoiceDuration(id), 1);
+    const startPerf = performance.now();
+    // Monotonic: the reveal only ever grows, so the brief handoff from the
+    // fallback timer to real audio playback can never un-type a character.
+    let revealed = 0;
+    const tick = () => {
+      if (this.disposed) return;
+      const pb = this.ctx.audio.getVoicePlayback();
+      const frac =
+        pb.active && pb.duration > 0
+          ? pb.currentTime / (pb.duration * LEAD)
+          : (performance.now() - startPerf) / (fallbackMs * LEAD);
+      const shown = Math.max(revealed, Math.min(1, frac));
+      revealed = shown;
+      el.textContent = text.slice(0, Math.round(shown * len));
+      if (shown < 1) {
+        this.typeRaf = requestAnimationFrame(tick);
+      } else {
+        el.textContent = text;
+        this.typeRaf = null;
       }
-    }, interval);
+    };
+    tick();
   }
 
   private wait(ms: number): Promise<void> {
@@ -102,8 +120,8 @@ class JournalIntroScene implements IScene {
 
   dispose(): void {
     this.disposed = true;
-    if (this.typeTimer) clearInterval(this.typeTimer);
-    this.typeTimer = null;
+    if (this.typeRaf !== null) cancelAnimationFrame(this.typeRaf);
+    this.typeRaf = null;
     this.ctx.audio.stopVoice();
     this.root?.remove();
     this.scene.clear();

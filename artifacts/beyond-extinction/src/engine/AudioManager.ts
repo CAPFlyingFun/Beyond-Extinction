@@ -498,6 +498,22 @@ export class AudioManager {
     return entry.durationMs ?? estimateSpeechMs(entry.text);
   }
 
+  /**
+   * Live playback position of the currently speaking voice clip, for syncing
+   * on-screen text (the journal typewriter) to the actual audio rather than a
+   * precomputed estimate. `active` is false when no real audio is playing (clip
+   * missing/blocked, or muted) so callers can fall back to timed pacing.
+   */
+  getVoicePlayback(): { currentTime: number; duration: number; active: boolean } {
+    const el = this.voiceEl;
+    const duration = Number.isFinite(el.duration) ? el.duration : 0;
+    return {
+      currentTime: el.currentTime,
+      duration,
+      active: this.voiceActive && !el.paused && duration > 0,
+    };
+  }
+
   private voiceWait(ms: number): Promise<void> {
     return new Promise((resolve) => {
       const t = setTimeout(() => {

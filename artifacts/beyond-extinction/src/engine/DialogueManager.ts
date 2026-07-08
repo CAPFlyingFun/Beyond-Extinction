@@ -1,4 +1,5 @@
 import { assetUrl } from "./assets";
+import { getSettings, subscribeSettings } from "./Settings";
 
 export interface DialogueLine {
   speaker: string;
@@ -31,6 +32,11 @@ export class DialogueManager {
   private fullText = "";
   private typeTimer: number | null = null;
 
+  // Closed-captions toggle (Settings.subtitles). When off, showSubtitle is a
+  // no-op and any caption already on screen is hidden the moment it's disabled.
+  private captionsOn = getSettings().subtitles;
+  private unsubSettings: () => void;
+
   constructor(parent: HTMLElement) {
     this.root = document.createElement("div");
     this.root.className = "be-dialogue";
@@ -57,6 +63,11 @@ export class DialogueManager {
 
     this.root.addEventListener("click", () => this.advance());
     window.addEventListener("keydown", this.onKey);
+
+    this.unsubSettings = subscribeSettings((s) => {
+      this.captionsOn = s.subtitles;
+      if (!s.subtitles) this.hideSubtitle();
+    });
   }
 
   private onKey = (e: KeyboardEvent) => {
@@ -153,6 +164,9 @@ export class DialogueManager {
     narration?: boolean;
     instant?: boolean;
   }): void {
+    // Closed captions off (default): the line is still voiced, we just don't
+    // draw the lower-third text.
+    if (!this.captionsOn) return;
     this.subtitleRoot.classList.toggle("narration", !!opts.narration);
     if (opts.narration || !opts.speaker) {
       this.subtitleNameEl.style.display = "none";
@@ -192,6 +206,7 @@ export class DialogueManager {
   }
 
   dispose(): void {
+    this.unsubSettings();
     window.removeEventListener("keydown", this.onKey);
     if (this.typeTimer) window.clearInterval(this.typeTimer);
     if (this.subtitleTypeTimer) window.clearInterval(this.subtitleTypeTimer);

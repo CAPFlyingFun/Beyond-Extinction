@@ -22,6 +22,12 @@ export interface GameplaySettings {
    * one-size-fits-all.
    */
   lookSensitivity: number;
+  /**
+   * Closed captions: show the cinematic lower-third subtitles under voiced
+   * dialogue and narration. OFF by default — the story is fully voiced, so
+   * captions are opt-in for players who want the text on screen.
+   */
+  subtitles: boolean;
 }
 
 export const SETTINGS_RANGES = {
@@ -35,6 +41,7 @@ const DEFAULTS: GameplaySettings = {
   zoom: SETTINGS_RANGES.zoom.default,
   autoPlay: false,
   lookSensitivity: SETTINGS_RANGES.lookSensitivity.default,
+  subtitles: false,
 };
 
 // v3: the default lab framing baseline moved to FOV 75 / zoom 1.3, so a reset
@@ -67,6 +74,8 @@ function sanitize(raw: Partial<GameplaySettings>): GameplaySettings {
       SETTINGS_RANGES.lookSensitivity.min,
       SETTINGS_RANGES.lookSensitivity.max,
     ),
+    subtitles:
+      typeof raw.subtitles === "boolean" ? raw.subtitles : DEFAULTS.subtitles,
   };
 }
 

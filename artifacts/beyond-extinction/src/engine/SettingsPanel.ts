@@ -53,6 +53,14 @@ export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void
         <input type="checkbox" />
         <span class="be-toggle__switch" aria-hidden="true"></span>
       </label>
+      <label class="be-toggle" data-key="subtitles">
+        <span class="be-toggle__text">
+          <span class="be-toggle__title">Subtitles (CC)</span>
+          <span class="be-toggle__hint">Show captions under voiced dialogue and narration.</span>
+        </span>
+        <input type="checkbox" />
+        <span class="be-toggle__switch" aria-hidden="true"></span>
+      </label>
       <label class="be-field" data-key="fov">
         <span class="be-field__row"><span>Field of view</span><b data-readout></b></span>
         <input type="range" />
@@ -94,6 +102,18 @@ export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void
   syncAutoPlay(getSettings().autoPlay);
   autoPlayInput.addEventListener("change", () => {
     setSettings({ autoPlay: autoPlayInput.checked });
+  });
+
+  // Subtitles (CC) — another boolean toggle.
+  const subtitlesInput = el.querySelector(
+    '[data-key="subtitles"] input',
+  ) as HTMLInputElement;
+  const syncSubtitles = (on: boolean): void => {
+    subtitlesInput.checked = on;
+  };
+  syncSubtitles(getSettings().subtitles);
+  subtitlesInput.addEventListener("change", () => {
+    setSettings({ subtitles: subtitlesInput.checked });
   });
 
   function setupField(
@@ -148,6 +168,7 @@ export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void
     syncers.zoom(s.zoom);
     syncers.lookSensitivity(s.lookSensitivity);
     syncAutoPlay(s.autoPlay);
+    syncSubtitles(s.subtitles);
   });
   el.addEventListener("click", (e) => {
     if (e.target === el) close();
