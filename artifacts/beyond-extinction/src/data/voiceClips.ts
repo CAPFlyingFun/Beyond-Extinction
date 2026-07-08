@@ -76,6 +76,12 @@ export const VOICE_CLIP_LIST: VoiceClip[] = [
     "The Tuesday it all ended started like every other Tuesday. But this time, when I knocked on the glass, Sarah didn't look up.",
   ),
 
+  // --- Server room: Jack spots his dropped badge (Godot jack_badge_found) ---
+  jack(
+    "lab_badge_found",
+    "There it is... Ah, that's right; I was working here a few minutes ago. Now let's try that again.",
+  ),
+
   // --- At Sarah's console ---
   jack("lab_a_01", "Sarah."),
   jack("lab_a_02", "What's happening?"),

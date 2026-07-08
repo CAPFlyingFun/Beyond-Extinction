@@ -32,6 +32,16 @@ export const labOpeningNarration: TimelineStep[] = [
   { kind: "clearSubtitle" },
 ];
 
+/**
+ * Jack picks up his dropped badge in the server room. In Godot the badge reader
+ * stays locked until this line finishes (so the player can't re-scan mid-audio);
+ * the scene reproduces that by only re-arming the glass-door reader once this
+ * sequence resolves (see PrologueCafeteriaScene.onPickUpBadge).
+ */
+export const badgeFound: TimelineStep[] = [
+  { kind: "say", clip: "lab_badge_found" },
+];
+
 /** Coffee delivery / first exchange at Sarah's side (intro-dialogue phase). */
 export const introSequence: TimelineStep[] = [
   { kind: "say", clip: "lab_a_01" }, // Jack: Sarah.
@@ -83,4 +93,18 @@ export const climaxReach: TimelineStep[] = [
 /** The closing narration as the light takes everything. */
 export const climaxEnd: TimelineStep[] = [
   { kind: "say", clip: "lab_narr_06" }, // Her other hand... the light swallowed everything.
+];
+
+/**
+ * The portal cutscene's voiced climax, played CONCURRENTLY with the visual
+ * pull-in (see PrologueCafeteriaScene.playPortalCutscene). No camera step here:
+ * the portal owns the "core-pull" framing, so this only drives the narration and
+ * the final two-shot lines while the ring goes white-hot and both are drawn in.
+ */
+export const portalClimax: TimelineStep[] = [
+  { kind: "say", clip: "lab_narr_04" }, // The far wall began to glow...
+  { kind: "say", clip: "lab_narr_05" }, // I reached for her hand. I found it.
+  { kind: "say", clip: "lab_c_04" }, // Sarah: Jack!
+  { kind: "say", clip: "lab_c_05" }, // Jack: I've got you. I've got you—
+  { kind: "say", clip: "lab_narr_06" }, // ...the light swallowed everything.
 ];

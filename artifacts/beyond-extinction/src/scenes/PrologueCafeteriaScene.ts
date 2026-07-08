@@ -24,7 +24,13 @@ import { loadModel } from "../engine/assets";
 import { bakeHumanoidClips, RIGS, STD_CLIPS } from "../engine/proceduralAnimator";
 import { ClipLibrary } from "../engine/ClipLibrary";
 import { SequenceDirector } from "../engine/SequenceDirector";
-import { labOpeningNarration } from "../data/prologueSequences";
+import {
+  labOpeningNarration,
+  badgeFound,
+  introSequence,
+  alarmNarration,
+  portalClimax,
+} from "../data/prologueSequences";
 import { VOICE_DURATIONS } from "../data/voiceDurations";
 import { createChapterOneScene } from "./ChapterOnePlaceholderScene";
 import {
@@ -3279,6 +3285,17 @@ class PrologueCafeteriaScene implements IScene {
     this.currentFpTarget = null;
     this.ctx.quest.complete("find-badge", { nextId: "scan-badge" });
     this.ctx.overlays.showHint("Badge found. Return to the Lab Seven door and scan in");
+    // Jack's "There it is..." line plays (VOICED: lab_badge_found). Matching
+    // Godot, the glass-door badge reader stays LOCKED until this line finishes —
+    // the player can walk back but can't re-scan mid-audio. The reader only
+    // responds in the "to-glass" phase, so we defer that flip until the line ends.
+    void this.playBadgeFoundLine();
+  }
+
+  /** Speak the badge-found line, then re-arm the glass-door badge reader. */
+  private async playBadgeFoundLine(): Promise<void> {
+    await this.director.play(badgeFound);
+    if (this.disposed) return;
     this.phase = "to-glass";
   }
 
@@ -3313,19 +3330,11 @@ class PrologueCafeteriaScene implements IScene {
     await this.handCoffeeToSarah();
     if (this.disposed) return;
     this.ctx.overlays.showClock("11:46 PM");
-    const ritual: Array<[string, string, number]> = [
-      ["Sarah", "You don't have to do that.", 2200],
-      ["Jack", "I know. I did it anyway.", 2000],
-      ["Sarah", "Look at these readings. Something's wrong.", 2400],
-      ["Jack", "Should I call someone?", 1700],
-      ["Sarah", "I'm the someone they would call.", 2200],
-      ["Jack", "How bad?", 1400],
-      ["Sarah", "I don't know yet.", 2000],
-    ];
-    for (const [who, text, ms] of ritual) {
-      await this.sayLine(who, text, ms);
-      if (this.disposed) return;
-    }
+    // The console exchange, VOICED via the SequenceDirector (introSequence =
+    // lab_a_01..07 with Sarah's gestures). This replaces the old subtitle-only
+    // sayLine loop — the baked VO already ships, it just wasn't being played.
+    await this.director.play(introSequence);
+    if (this.disposed) return;
     this.ctx.dialogue.hideSubtitle();
     await this.wait(600);
     if (this.disposed) return;
@@ -3381,6 +3390,11 @@ class PrologueCafeteriaScene implements IScene {
     await this.wait(2000); // hold full black ≥2 s (covers the swap)
     if (this.disposed) return;
     await this.ctx.overlays.fadeFromBlack(800);
+    if (this.disposed) return;
+
+    // The red-lit lab is revealed — Jack's journal narration of the alarms
+    // ("Every light in Lab Seven turned red.") plays over it (VOICED: lab_narr_03).
+    await this.director.play(alarmNarration);
     if (this.disposed) return;
 
     await this.sayLine("Sarah", "The cascade is failing — I need to get to the manual override.", 2800);
@@ -3454,8 +3468,12 @@ class PrologueCafeteriaScene implements IScene {
     const ring = (this.console.userData as { ring?: THREE.Mesh }).ring;
     const ringMat = ring?.material as THREE.MeshStandardMaterial | undefined;
     // Both are pulled to the core while it charges (Godot glides them over ~7s;
-    // web pacing is tighter). The portal light ramp runs alongside.
+    // web pacing is tighter). The portal light ramp runs alongside. The VOICED
+    // climax (portalClimax = wall-glow narration → the hand-reach → closing line)
+    // plays CONCURRENTLY: the ~3 s visual completes and holds white-hot while the
+    // narration finishes, so the pull-in reads as the emotional peak, not a rush.
     await Promise.all([
+      this.director.play(portalClimax),
       this.growVortex(1, 3000),
       this.tween(this.jack.position, core.clone().add(new THREE.Vector3(-2, 0, 0)), 3000),
       this.tween(this.sarah.position, core.clone().add(new THREE.Vector3(2, 0, 0)), 3000),
@@ -3476,6 +3494,7 @@ class PrologueCafeteriaScene implements IScene {
       }),
     ]);
     if (this.disposed) return;
+    this.ctx.dialogue.hideSubtitle();
     this.ctx.audio.playSfx("vortex-pull");
     // Collapse to a singularity.
     this.portalLight.intensity = 90;

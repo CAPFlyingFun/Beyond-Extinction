@@ -14,6 +14,27 @@ registerServiceWorker();
 window.addEventListener("contextmenu", (e) => e.preventDefault());
 document.addEventListener("selectstart", (e) => e.preventDefault());
 
+// iOS Safari can leave the LAYOUT VIEWPORT stuck at the previous orientation's
+// width after a rotation — especially when the device is turned mid-transition
+// (e.g. right as the "rotate to landscape" gate appears). The page then lays out
+// at the old (portrait) width and the browser scales it up, so the menu buttons
+// and the settings panel render huge/overflowing. Re-assert the viewport meta on
+// every orientation change: momentarily collapse it, then restore, which forces
+// the engine to recompute the layout viewport for the new orientation.
+const VIEWPORT_CONTENT =
+  "width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover";
+function kickViewport(): void {
+  const vp = document.querySelector('meta[name="viewport"]');
+  if (!vp) return;
+  vp.setAttribute("content", "width=device-width");
+  requestAnimationFrame(() => vp.setAttribute("content", VIEWPORT_CONTENT));
+}
+window.addEventListener("orientationchange", () => {
+  kickViewport();
+  // Re-kick after the rotation animation settles (iOS reports final size late).
+  setTimeout(kickViewport, 350);
+});
+
 const root = document.getElementById("game-root");
 if (!root) {
   throw new Error("Missing #game-root element");

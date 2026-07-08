@@ -54,6 +54,116 @@ const FADE_TICK_MS = 40;
 // How many sfx can overlap before the oldest is reused (round-robin pool).
 const SFX_POOL_SIZE = 4;
 
+// ─── Procedural SFX (Web Audio) ──────────────────────────────────────────────
+// Godot's AudioManager SYNTHESIZES its sfx in code (see AudioManager.gd
+// _build_sfx) and treats audio files as optional overrides. The web build was
+// file-only, so any cue with no mapped file (door slides, power fail/restore,
+// the flashlight click, UI select) was a silent no-op — which is why "sound
+// effects weren't coming through". This mirrors the Godot synths so those cues
+// make sound with no asset, and (like Godot) a mapped file still takes priority.
+const SFX_RATE = 44100;
+
+/** Sine tone with a 5 ms attack (anti-click) and exponential decay. */
+function tone(freq: number, dur: number, peak: number, decay: number): Float32Array {
+  const n = Math.floor(SFX_RATE * dur);
+  const atk = Math.floor(SFX_RATE * 0.005);
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const t = i / SFX_RATE;
+    let env = Math.exp(-decay * t);
+    if (i < atk) env *= i / atk;
+    out[i] = Math.sin(2 * Math.PI * freq * t) * peak * env;
+  }
+  return out;
+}
+
+/** Harsh square wave with tremolo — the "access denied" texture. */
+function buzz(freq: number, dur: number, peak: number): Float32Array {
+  const n = Math.floor(SFX_RATE * dur);
+  const atk = Math.floor(SFX_RATE * 0.004);
+  const tail = Math.floor(SFX_RATE * 0.02);
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const t = i / SFX_RATE;
+    const sq = (freq * t) % 1.0 < 0.5 ? 1.0 : -1.0;
+    const trem = 0.6 + 0.4 * Math.sin(2 * Math.PI * 32.0 * t);
+    let env = 1.0;
+    if (i < atk) env = i / atk;
+    else if (i > n - tail) env = (n - i) / tail;
+    out[i] = sq * peak * trem * env;
+  }
+  return out;
+}
+
+/** One-pole-lowpassed white noise under a sine swell — pneumatic door hiss.
+ *  Uses an index-seeded LCG (no Math.random) so the buffer is deterministic. */
+function whoosh(dur: number, peak: number): Float32Array {
+  const n = Math.floor(SFX_RATE * dur);
+  const out = new Float32Array(n);
+  let prev = 0;
+  let seed = 0x9e3779b1;
+  for (let i = 0; i < n; i++) {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    const raw = (seed / 0xffffffff) * 2.0 - 1.0;
+    prev = prev * 0.9 + raw * 0.1; // soft low-pass
+    const env = Math.sin((Math.PI * i) / n); // 0 → 1 → 0 swell
+    out[i] = prev * peak * env;
+  }
+  return out;
+}
+
+function concat(...parts: Float32Array[]): Float32Array {
+  const total = parts.reduce((s, p) => s + p.length, 0);
+  const out = new Float32Array(total);
+  let off = 0;
+  for (const p of parts) {
+    out.set(p, off);
+    off += p.length;
+  }
+  return out;
+}
+function silence(dur: number): Float32Array {
+  return new Float32Array(Math.floor(SFX_RATE * dur));
+}
+
+/** Sample builders, keyed by synth id (ported 1:1 from Godot _build_sfx). */
+const SFX_BUILDERS: Record<string, () => Float32Array> = {
+  // pickup — single soft sine blip (cup / badge pickup).
+  pickup: () => tone(720, 0.09, 0.45, 42),
+  // beep_ok — two ascending sine tones G5 → D6 (badge accepted / UI select).
+  beep: () => concat(tone(784, 0.08, 0.42, 24), tone(1175, 0.13, 0.42, 18)),
+  // buzz_deny — two harsh low square-wave pulses.
+  buzz: () => concat(buzz(130, 0.14, 0.36), silence(0.05), buzz(130, 0.17, 0.36)),
+  // door — airy filtered-noise whoosh (sliding door open / close).
+  door: () => whoosh(0.45, 0.42),
+  // door-knock — two low damped thumps.
+  knock: () => concat(tone(85, 0.09, 0.85, 55), silence(0.14), tone(78, 0.1, 0.85, 50)),
+  // power_on — rising three-note boot chime (power restore).
+  power_on: () =>
+    concat(tone(392, 0.1, 0.4, 20), tone(523.3, 0.1, 0.4, 20), tone(784, 0.22, 0.42, 12)),
+  // power_fail — falling three-note (the inverse) as the mains cut out.
+  power_fail: () =>
+    concat(tone(784, 0.1, 0.4, 20), tone(523.3, 0.1, 0.42, 22), tone(311.1, 0.32, 0.42, 9)),
+  // click — a single sharp high tick for the flashlight toggle.
+  click: () => tone(2600, 0.02, 0.5, 240),
+};
+
+/** Cue name → synth id. Only cues WITHOUT a mapped file rely on these, but
+ *  including the file-backed cues too is harmless (files win in playSfx). */
+const PROCEDURAL_SFX: Record<string, string> = {
+  "door-open": "door",
+  "door-glass": "door",
+  "power-restore": "power_on",
+  "power-fail": "power_fail",
+  "flashlight-click": "click",
+  "ui-select": "beep",
+  // File-backed cues, kept as an ultimate fallback if the mp3 is ever absent.
+  "door-knock": "knock",
+  "badge-accept": "beep",
+  "buzz-deny": "buzz",
+  "badge-pickup": "pickup",
+};
+
 // A zero-length silent WAV. Mobile browsers (notably iOS Safari) only let an
 // <audio> element play() programmatically — with no user gesture active, e.g.
 // mid-cutscene — AFTER it has been play()'d once inside a real gesture. We
@@ -106,6 +216,10 @@ export class AudioManager {
   );
   private sfxIdx = 0;
 
+  // Web Audio context + cached synthesized buffers for procedural sfx fallback.
+  private sfxCtx: AudioContext | null = null;
+  private readonly sfxBuffers = new Map<string, AudioBuffer>();
+
   constructor() {
     for (const el of this.musicEls) el.loop = true;
     this.bindUnlock();
@@ -140,6 +254,10 @@ export class AudioManager {
       // Start the current music for real (it was likely autoplay-blocked when
       // the scene requested it before any interaction).
       if (this.currentEl) this.currentEl.play().catch(() => {});
+      // Web Audio also needs a gesture: create/resume the context now so the
+      // first procedural sfx doesn't start in a suspended (silent) state.
+      const ctx = this.ensureSfxCtx();
+      if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
       this.removeUnlock();
     };
     this.unlockHandler = unlock;
@@ -211,7 +329,12 @@ export class AudioManager {
     if (this.muted) return;
     const src = SFX_TRACKS[name];
     if (!src) {
-      console.info(`[Audio] sfx → ${name} (no sfx file mapped yet)`);
+      // No mapped file — fall back to a synthesized cue (Godot parity) so door
+      // slides, power fail/restore, the flashlight click and UI select still
+      // sound. Only a truly unknown cue is a silent no-op.
+      if (!this.playProceduralSfx(name)) {
+        console.info(`[Audio] sfx → ${name} (no file and no procedural synth)`);
+      }
       return;
     }
     const el = this.sfxEls[this.sfxIdx];
@@ -220,6 +343,47 @@ export class AudioManager {
     el.currentTime = 0;
     el.volume = SFX_VOLUME;
     el.play().catch(() => {});
+  }
+
+  /** Lazily create the Web Audio context used for synthesized sfx. */
+  private ensureSfxCtx(): AudioContext | null {
+    if (this.sfxCtx) return this.sfxCtx;
+    const Ctor =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctor) return null;
+    try {
+      this.sfxCtx = new Ctor();
+    } catch {
+      this.sfxCtx = null;
+    }
+    return this.sfxCtx;
+  }
+
+  /**
+   * Synthesize and play a procedural sfx cue. Returns false when the cue has no
+   * synth (so the caller can log a real no-op) or Web Audio is unavailable.
+   * Buffers are built once and cached, mirroring Godot's _build_sfx.
+   */
+  private playProceduralSfx(name: string): boolean {
+    const synthId = PROCEDURAL_SFX[name];
+    if (!synthId) return false;
+    const ctx = this.ensureSfxCtx();
+    if (!ctx) return false;
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    let buf = this.sfxBuffers.get(synthId);
+    if (!buf) {
+      const samples = SFX_BUILDERS[synthId]();
+      buf = ctx.createBuffer(1, samples.length, SFX_RATE);
+      buf.getChannelData(0).set(samples);
+      this.sfxBuffers.set(synthId, buf);
+    }
+    const source = ctx.createBufferSource();
+    source.buffer = buf;
+    const gain = ctx.createGain();
+    gain.gain.value = SFX_VOLUME;
+    source.connect(gain).connect(ctx.destination);
+    source.start();
+    return true;
   }
 
   /**
@@ -377,6 +541,11 @@ export class AudioManager {
     for (const el of this.sfxEls) el.pause();
     this.currentEl = null;
     this.current = null;
+    if (this.sfxCtx) {
+      this.sfxCtx.close().catch(() => {});
+      this.sfxCtx = null;
+      this.sfxBuffers.clear();
+    }
   }
 
   private fadeOutCurrent(durationMs: number = FADE_MS): void {
