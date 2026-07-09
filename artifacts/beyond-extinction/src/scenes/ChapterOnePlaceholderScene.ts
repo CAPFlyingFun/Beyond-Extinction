@@ -18,6 +18,12 @@ import {
 } from "../engine/Settings";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 import { beachStory } from "../data/beachSequences";
+import {
+  buildBeachTerrain,
+  buildOceanWater,
+  beachHeight,
+  type OceanWater,
+} from "../engine/beachTerrain";
 
 /** The animation actions a rigged character drives (idle/walk crossfade). */
 interface CharacterActions {
@@ -69,7 +75,7 @@ class ChapterOnePlaceholderScene implements IScene {
   readonly camera: THREE.PerspectiveCamera;
 
   private viewportHeight = window.innerHeight;
-  private oceanUniforms!: { uTime: { value: number } };
+  private oceanUniforms!: OceanWater["uniforms"];
   private dodo!: THREE.Group;
   private billboards: THREE.Mesh[] = [];
 
@@ -133,39 +139,17 @@ class ChapterOnePlaceholderScene implements IScene {
     sun.castShadow = true;
     scene.add(sun);
 
-    // Beach sand.
-    const sand = new THREE.Mesh(
-      new THREE.PlaneGeometry(800, 800, 1, 1),
-      new THREE.MeshStandardMaterial({ color: 0xe8d6a6, roughness: 1 }),
-    );
-    sand.rotation.x = -Math.PI / 2;
-    sand.receiveShadow = true;
-    scene.add(sand);
+    // Procedural 3D beach terrain (noise heightmap): the sea floor slopes below
+    // sea level offshore and rises into dunes inland, so the waterline is a real
+    // coastline instead of a flat sand plane. See engine/beachTerrain.
+    scene.add(buildBeachTerrain());
 
-    // Ocean with a gently rolling vertex shader.
-    this.oceanUniforms = { uTime: { value: 0 } };
-    const oceanMat = new THREE.MeshStandardMaterial({
-      color: 0x2c86b8,
-      roughness: 0.3,
-      metalness: 0.1,
-    });
-    oceanMat.onBeforeCompile = (shader) => {
-      shader.uniforms.uTime = this.oceanUniforms.uTime;
-      shader.vertexShader =
-        `uniform float uTime;\n` +
-        shader.vertexShader.replace(
-          "#include <begin_vertex>",
-          `vec3 transformed = vec3(position);
-           transformed.z += sin(position.x*0.03 + uTime)*1.2 + cos(position.y*0.04 + uTime*0.8)*1.0;`,
-        );
-    };
-    const ocean = new THREE.Mesh(
-      new THREE.PlaneGeometry(800, 600, 120, 90),
-      oceanMat,
-    );
-    ocean.rotation.x = -Math.PI / 2;
-    ocean.position.set(0, -0.5, -260);
-    scene.add(ocean);
+    // Real animated water at sea level (y=0). Because the terrain dips below y=0
+    // only on the sea side, the water shows offshore and is occluded by the dry
+    // beach — no more flat ocean plane overlapping/flickering across the sand.
+    const ocean = buildOceanWater();
+    this.oceanUniforms = ocean.uniforms;
+    scene.add(ocean.mesh);
 
     await this.buildJungle();
     if (this.disposed) return;
@@ -174,7 +158,7 @@ class ChapterOnePlaceholderScene implements IScene {
     // him would snap upright when he first walks).
     this.jack = await this.buildCharacter("Jack", 0x3a78d0);
     if (this.disposed) return;
-    this.jack.position.set(0, 0, 8);
+    this.jack.position.set(0, beachHeight(0, 8), 8);
     scene.add(this.jack);
     this.jackNav = new Navigator(this.jack, {
       speed: 16,
@@ -185,19 +169,19 @@ class ChapterOnePlaceholderScene implements IScene {
     // Sarah, washed up further down the beach — prone until Jack reaches her.
     this.sarah = await this.buildCharacter("Sarah", 0x36b27a);
     if (this.disposed) return;
-    this.sarah.position.set(-26, 0, 2);
+    this.sarah.position.set(-26, beachHeight(-26, 2), 2);
     this.sarah.rotation.y = Math.PI / 2;
     scene.add(this.sarah);
     this.setProne(this.sarah, true);
 
     // A curious dodo nearby.
     this.dodo = this.buildDodo();
-    this.dodo.position.set(14, 0, 0);
+    this.dodo.position.set(14, beachHeight(14, 0), 0);
     scene.add(this.dodo);
 
     // Driftwood scattered up the sand (the "gather" objective anchor).
     const driftwood = this.buildDriftwood();
-    driftwood.position.set(22, 0, 14);
+    driftwood.position.set(22, beachHeight(22, 14), 14);
     scene.add(driftwood);
 
     this.registerInteractions(driftwood);
@@ -605,6 +589,12 @@ class ChapterOnePlaceholderScene implements IScene {
         this.billboards.push(l);
       }
     }
+
+    // Sit every jungle billboard on the terrain (they were placed at y=0 / a
+    // hang offset, which would bury them in the raised dunes inland).
+    for (const b of this.billboards) {
+      b.position.y += beachHeight(b.position.x, b.position.z);
+    }
   }
 
   /**
@@ -873,10 +863,13 @@ class ChapterOnePlaceholderScene implements IScene {
   update(dt: number, elapsed: number): void {
     this.elapsed = elapsed;
     this.oceanUniforms.uTime.value = elapsed;
+    this.oceanUniforms.uCamPos.value.copy(this.camera.position);
 
     const jackMoving = this.jackNav?.update(dt) ?? false;
     this.applyLocomotion(this.jack, jackMoving, dt);
     this.applyLocomotion(this.sarah, false, dt);
+    // Keep the walking hero on the terrain surface (Sarah is static until reached).
+    if (this.jack) this.jack.position.y = beachHeight(this.jack.position.x, this.jack.position.z);
     for (const m of this.mixers) m.update(dt);
 
     this.cameraDirector?.update(this.cameraState(), dt);
@@ -884,8 +877,10 @@ class ChapterOnePlaceholderScene implements IScene {
     updateBillboardsYAxis(this.billboards, this.camera.position);
 
     if (this.dodo) {
-      this.dodo.position.y = Math.abs(Math.sin(elapsed * 4)) * 0.3;
       this.dodo.position.x = this.dodo.userData.baseX + Math.sin(elapsed * 0.6) * 2;
+      this.dodo.position.y =
+        beachHeight(this.dodo.position.x, this.dodo.position.z) +
+        Math.abs(Math.sin(elapsed * 4)) * 0.3;
       this.dodo.rotation.y = this.hissDone ? Math.PI : Math.sin(elapsed * 0.6) * 0.4;
     }
   }
