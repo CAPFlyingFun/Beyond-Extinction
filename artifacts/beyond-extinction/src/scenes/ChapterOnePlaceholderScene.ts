@@ -26,6 +26,8 @@ import {
 } from "../engine/beachTerrain";
 import { SaveManager } from "../engine/SaveManager";
 import { PlayerInventory } from "../engine/PlayerInventory";
+import { MarkerStore } from "../engine/MarkerStore";
+import { spawnSceneMarkers } from "../engine/MarkerEditor";
 
 /** The animation actions a rigged character drives (idle/walk crossfade). */
 interface CharacterActions {
@@ -172,6 +174,11 @@ class ChapterOnePlaceholderScene implements IScene {
 
     await this.buildJungle();
     if (this.disposed) return;
+
+    // Recall any dev-placed markers (spawn points / objects) for this scene.
+    await MarkerStore.load();
+    if (this.disposed) return;
+    spawnSceneMarkers(this.name, scene);
 
     // Jack, just come to on the sand — standing dazed (no lying clip; tipping
     // him would snap upright when he first walks).

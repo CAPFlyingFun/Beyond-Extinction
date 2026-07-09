@@ -6,6 +6,8 @@ import { AudioManager } from "./AudioManager";
 import { Overlays } from "./Overlays";
 import { SceneManager } from "./SceneManager";
 import { DevPortal } from "./DevPortal";
+import { MarkerEditor } from "./MarkerEditor";
+import { MarkerStore } from "./MarkerStore";
 import type { SceneContext, SceneFactory } from "./IScene";
 
 /**
@@ -21,6 +23,7 @@ export class Game {
   readonly overlays: Overlays;
   readonly scenes: SceneManager;
   private readonly devPortal: DevPortal;
+  private readonly markerEditor: MarkerEditor;
 
   private readonly uiLayer: HTMLElement;
   private rafId = 0;
@@ -44,8 +47,26 @@ export class Game {
     this.overlays = new Overlays(this.uiLayer);
     this.scenes = new SceneManager();
 
-    // Hidden dev gate: press-and-hold 10s anywhere → PIN → Level Editor.
-    this.devPortal = new DevPortal();
+    // In-app Marker Editor (ARK-style), driven by its own fly camera while open.
+    this.markerEditor = new MarkerEditor({
+      getActive: () => {
+        const a = this.scenes.active;
+        return a ? { scene: a.scene, camera: a.camera, name: a.name } : null;
+      },
+      domElement: this.renderer.domElement,
+      uiLayer: this.uiLayer,
+      input: this.input,
+      onOpenChange: (open) => this.devPortal.setSuspended(open),
+      playSfx: (n) => this.audio.playSfx(n),
+      showToast: (m) => this.overlays.showToast(m),
+    });
+    // Preload the baked marker layouts so scenes can recall them on enter.
+    void MarkerStore.load();
+
+    // Hidden dev gate: press-and-hold 10s anywhere → PIN → Dev menu.
+    this.devPortal = new DevPortal({
+      onMarkerEditor: () => this.markerEditor.toggle(),
+    });
 
     const ctx: SceneContext = {
       renderer: this.renderer,
@@ -81,6 +102,7 @@ export class Game {
   private applyResize = () => {
     this.renderer.resize();
     this.scenes.resize(this.renderer.width, this.renderer.height);
+    this.markerEditor.resize(this.renderer.width, this.renderer.height);
   };
 
   async start(initial: SceneFactory): Promise<void> {
@@ -99,9 +121,13 @@ export class Game {
     this.elapsed += dt;
     const elapsed = this.elapsed;
     this.scenes.update(dt, elapsed);
+    this.markerEditor.update(dt);
     const active = this.scenes.active;
     if (active) {
-      this.renderer.render(active.scene, active.camera);
+      // While the Marker Editor is open it drives its own fly camera over the
+      // live scene; otherwise render the scene's own camera.
+      const cam = this.markerEditor.overrideCamera() ?? active.camera;
+      this.renderer.render(active.scene, cam);
     }
   };
 
@@ -118,6 +144,7 @@ export class Game {
     this.quest.dispose();
     this.audio.dispose();
     this.overlays.dispose();
+    this.markerEditor.close();
     this.devPortal.dispose();
     this.renderer.dispose();
   }

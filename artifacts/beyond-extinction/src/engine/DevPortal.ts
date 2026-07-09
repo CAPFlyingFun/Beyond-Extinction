@@ -1,24 +1,35 @@
 /**
  * Hidden developer portal: press-and-hold anywhere for 10 seconds to reveal a
- * PIN gate; entering the correct PIN opens the in-world Level Editor.
+ * PIN gate; entering the correct PIN opens the in-game Dev menu (Marker Editor,
+ * and later the Animation Editor). Everything dev lives behind this one PIN
+ * gate — there is no visible Dev tab.
  *
  * Design notes:
  * - The hold must stay roughly stationary. Any drag past MOVE_TOLERANCE cancels
  *   it, so normal gameplay (look drag, move joystick) never triggers the portal.
  * - A subtle progress pill only appears after INDICATOR_DELAY_MS so casual taps
  *   reveal nothing; an intentional long hold gets feedback to "keep holding".
- * - Self-contained: injects its own styles and sits above all game UI. It is
- *   disabled on the public GitHub Pages build, where the editor isn't deployed.
+ * - Self-contained: injects its own styles and sits above all game UI. Because
+ *   the editors are in-app now (not a separate route), it is enabled on the
+ *   public build too — the PIN is the only gate.
  */
 
-const EDITOR_PATH = "/level-editor/";
 const DEV_PIN = "2026";
 const HOLD_MS = 10_000;
 const INDICATOR_DELAY_MS = 2_500;
 const MOVE_TOLERANCE_PX = 24;
 
+export interface DevPortalActions {
+  /** Open the Marker Editor for the active scene. */
+  onMarkerEditor: () => void;
+  /** Open the Animation Editor (optional until it ships). */
+  onAnimationEditor?: () => void;
+}
+
 export class DevPortal {
   private readonly enabled: boolean;
+  private suspended = false;
+  private menu?: HTMLDivElement;
   private root: HTMLDivElement;
   private indicator: HTMLDivElement;
   private bar: HTMLDivElement;
@@ -35,8 +46,10 @@ export class DevPortal {
   private indicatorShown = false;
   private overlayOpen = false;
 
-  constructor() {
-    this.enabled = !/github\.io$/i.test(location.hostname);
+  constructor(private actions: DevPortalActions) {
+    // Enabled everywhere now — the PIN is the only gate (the editors run in-app,
+    // so there's no separate route to withhold on the public build).
+    this.enabled = true;
     injectStyles();
 
     this.root = document.createElement("div");
@@ -66,7 +79,7 @@ export class DevPortal {
     title.textContent = "Developer Access";
     const sub = document.createElement("div");
     sub.className = "be-dev__sub";
-    sub.textContent = "Enter PIN to open the Level Editor";
+    sub.textContent = "Enter PIN to open Dev tools";
 
     this.dotsWrap = document.createElement("div");
     this.dotsWrap.className = "be-dev__dots";
@@ -110,8 +123,14 @@ export class DevPortal {
     }
   }
 
+  /** Suspend the hold gesture (e.g. while an editor is already open). */
+  setSuspended(s: boolean): void {
+    this.suspended = s;
+    if (s) this.cancelHold();
+  }
+
   private onDown = (e: PointerEvent): void => {
-    if (this.overlayOpen || !e.isPrimary) return;
+    if (this.overlayOpen || this.suspended || !e.isPrimary) return;
     this.holding = true;
     this.holdStart = performance.now();
     this.startX = e.clientX;
@@ -178,6 +197,47 @@ export class DevPortal {
     this.overlay.classList.remove("show");
   }
 
+  /** After a correct PIN: a small chooser for the available dev tools. */
+  private openDevMenu(): void {
+    this.menu?.remove();
+    const menu = document.createElement("div");
+    menu.className = "be-dev__overlay show be-dev__menu";
+    menu.innerHTML = `
+      <div class="be-dev__panel">
+        <div class="be-dev__title">Dev Tools</div>
+        <div class="be-dev__sub">PIN accepted</div>
+        <div class="be-dev__tools">
+          <button class="be-dev__tool" data-tool="markers">◈ Marker Editor</button>
+          <button class="be-dev__tool" data-tool="anim">🦴 Animation Editor</button>
+        </div>
+        <button class="be-dev__key be-dev__key--cancel be-dev__menuclose" type="button">Close</button>
+      </div>`;
+    this.root.appendChild(menu);
+    this.menu = menu;
+    const close = () => {
+      menu.remove();
+      if (this.menu === menu) this.menu = undefined;
+    };
+    menu.addEventListener("pointerdown", (e) => {
+      if (e.target === menu) close();
+    });
+    menu.querySelector('[data-tool="markers"]')?.addEventListener("click", () => {
+      close();
+      this.actions.onMarkerEditor();
+    });
+    const animBtn = menu.querySelector<HTMLButtonElement>('[data-tool="anim"]');
+    if (this.actions.onAnimationEditor) {
+      animBtn?.addEventListener("click", () => {
+        close();
+        this.actions.onAnimationEditor!();
+      });
+    } else if (animBtn) {
+      animBtn.disabled = true;
+      animBtn.textContent = "🦴 Animation Editor — soon";
+    }
+    menu.querySelector(".be-dev__menuclose")?.addEventListener("click", close);
+  }
+
   private onKey(key: string): void {
     if (key === "✕") {
       this.closeOverlay();
@@ -193,7 +253,8 @@ export class DevPortal {
     this.renderDots();
     if (this.entered.length === DEV_PIN.length) {
       if (this.entered === DEV_PIN) {
-        window.location.assign(EDITOR_PATH);
+        this.closeOverlay();
+        this.openDevMenu();
       } else {
         this.dotsWrap.classList.remove("shake");
         void this.dotsWrap.offsetWidth; // restart animation
@@ -217,6 +278,7 @@ export class DevPortal {
     document.removeEventListener("pointercancel", this.onUp);
     window.removeEventListener("blur", this.onUp);
     cancelAnimationFrame(this.rafId);
+    this.menu?.remove();
     this.root.remove();
   }
 }
@@ -280,6 +342,17 @@ function injectStyles(): void {
 .be-dev__key:active { transform: scale(0.95); }
 .be-dev__key--cancel { color: #ff9a9a; font-size: 18px; }
 .be-dev__key--back { color: #cfe8ff; font-size: 18px; }
+
+.be-dev__tools { display: flex; flex-direction: column; gap: 12px; margin: 22px 0 18px; }
+.be-dev__tool {
+  padding: 14px 16px; border-radius: 12px; cursor: pointer;
+  background: rgba(120, 200, 255, 0.1); border: 1px solid rgba(120, 200, 255, 0.3);
+  color: #e8f3ff; font: 600 15px/1 ui-monospace, monospace; text-align: left;
+  transition: background 120ms;
+}
+.be-dev__tool:hover:not(:disabled) { background: rgba(120, 200, 255, 0.22); }
+.be-dev__tool:disabled { opacity: 0.4; cursor: default; }
+.be-dev__menuclose { width: 100%; height: auto; padding: 10px; }
 `;
   const style = document.createElement("style");
   style.textContent = css;

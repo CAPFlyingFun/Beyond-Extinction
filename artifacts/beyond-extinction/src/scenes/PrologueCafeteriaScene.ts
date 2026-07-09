@@ -54,6 +54,8 @@ import { PlayerInventory } from "../engine/PlayerInventory";
 import { Interactable } from "../engine/Interactable";
 import { ProximityDoor, type DoorPanel } from "../engine/ProximityDoor";
 import { SaveManager } from "../engine/SaveManager";
+import { MarkerStore } from "../engine/MarkerStore";
+import { spawnSceneMarkers } from "../engine/MarkerEditor";
 
 /**
  * Total run-time (ms) of the opening narration timeline — the baked VO lengths
@@ -540,6 +542,11 @@ class PrologueCafeteriaScene implements IScene {
     // Colliders last: solid props (racks, power unit, desk) must exist first.
     // Door leaves are excluded (not tagged solid) — they block dynamically.
     this.buildColliders();
+
+    // Recall any dev-placed markers (spawn points / objects) for this scene.
+    await MarkerStore.load();
+    if (this.disposed) return;
+    spawnSceneMarkers(this.name, scene);
 
     // ---- Characters ----
     this.jack = await this.buildCharacter("Jack", 0x3a78d0);
