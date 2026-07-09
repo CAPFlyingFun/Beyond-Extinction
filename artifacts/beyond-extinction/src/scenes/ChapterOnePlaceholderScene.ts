@@ -28,6 +28,8 @@ import { SaveManager } from "../engine/SaveManager";
 import { PlayerInventory } from "../engine/PlayerInventory";
 import { MarkerStore } from "../engine/MarkerStore";
 import { spawnSceneMarkers } from "../engine/MarkerEditor";
+import { AnimStore } from "../engine/AnimStore";
+import { RIGS, bakeHumanoidClips, STD_CLIPS } from "../engine/proceduralAnimator";
 
 /** The animation actions a rigged character drives (idle/walk crossfade). */
 interface CharacterActions {
@@ -652,6 +654,22 @@ class ChapterOnePlaceholderScene implements IScene {
     group.userData.model = model;
     this.groundAndScale(model, ChapterOnePlaceholderScene.JACK_HEIGHT);
     group.userData.standY = model.position.y;
+
+    // The Meshy auto-rigs ship no clips, so synthesize idle/walk/run from the
+    // ported rig (same as the prologue) — otherwise the island characters stand
+    // frozen. Then overlay any dev-authored clips from the Animation Editor.
+    if (
+      (!model.animations || model.animations.length === 0) &&
+      !model.userData.isPlaceholder &&
+      RIGS[name]
+    ) {
+      model.animations = bakeHumanoidClips(model, RIGS[name], {
+        Idle: STD_CLIPS.Idle,
+        Walking: STD_CLIPS.Walking,
+        Running: STD_CLIPS.Running,
+      });
+    }
+    if (model.animations) model.animations = AnimStore.applyTo(model.animations);
 
     if (model.animations && model.animations.length > 0) {
       const mixer = new THREE.AnimationMixer(model);

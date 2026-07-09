@@ -56,6 +56,7 @@ import { ProximityDoor, type DoorPanel } from "../engine/ProximityDoor";
 import { SaveManager } from "../engine/SaveManager";
 import { MarkerStore } from "../engine/MarkerStore";
 import { spawnSceneMarkers } from "../engine/MarkerEditor";
+import { AnimStore } from "../engine/AnimStore";
 
 /**
  * Total run-time (ms) of the opening narration timeline — the baked VO lengths
@@ -2228,6 +2229,9 @@ class PrologueCafeteriaScene implements IScene {
         Running: STD_CLIPS.Running,
       });
     }
+    // Overlay any dev-authored clips (Animation Editor): a saved clip named to
+    // match a baked one overrides it, so edits reach the live character.
+    if (model.animations) model.animations = AnimStore.applyTo(model.animations);
     if (model.animations && model.animations.length > 0) {
       const mixer = new THREE.AnimationMixer(model);
       const clips = model.animations;
