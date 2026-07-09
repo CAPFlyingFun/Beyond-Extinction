@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
-import { loadModel } from "../engine/assets";
+import { loadModel, loadTexture } from "../engine/assets";
 import { updateBillboardsYAxis } from "../engine/Billboard";
 import { buildIslandFoliage } from "../engine/islandFoliage";
 import { Navigator } from "../engine/Navigator";
@@ -602,10 +602,13 @@ class ChapterOnePlaceholderScene implements IScene {
 
   private async buildJungle(): Promise<void> {
     if (this.disposed) return;
+    // Placeholder bark until real tree models: the Godot walnut wood texture.
+    const trunkMap = await loadTexture("assets/textures/wood_trunk.jpg");
+    if (this.disposed) return;
     // Procedural, instanced trees + bushes on the terrain (replaces the flat
     // billboard jungle). Large trees fill the land beyond a shore-clearance band
     // and never grow in the water; bushes scatter closer in. See islandFoliage.
-    this.scene.add(buildIslandFoliage({ treeClearance: 30, treeDensity: 0.55 }));
+    this.scene.add(buildIslandFoliage({ treeClearance: 30, treeDensity: 0.55, trunkMap }));
   }
 
   /**

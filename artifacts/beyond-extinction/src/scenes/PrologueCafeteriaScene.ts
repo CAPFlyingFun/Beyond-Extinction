@@ -20,7 +20,7 @@ import {
   type DoorSpec,
 } from "../data/prologueLayout";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
-import { loadModel } from "../engine/assets";
+import { loadModel, loadTexture } from "../engine/assets";
 import { bakeHumanoidClips, RIGS, STD_CLIPS } from "../engine/proceduralAnimator";
 import { ClipLibrary } from "../engine/ClipLibrary";
 import { SequenceDirector } from "../engine/SequenceDirector";
@@ -192,6 +192,10 @@ class PrologueCafeteriaScene implements IScene {
   // scene falls back to its procedural geometry.
   private cupProto?: THREE.Object3D;
   private tableProto?: THREE.Object3D;
+  // Real Godot lab textures (floor + wall), loaded in enter(); fall back to the
+  // procedural textures if they fail to load.
+  private labFloorTex?: THREE.Texture;
+  private labWallTex?: THREE.Texture;
   private console!: THREE.Group;
   // The tagged desk child of the console group (userData.kind === "console").
   // This — not the group — is the first-person interact target, so its world
@@ -530,6 +534,7 @@ class PrologueCafeteriaScene implements IScene {
     // failure each proto stays undefined and the builder falls back to its
     // procedural geometry — the scene never blocks on a missing asset.
     await this.loadProps();
+    await this.loadLabTextures();
 
     this.buildRoom();
     this.buildServerRoom();
@@ -731,7 +736,7 @@ class PrologueCafeteriaScene implements IScene {
     // Single ground plane spanning the whole complex; the discrete blueprint
     // rooms are carved out by the wall network below. Kept as one plane
     // (this.floor) so the first-person ground raycast works everywhere.
-    const floorTex = createFloorTexture();
+    const floorTex = this.labFloorTex ?? createFloorTexture();
     const floorRepeat = 120 / FLOOR_TEXTURE_WORLD_SIZE;
     floorTex.repeat.set(floorRepeat, floorRepeat);
     const floor = new THREE.Mesh(
@@ -745,7 +750,7 @@ class PrologueCafeteriaScene implements IScene {
 
     // ---- Wall network (perimeter + interior, with door gaps) from the ×4
     // blueprint layout config. Each segment is a solid, axis-aligned box. ----
-    const wallTexBase = createWallTexture();
+    const wallTexBase = this.labWallTex ?? createWallTexture();
     const mkWallSeg = (s: WallSeg) => {
       const dx = s.x1 - s.x0;
       const dz = s.z1 - s.z0;
@@ -1313,6 +1318,23 @@ class PrologueCafeteriaScene implements IScene {
    * leaves the proto undefined; makeCup()/the table dressing then fall back to
    * their procedural geometry.
    */
+  /** Load the real Godot lab floor + wall textures (downscaled). On failure the
+   *  procedural textures are used instead (see buildRoom). */
+  private async loadLabTextures(): Promise<void> {
+    const [floor, wall] = await Promise.all([
+      loadTexture("assets/textures/lab_floor.jpg"),
+      loadTexture("assets/textures/lab_wall.jpg"),
+    ]);
+    if (floor) {
+      floor.wrapS = floor.wrapT = THREE.RepeatWrapping;
+      this.labFloorTex = floor;
+    }
+    if (wall) {
+      wall.wrapS = wall.wrapT = THREE.RepeatWrapping;
+      this.labWallTex = wall;
+    }
+  }
+
   private async loadProps(): Promise<void> {
     // Coffee cup — normalized so a clone is vertically centred on its origin at
     // ~1.4u tall, matching the procedural cup makeCup() built (body + lid). The

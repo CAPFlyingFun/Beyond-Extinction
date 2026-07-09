@@ -22,6 +22,8 @@ export interface FoliageOptions {
   /** Half-extent (x) and inland reach (z) the foliage covers. */
   areaX?: number;
   areaZ?: number;
+  /** Optional bark/wood texture for the trunks (placeholder until real models). */
+  trunkMap?: THREE.Texture | null;
 }
 
 // ── deterministic hash (stable per grid cell) ────────────────────────────────
@@ -98,9 +100,20 @@ export function buildIslandFoliage(opts: FoliageOptions = {}): THREE.Group {
 
   // ── Trees: instanced trunk + two instanced canopy layers ───────────────────
   if (trees.length) {
-    const trunkGeo = new THREE.CylinderGeometry(0.28, 0.5, 7, 6);
+    const trunkGeo = new THREE.CylinderGeometry(0.28, 0.5, 7, 8);
     trunkGeo.translate(0, 3.5, 0);
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2a, roughness: 1 });
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8a6a44, roughness: 1 });
+    if (opts.trunkMap) {
+      const map = opts.trunkMap;
+      map.wrapS = map.wrapT = THREE.RepeatWrapping;
+      // The walnut grain runs horizontally in the image; rotate it 90° so it
+      // runs UP the trunk, and tile a couple times along the height.
+      map.center.set(0.5, 0.5);
+      map.rotation = Math.PI / 2;
+      map.repeat.set(1, 2);
+      trunkMat.map = map;
+      trunkMat.color.set(0xffffff);
+    }
     const trunk = new THREE.InstancedMesh(trunkGeo, trunkMat, trees.length);
 
     const lowGeo = new THREE.IcosahedronGeometry(3.2, 0);
