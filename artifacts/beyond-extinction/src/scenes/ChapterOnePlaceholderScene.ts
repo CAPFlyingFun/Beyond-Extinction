@@ -217,12 +217,11 @@ class ChapterOnePlaceholderScene implements IScene {
     // him would snap upright when he first walks).
     this.jack = await this.buildCharacter("Jack", 0x3a78d0);
     if (this.disposed) return;
-    // Spawn on the flat clearing on the island's south-west flank (per the
-    // HANIFAT map plan: arrival in the SSW, trail runs "south to summit"). This
-    // is the one genuinely level, open patch on this steep volcanic cone — no
-    // cliff in Jack's face. The volcano summit rises to the NE (north end of the
-    // island), the ocean is downhill to the SW.
-    this.jack.position.set(-70, beachHeight(-70, 70), 70);
+    // Wash up on the SSW arrival beach (per the HANIFAT map plan: arrival in the
+    // SSW, trail runs "south to summit"). Jack stands at the waterline; the ocean
+    // is at his back to the SW, the island rises ahead to the NE toward the
+    // volcano summit at the island's north end. (Fine-tune + save via the editor.)
+    this.jack.position.set(-106, beachHeight(-106, 62), 62);
     scene.add(this.jack);
     this.jackNav = new Navigator(this.jack, {
       speed: 16,
@@ -230,10 +229,11 @@ class ChapterOnePlaceholderScene implements IScene {
       resolveMove: (_cx, _cz, nx, nz) => this.clampToPlay(nx, nz),
     });
 
-    // Sarah, washed up further down the beach — prone until Jack reaches her.
+    // Sarah, washed up a few metres further along the same SSW beach — prone
+    // until Jack reaches her.
     this.sarah = await this.buildCharacter("Sarah", 0x36b27a);
     if (this.disposed) return;
-    this.sarah.position.set(-26, beachHeight(-26, 2), 2);
+    this.sarah.position.set(-108, beachHeight(-108, 68), 68);
     this.sarah.rotation.y = Math.PI / 2;
     scene.add(this.sarah);
     this.setProne(this.sarah, true);
@@ -289,7 +289,7 @@ class ChapterOnePlaceholderScene implements IScene {
         moveSpeed: 15,
         lookSensitivity: this.settings.lookSensitivity,
       });
-      this.player.placeAt(this.jack.position.x, this.jack.position.z, 158); // face inland/NE toward the volcano summit
+      this.player.placeAt(this.jack.position.x, this.jack.position.z, 300); // face out to the open sea (island rises behind)
       this.player.setActive(true);
       this.jack.visible = false;
       this.applyFov();
