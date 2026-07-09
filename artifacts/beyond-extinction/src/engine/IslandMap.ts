@@ -155,10 +155,17 @@ export class IslandMap {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const size = this.root.clientWidth;
     if (size === 0) return;
-    if (this.mm.width !== Math.round(size * dpr)) {
-      this.mm.width = this.mm.height = Math.round(size * dpr);
-      c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Size the backing store to the CSS box × dpr. Check BOTH dimensions: a fresh
+    // canvas defaults to 300×150, and on a 2× display size*dpr can equal 300,
+    // so a width-only guard would leave the canvas a non-square 300×150 (which
+    // squished the map into the left half). Always (re)set the transform, since
+    // assigning canvas.width/height resets the context.
+    const need = Math.round(size * dpr);
+    if (this.mm.width !== need || this.mm.height !== need) {
+      this.mm.width = need;
+      this.mm.height = need;
     }
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
     c.clearRect(0, 0, size, size);
     c.save();
     c.beginPath();
@@ -244,9 +251,11 @@ export class IslandMap {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    if (cv.width !== Math.round(vw * dpr)) {
-      cv.width = Math.round(vw * dpr);
-      cv.height = Math.round(vh * dpr);
+    const nw = Math.round(vw * dpr);
+    const nh = Math.round(vh * dpr);
+    if (cv.width !== nw || cv.height !== nh) {
+      cv.width = nw;
+      cv.height = nh;
     }
     const c = cv.getContext("2d")!;
     c.setTransform(dpr, 0, 0, dpr, 0, 0);
