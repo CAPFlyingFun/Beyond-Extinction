@@ -25,6 +25,7 @@ import {
   buildBeachTerrain,
   buildOceanWater,
   loadIslandHeightmap,
+  loadIslandGround,
   beachHeight,
   type OceanWater,
 } from "../engine/beachTerrain";
@@ -195,7 +196,9 @@ class ChapterOnePlaceholderScene implements IScene {
     if (this.disposed) return;
     const islandColor = await loadTexture("assets/textures/island_color.jpg");
     if (this.disposed) return;
-    scene.add(buildBeachTerrain(islandColor));
+    const islandGround = await loadIslandGround();
+    if (this.disposed) return;
+    scene.add(buildBeachTerrain(islandColor, islandGround));
 
     // Animated water at sea level (y=0), surrounding the island.
     const ocean = buildOceanWater();

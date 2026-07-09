@@ -146,12 +146,151 @@ function beachColor(h: number): number[] {
   return c;
 }
 
+/** The nine real photographic ground textures (from the "8 ground textures"
+ *  release + the volcano lava rock), keyed by biome. */
+export interface IslandGround {
+  reef: THREE.Texture; // shallow submerged floor
+  sand: THREE.Texture; // tropical beach
+  grass: THREE.Texture; // open plains
+  jungle: THREE.Texture; // dense jungle floor
+  dirt: THREE.Texture; // forest dirt path (patchy in jungle)
+  swamp: THREE.Texture; // swamp mud (patchy in low wetlands)
+  mountain: THREE.Texture; // rocky mountain ground
+  cliff: THREE.Texture; // coastal cliff rock (steep faces)
+  volcano: THREE.Texture; // volcanic lava rock (caldera)
+}
+
+let groundCache: IslandGround | null = null;
+
+/** Load the nine tiling ground textures once and cache them. */
+export async function loadIslandGround(): Promise<IslandGround> {
+  if (groundCache) return groundCache;
+  const loader = new THREE.TextureLoader();
+  const load = (name: string) =>
+    new Promise<THREE.Texture>((resolve) => {
+      loader.load(
+        assetUrl(`assets/textures/${name}.jpg`),
+        (t) => {
+          t.wrapS = t.wrapT = THREE.RepeatWrapping;
+          t.colorSpace = THREE.SRGBColorSpace;
+          t.anisotropy = 4;
+          resolve(t);
+        },
+        undefined,
+        () => resolve(new THREE.Texture()),
+      );
+    });
+  const names = ["reef", "sand", "grass", "jungle", "dirt", "swamp", "mountain", "cliff", "volcano"];
+  const [reef, sand, grass, jungle, dirt, swamp, mountain, cliff, volcano] = await Promise.all(
+    names.map(load),
+  );
+  groundCache = { reef, sand, grass, jungle, dirt, swamp, mountain, cliff, volcano };
+  return groundCache;
+}
+
+/**
+ * Terrain material that paints the nine real photographic ground textures,
+ * blended into biome bands by elevation (reef → sand → grass → jungle →
+ * mountain → volcanic caldera) with patchy swamp/dirt in the low/mid bands and
+ * triplanar coastal-cliff rock on steep faces so slopes don't smear. The aerial
+ * photo is a faint low-freq macro tint so the big picture still matches the
+ * render. Built on MeshStandardMaterial (via onBeforeCompile) so it keeps real
+ * lighting + shadows.
+ */
+function makeTerrainMaterial(aerial: THREE.Texture, g: IslandGround): THREE.MeshStandardMaterial {
+  aerial.wrapS = aerial.wrapT = THREE.ClampToEdgeWrapping;
+  aerial.anisotropy = 4;
+  const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uReef = { value: g.reef };
+    shader.uniforms.uSand = { value: g.sand };
+    shader.uniforms.uGrass = { value: g.grass };
+    shader.uniforms.uJungle = { value: g.jungle };
+    shader.uniforms.uDirt = { value: g.dirt };
+    shader.uniforms.uSwamp = { value: g.swamp };
+    shader.uniforms.uMountain = { value: g.mountain };
+    shader.uniforms.uCliff = { value: g.cliff };
+    shader.uniforms.uVolcano = { value: g.volcano };
+    shader.uniforms.uAerial = { value: aerial };
+    shader.uniforms.uDetail = { value: 0.09 }; // world→uv freq (~11u per tile)
+    shader.uniforms.uSpan = { value: HM_SPAN };
+    shader.uniforms.uCz = { value: HM_CZ };
+    shader.uniforms.uRockH = { value: VOLCANO_ROCK_H };
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nvarying vec3 vWXZ;\nvarying vec3 vWN;")
+      .replace(
+        "#include <begin_vertex>",
+        "#include <begin_vertex>\n  vWXZ = (modelMatrix * vec4(transformed,1.0)).xyz;\n  vWN = normalize(mat3(modelMatrix) * normal);",
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+         varying vec3 vWXZ; varying vec3 vWN;
+         uniform sampler2D uReef, uSand, uGrass, uJungle, uDirt, uSwamp, uMountain, uCliff, uVolcano, uAerial;
+         uniform float uDetail, uSpan, uCz, uRockH;
+         float hash21(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+         float vnoise(vec2 p){
+           vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+           float a=hash21(i), b=hash21(i+vec2(1.0,0.0)), c=hash21(i+vec2(0.0,1.0)), d=hash21(i+vec2(1.0,1.0));
+           return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);
+         }`,
+      )
+      .replace(
+        "#include <map_fragment>",
+        `float h = vWXZ.y;
+         vec2 uvp = vWXZ.xz * uDetail;                 // planar (XZ) tiling coords
+         vec3 reef   = texture2D(uReef, uvp).rgb;
+         vec3 sand   = texture2D(uSand, uvp).rgb;
+         vec3 grass  = texture2D(uGrass, uvp).rgb;
+         vec3 jungle = texture2D(uJungle, uvp).rgb;
+         vec3 dirt   = texture2D(uDirt, uvp).rgb;
+         vec3 swamp  = texture2D(uSwamp, uvp).rgb;
+         vec3 mtn    = texture2D(uMountain, uvp).rgb;
+         vec3 volc   = texture2D(uVolcano, uvp).rgb;
+         // Coastal cliff triplanar so steep faces don't smear.
+         vec3 bw = abs(vWN); bw = pow(bw, vec3(4.0)); bw /= (bw.x + bw.y + bw.z);
+         vec3 pw = vWXZ * uDetail;
+         vec3 cliff = texture2D(uCliff, pw.zy).rgb * bw.x + texture2D(uCliff, pw.xz).rgb * bw.y + texture2D(uCliff, pw.xy).rgb * bw.z;
+         // Elevation bands, low -> high.
+         vec3 col = reef;
+         col = mix(col, sand,   smoothstep(-1.6, 0.2, h));
+         col = mix(col, grass,  smoothstep(1.6, 4.6, h));
+         col = mix(col, jungle, smoothstep(8.0, 16.0, h));
+         col = mix(col, mtn,    smoothstep(22.0, 34.0, h));
+         col = mix(col, volc,   smoothstep(uRockH + 1.0, uRockH + 12.0, h));
+         // Patchy swamp mud in the low, flat wetlands near the water.
+         float nS = vnoise(vWXZ.xz * 0.035);
+         float swampM = smoothstep(-0.5, 1.5, h) * (1.0 - smoothstep(3.5, 6.5, h)) * smoothstep(0.45, 0.75, nS);
+         col = mix(col, swamp, swampM * 0.75);
+         // Patchy dirt trails through the jungle band.
+         float nD = vnoise(vWXZ.xz * 0.05 + 13.0);
+         float dirtM = smoothstep(6.5, 10.0, h) * (1.0 - smoothstep(17.0, 21.0, h)) * smoothstep(0.55, 0.8, nD);
+         col = mix(col, dirt, dirtM * 0.65);
+         // Steep slopes -> coastal cliff rock (overlays every band).
+         float slope = 1.0 - clamp(vWN.y, 0.0, 1.0);
+         col = mix(col, cliff, smoothstep(0.34, 0.6, slope));
+         // Faint aerial macro tint so the island's big-picture colour still reads.
+         vec2 auv = vec2(0.5 + vWXZ.x / uSpan, 0.5 + (vWXZ.z - uCz) / uSpan);
+         vec3 macro = texture2D(uAerial, auv).rgb;
+         diffuseColor.rgb *= col * (0.82 + 0.36 * macro);`,
+      );
+  };
+  mat.customProgramCacheKey = () => "island-terrain";
+  return mat;
+}
+
 /**
  * Build the island terrain mesh over the heightmap, centred on the island. When
- * `colorMap` is given (the aerial photo) it is draped over the surface; otherwise
- * vertices are coloured by elevation band.
+ * both `colorMap` (the aerial photo) and `ground` (the nine tiling textures) are
+ * given, the ground is painted with real photographic biome textures blended by
+ * elevation + slope and faintly tinted by the aerial; otherwise vertices are
+ * coloured by elevation band.
  */
-export function buildBeachTerrain(colorMap?: THREE.Texture | null): THREE.Mesh {
+export function buildBeachTerrain(
+  colorMap?: THREE.Texture | null,
+  ground?: IslandGround | null,
+): THREE.Mesh {
   const SIZE = 440;
   const SEG = 288;
   const geo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
@@ -172,14 +311,11 @@ export function buildBeachTerrain(colorMap?: THREE.Texture | null): THREE.Mesh {
     colors[i * 3 + 2] = b;
   }
   geo.computeVertexNormals();
-  let mat: THREE.MeshStandardMaterial;
-  if (colorMap) {
-    colorMap.wrapS = colorMap.wrapT = THREE.ClampToEdgeWrapping;
-    mat = new THREE.MeshStandardMaterial({ map: colorMap, roughness: 1, metalness: 0 });
-  } else {
-    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-    mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
-  }
+  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  const mat =
+    colorMap && ground
+      ? makeTerrainMaterial(colorMap, ground)
+      : new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.name = "beach-terrain";

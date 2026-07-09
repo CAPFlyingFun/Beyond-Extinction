@@ -18,7 +18,7 @@
  *
  * Bump VERSION whenever the caching logic changes to retire old caches.
  */
-const VERSION = "v26";
+const VERSION = "v28";
 const CACHE = `beyond-extinction-${VERSION}`;
 
 // Base path this SW is served from, e.g. "/Beyond-Extinction/" or "/".
@@ -44,6 +44,18 @@ const OPTIONAL = [
   BASE + "assets/models/Jack.glb",
   BASE + "assets/models/Sarah.glb",
   BASE + "opengraph.jpg",
+  // Island ground textures — cached best-effort so Chapter 2 works offline.
+  BASE + "assets/textures/island_height.png",
+  BASE + "assets/textures/island_color.jpg",
+  BASE + "assets/textures/reef.jpg",
+  BASE + "assets/textures/sand.jpg",
+  BASE + "assets/textures/grass.jpg",
+  BASE + "assets/textures/jungle.jpg",
+  BASE + "assets/textures/dirt.jpg",
+  BASE + "assets/textures/swamp.jpg",
+  BASE + "assets/textures/mountain.jpg",
+  BASE + "assets/textures/cliff.jpg",
+  BASE + "assets/textures/volcano.jpg",
 ];
 
 self.addEventListener("install", (event) => {
