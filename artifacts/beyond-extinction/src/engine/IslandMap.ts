@@ -178,18 +178,16 @@ export class IslandMap {
     if (this.ready) {
       const { u, v } = worldToIslandUV(this.px, this.pz);
       const frac = MINIMAP_RANGE_M / METERS_PER_UNIT / ISLAND_SPAN; // radius as image fraction
-      // Heading-up + view-matched. The 3D world is right-handed with +X=east and
-      // +Z=north, so facing north the camera puts east on the LEFT — the mirror of
-      // a plain north-up crop. This transform [[cos,sin],[sin,-cos]] rotates the
-      // crop so the player's forward is UP and reflects it so left/right match the
-      // first-person view exactly, in every facing direction.
+      // Heading-up: rotate the north-up crop by (π − yaw) so the player's forward
+      // points to the top and left/right match the first-person view. A pure
+      // rotation (no reflection) — R(π−yaw) = [[−cos,−sin],[sin,−cos]].
       const cy = Math.cos(this.yaw);
       const sy = Math.sin(this.yaw);
       const layer = (src: HTMLImageElement | HTMLCanvasElement, dim: number) => {
         const sc = cc / (frac * dim); // image px → canvas px so the edge = range
         c.save();
         c.translate(cc, cc);
-        c.transform(cy, sy, sy, -cy, 0, 0);
+        c.transform(-cy, sy, -sy, -cy, 0, 0);
         c.scale(sc, sc);
         c.drawImage(src, -u * dim, -v * dim); // whole layer, player pixel at origin
         c.restore();
@@ -206,7 +204,7 @@ export class IslandMap {
     c.arc(cc, cc, cc - 1, 0, Math.PI * 2);
     c.stroke();
     // North marker — rotates to show where compass-north lies on the heading-up map.
-    const nx = -Math.sin(this.yaw);
+    const nx = Math.sin(this.yaw);
     const ny = Math.cos(this.yaw);
     c.fillStyle = "rgba(200,230,255,0.9)";
     c.font = "bold 11px ui-monospace, monospace";
