@@ -217,7 +217,12 @@ class ChapterOnePlaceholderScene implements IScene {
     // him would snap upright when he first walks).
     this.jack = await this.buildCharacter("Jack", 0x3a78d0);
     if (this.disposed) return;
-    this.jack.position.set(0, beachHeight(0, 8), 8);
+    // Spawn on the flat clearing on the island's south-west flank (per the
+    // HANIFAT map plan: arrival in the SSW, trail runs "south to summit"). This
+    // is the one genuinely level, open patch on this steep volcanic cone — no
+    // cliff in Jack's face. The volcano summit rises to the NE (north end of the
+    // island), the ocean is downhill to the SW.
+    this.jack.position.set(-70, beachHeight(-70, 70), 70);
     scene.add(this.jack);
     this.jackNav = new Navigator(this.jack, {
       speed: 16,
@@ -284,7 +289,7 @@ class ChapterOnePlaceholderScene implements IScene {
         moveSpeed: 15,
         lookSensitivity: this.settings.lookSensitivity,
       });
-      this.player.placeAt(this.jack.position.x, this.jack.position.z, 180); // face inland
+      this.player.placeAt(this.jack.position.x, this.jack.position.z, 158); // face inland/NE toward the volcano summit
       this.player.setActive(true);
       this.jack.visible = false;
       this.applyFov();

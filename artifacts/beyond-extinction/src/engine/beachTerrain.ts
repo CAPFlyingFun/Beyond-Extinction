@@ -252,13 +252,16 @@ function makeTerrainMaterial(aerial: THREE.Texture, g: IslandGround): THREE.Mesh
          vec3 bw = abs(vWN); bw = pow(bw, vec3(4.0)); bw /= (bw.x + bw.y + bw.z);
          vec3 pw = vWXZ * uDetail;
          vec3 cliff = texture2D(uCliff, pw.zy).rgb * bw.x + texture2D(uCliff, pw.xz).rgb * bw.y + texture2D(uCliff, pw.xy).rgb * bw.z;
-         // Elevation bands, low -> high.
+         // Elevation bands, low -> high. Jungle dominates from just above the
+         // beach almost to the summit (the island reads lush green like the
+         // reference); bare rock only high on the volcano's flanks, bare basalt
+         // in the caldera above uRockH.
          vec3 col = reef;
-         col = mix(col, sand,   smoothstep(-1.6, 0.2, h));
-         col = mix(col, grass,  smoothstep(1.6, 4.6, h));
-         col = mix(col, jungle, smoothstep(8.0, 16.0, h));
-         col = mix(col, mtn,    smoothstep(22.0, 34.0, h));
-         col = mix(col, volc,   smoothstep(uRockH + 1.0, uRockH + 12.0, h));
+         col = mix(col, sand,   smoothstep(-1.6, 0.4, h));
+         col = mix(col, grass,  smoothstep(1.5, 4.0, h));
+         col = mix(col, jungle, smoothstep(5.0, 9.0, h));
+         col = mix(col, mtn,    smoothstep(30.0, 38.0, h));
+         col = mix(col, volc,   smoothstep(uRockH, uRockH + 10.0, h));
          // Patchy swamp mud in the low, flat wetlands near the water.
          float nS = vnoise(vWXZ.xz * 0.035);
          float swampM = smoothstep(-0.5, 1.5, h) * (1.0 - smoothstep(3.5, 6.5, h)) * smoothstep(0.45, 0.75, nS);
@@ -267,9 +270,10 @@ function makeTerrainMaterial(aerial: THREE.Texture, g: IslandGround): THREE.Mesh
          float nD = vnoise(vWXZ.xz * 0.05 + 13.0);
          float dirtM = smoothstep(6.5, 10.0, h) * (1.0 - smoothstep(17.0, 21.0, h)) * smoothstep(0.55, 0.8, nD);
          col = mix(col, dirt, dirtM * 0.65);
-         // Steep slopes -> coastal cliff rock (overlays every band).
+         // Only genuinely steep faces -> coastal cliff rock; gentle hillsides
+         // stay jungle so the island reads green like the reference.
          float slope = 1.0 - clamp(vWN.y, 0.0, 1.0);
-         col = mix(col, cliff, smoothstep(0.34, 0.6, slope));
+         col = mix(col, cliff, smoothstep(0.52, 0.78, slope));
          // Faint aerial macro tint so the island's big-picture colour still reads.
          vec2 auv = vec2(0.5 + vWXZ.x / uSpan, 0.5 + (vWXZ.z - uCz) / uSpan);
          vec3 macro = texture2D(uAerial, auv).rgb;
