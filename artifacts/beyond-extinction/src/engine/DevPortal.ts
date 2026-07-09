@@ -14,6 +14,8 @@
  *   public build too — the PIN is the only gate.
  */
 
+import { SpawnTools } from "./SpawnTools";
+
 const DEV_PIN = "2026";
 const HOLD_MS = 10_000;
 const INDICATOR_DELAY_MS = 2_500;
@@ -26,6 +28,8 @@ export interface DevPortalActions {
   onAnimationEditor?: () => void;
   /** Jump straight to the island (skip the lab prologue) — dev shortcut. */
   onSkipToIsland?: () => void;
+  /** Show a brief confirmation toast (used by the spawn-editing buttons). */
+  showToast?: (message: string) => void;
 }
 
 export class DevPortal {
@@ -214,6 +218,15 @@ export class DevPortal {
     this.menu?.remove();
     const menu = document.createElement("div");
     menu.className = "be-dev__overlay show be-dev__menu";
+    // Spawn-editing buttons only appear when a scene (the island) has registered
+    // its spawn tools — otherwise they'd be dead controls in the lab.
+    const spawnable = !!SpawnTools.current;
+    const spawnRows = spawnable
+      ? `
+          <button class="be-dev__tool" data-tool="spawn-jack">📍 Set Jack Start (here)</button>
+          <button class="be-dev__tool" data-tool="spawn-sarah">📍 Set Sarah Start (here)</button>
+          <button class="be-dev__tool" data-tool="spawn-reset">↺ Reset Start Points</button>`
+      : "";
     menu.innerHTML = `
       <div class="be-dev__panel">
         <div class="be-dev__title">Dev Tools</div>
@@ -221,7 +234,7 @@ export class DevPortal {
         <div class="be-dev__tools">
           <button class="be-dev__tool" data-tool="markers">◈ Marker Editor</button>
           <button class="be-dev__tool" data-tool="anim">🦴 Animation Editor</button>
-          <button class="be-dev__tool" data-tool="island">🏝️ Skip to Island</button>
+          <button class="be-dev__tool" data-tool="island">🏝️ Skip to Island</button>${spawnRows}
         </div>
         <button class="be-dev__key be-dev__key--cancel be-dev__menuclose" type="button">Close</button>
       </div>`;
@@ -257,6 +270,21 @@ export class DevPortal {
     } else if (islandBtn) {
       islandBtn.remove();
     }
+    // Spawn tools: run the action, toast the result, and keep the menu open so
+    // both Jack and Sarah can be set in one visit.
+    const runSpawn = (fn?: () => string): void => {
+      const msg = fn?.();
+      if (msg) this.actions.showToast?.(msg);
+    };
+    menu
+      .querySelector('[data-tool="spawn-jack"]')
+      ?.addEventListener("click", () => runSpawn(SpawnTools.current?.setJackHere));
+    menu
+      .querySelector('[data-tool="spawn-sarah"]')
+      ?.addEventListener("click", () => runSpawn(SpawnTools.current?.setSarahHere));
+    menu
+      .querySelector('[data-tool="spawn-reset"]')
+      ?.addEventListener("click", () => runSpawn(SpawnTools.current?.reset));
     menu.querySelector(".be-dev__menuclose")?.addEventListener("click", close);
   }
 

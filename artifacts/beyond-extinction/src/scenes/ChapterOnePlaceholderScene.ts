@@ -30,6 +30,8 @@ import {
   type OceanWater,
 } from "../engine/beachTerrain";
 import { SaveManager } from "../engine/SaveManager";
+import { SpawnStore } from "../engine/SpawnStore";
+import { SpawnTools } from "../engine/SpawnTools";
 import { PlayerInventory } from "../engine/PlayerInventory";
 import { MarkerStore } from "../engine/MarkerStore";
 import { spawnSceneMarkers } from "../engine/MarkerEditor";
@@ -102,6 +104,11 @@ class ChapterOnePlaceholderScene implements IScene {
   private player?: PlayerController;
   private inventory?: InventoryOverlay;
   private static readonly EYE = 5.5; // eye height above the terrain (JACK_HEIGHT 6.4)
+  // Default island start points (SSW arrival beach). Jack.rot = facing degrees;
+  // Sarah.rot = mesh rotation.y (radians). Overridable + savable via the Dev menu.
+  private static readonly JACK_SPAWN = { x: -106, z: 62, rot: 300 };
+  private static readonly SARAH_SPAWN = { x: -108, z: 68, rot: Math.PI / 2 };
+  private jackFacingDeg = ChapterOnePlaceholderScene.JACK_SPAWN.rot;
 
   private cameraDirector!: CameraDirector<CameraZoneState>;
   private highlights: ObjectiveHighlight[] = [];
@@ -213,15 +220,21 @@ class ChapterOnePlaceholderScene implements IScene {
     if (this.disposed) return;
     spawnSceneMarkers(this.name, scene);
 
+    // Start positions: the SSW arrival beach defaults (per the HANIFAT map plan:
+    // arrival in the SSW, trail runs "south to summit" — both wash up at the
+    // waterline, ocean at their back, the island rising to the NE toward the
+    // volcano). A dev can override these live via the Dev menu (Set … Spawn), and
+    // the saved point wins here on future loads.
+    const savedSpawns = SpawnStore.get();
+    const jackSpawn = savedSpawns.jack ?? ChapterOnePlaceholderScene.JACK_SPAWN;
+    const sarahSpawn = savedSpawns.sarah ?? ChapterOnePlaceholderScene.SARAH_SPAWN;
+    this.jackFacingDeg = jackSpawn.rot;
+
     // Jack, just come to on the sand — standing dazed (no lying clip; tipping
     // him would snap upright when he first walks).
     this.jack = await this.buildCharacter("Jack", 0x3a78d0);
     if (this.disposed) return;
-    // Wash up on the SSW arrival beach (per the HANIFAT map plan: arrival in the
-    // SSW, trail runs "south to summit"). Jack stands at the waterline; the ocean
-    // is at his back to the SW, the island rises ahead to the NE toward the
-    // volcano summit at the island's north end. (Fine-tune + save via the editor.)
-    this.jack.position.set(-106, beachHeight(-106, 62), 62);
+    this.jack.position.set(jackSpawn.x, beachHeight(jackSpawn.x, jackSpawn.z), jackSpawn.z);
     scene.add(this.jack);
     this.jackNav = new Navigator(this.jack, {
       speed: 16,
@@ -233,8 +246,8 @@ class ChapterOnePlaceholderScene implements IScene {
     // until Jack reaches her.
     this.sarah = await this.buildCharacter("Sarah", 0x36b27a);
     if (this.disposed) return;
-    this.sarah.position.set(-108, beachHeight(-108, 68), 68);
-    this.sarah.rotation.y = Math.PI / 2;
+    this.sarah.position.set(sarahSpawn.x, beachHeight(sarahSpawn.x, sarahSpawn.z), sarahSpawn.z);
+    this.sarah.rotation.y = sarahSpawn.rot;
     scene.add(this.sarah);
     this.setProne(this.sarah, true);
 
@@ -289,7 +302,7 @@ class ChapterOnePlaceholderScene implements IScene {
         moveSpeed: 15,
         lookSensitivity: this.settings.lookSensitivity,
       });
-      this.player.placeAt(this.jack.position.x, this.jack.position.z, 300); // face out to the open sea (island rises behind)
+      this.player.placeAt(this.jack.position.x, this.jack.position.z, this.jackFacingDeg);
       this.player.setActive(true);
       this.jack.visible = false;
       this.applyFov();
@@ -303,6 +316,9 @@ class ChapterOnePlaceholderScene implements IScene {
         playSfx: (n) => this.ctx.audio.playSfx(n),
         onSave: () => this.manualSaveIsland(),
       });
+      // Expose spawn-editing to the Dev menu: walk to a spot, open Dev tools, and
+      // save it as Jack's or Sarah's island start point (persists to localStorage).
+      this.registerSpawnTools();
     } else {
       // Legacy directed-gameplay path (click-to-move + cinematic story).
       this.unsubClick = this.ctx.input.onClick(() => this.handleClick());
@@ -865,6 +881,41 @@ class ChapterOnePlaceholderScene implements IScene {
     this.ctx.overlays.showToast("Game saved");
   }
 
+  /**
+   * Wire the Dev menu's "Set … Spawn (here)" buttons to this live scene. "Here"
+   * is the player's current camera position; Jack's facing is read from the
+   * controller. Setting Sarah's spawn also drops her mesh at the spot so the
+   * placement is visible immediately. Points persist via SpawnStore.
+   */
+  private registerSpawnTools(): void {
+    SpawnTools.current = {
+      setJackHere: () => {
+        const x = +this.camera.position.x.toFixed(1);
+        const z = +this.camera.position.z.toFixed(1);
+        // placeAt uses yaw = degToRad(-facing), so facing = -deg(yaw).
+        const facing = +(-THREE.MathUtils.radToDeg(this.player?.yaw ?? 0)).toFixed(1);
+        SpawnStore.setJack({ x, z, rot: facing });
+        this.jackFacingDeg = facing;
+        return `Jack start saved (${x}, ${z})`;
+      },
+      setSarahHere: () => {
+        const x = +this.camera.position.x.toFixed(1);
+        const z = +this.camera.position.z.toFixed(1);
+        const rot = this.sarah?.rotation.y ?? Math.PI / 2;
+        SpawnStore.setSarah({ x, z, rot });
+        if (this.sarah) {
+          this.sarah.position.set(x, beachHeight(x, z), z);
+          this.setProne(this.sarah, true);
+        }
+        return `Sarah start saved (${x}, ${z})`;
+      },
+      reset: () => {
+        SpawnStore.clear();
+        return "Island start points reset to defaults";
+      },
+    };
+  }
+
   private faceTowards(obj: THREE.Object3D, target: THREE.Vector3): void {
     const dir = new THREE.Vector3().subVectors(target, obj.position);
     dir.y = 0;
@@ -998,6 +1049,7 @@ class ChapterOnePlaceholderScene implements IScene {
     // into the next scene.
     this.ctx.overlays.cancelChoice();
     closeSettingsPanel();
+    if (SpawnTools.current) SpawnTools.current = undefined; // Dev spawn tools leave with the scene
     this.player?.dispose();
     this.inventory?.dispose();
     this.unsubClick?.();

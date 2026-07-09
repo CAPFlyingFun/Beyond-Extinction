@@ -83,6 +83,7 @@ export class Game {
       onMarkerEditor: () => this.markerEditor.toggle(),
       onAnimationEditor: () => this.animEditor.toggle(),
       onSkipToIsland: () => this.skipToIsland(),
+      showToast: (m) => this.overlays.showToast(m),
     });
     // The inventory's DEV tab opens the same PIN gate directly (no 10s hold).
     DevAccess.open = () => this.devPortal.requestUnlock();
