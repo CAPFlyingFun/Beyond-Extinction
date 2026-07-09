@@ -24,7 +24,12 @@ export interface MarkerEditorDeps {
   getActive: () => EditorSceneRef | null;
   domElement: HTMLCanvasElement;
   uiLayer: HTMLElement;
-  input: { setEnabled: (b: boolean) => void };
+  input: {
+    setEnabled: (b: boolean) => void;
+    /** Suspend the first-person HUD/look layer so it stops covering the canvas. */
+    enableFpControls: (b: boolean) => void;
+    fpControlsActive: boolean;
+  };
   /** Called on open/close so the host can suspend other gestures (dev portal). */
   onOpenChange?: (open: boolean) => void;
   playSfx?: (n: string) => void;
@@ -47,6 +52,7 @@ export class MarkerEditor {
   private selectedType = MARKER_TYPES[0].key;
   private boxHelper?: THREE.BoxHelper;
   private dirty = false;
+  private wasFp = false; // whether FP controls were active before opening
 
   // Fly camera orientation + movement key state.
   private yaw = 0;
@@ -93,6 +99,10 @@ export class MarkerEditor {
     this.sceneRef = active;
     this.sceneId = active.name;
     this.deps.onOpenChange?.(true);
+    // Suspend gameplay input AND the first-person HUD layer — otherwise the FP
+    // look/joystick overlay sits over the canvas and swallows the drag-to-look.
+    this.wasFp = this.deps.input.fpControlsActive;
+    if (this.wasFp) this.deps.input.enableFpControls(false);
     this.deps.input.setEnabled(false);
 
     // Fly camera starts where the scene camera is looking.
@@ -126,6 +136,7 @@ export class MarkerEditor {
     this.root = undefined;
     this.keys.clear();
     this.deps.input.setEnabled(true);
+    if (this.wasFp) this.deps.input.enableFpControls(true);
     this.deps.onOpenChange?.(false);
     this.deps.playSfx?.("ui-select");
     this.sceneRef = null;
@@ -279,8 +290,14 @@ export class MarkerEditor {
   }
 
   // ── Pointer + keyboard ───────────────────────────────────────────────────────
+  private prevTouchAction = "";
   private attachListeners(): void {
     const el = this.deps.domElement;
+    // The game's InputManager is disabled while editing, so it no longer holds
+    // the canvas's touch-action; set it here so a touch drag produces pointermove
+    // (look) events instead of being eaten as a browser scroll/zoom gesture.
+    this.prevTouchAction = el.style.touchAction;
+    el.style.touchAction = "none";
     el.addEventListener("pointerdown", this.onPointerDown);
     el.addEventListener("pointermove", this.onPointerMove);
     el.addEventListener("pointerup", this.onPointerUp);
@@ -291,6 +308,7 @@ export class MarkerEditor {
 
   private detachListeners(): void {
     const el = this.deps.domElement;
+    el.style.touchAction = this.prevTouchAction;
     el.removeEventListener("pointerdown", this.onPointerDown);
     el.removeEventListener("pointermove", this.onPointerMove);
     el.removeEventListener("pointerup", this.onPointerUp);
@@ -302,6 +320,7 @@ export class MarkerEditor {
   private onPointerDown = (e: PointerEvent): void => {
     if (this.pointerId !== null) return;
     this.pointerId = e.pointerId;
+    this.deps.domElement.setPointerCapture?.(e.pointerId);
     this.downX = this.lastX = e.clientX;
     this.downY = this.lastY = e.clientY;
     this.dragged = false;
@@ -401,9 +420,9 @@ export class MarkerEditor {
       </div>
       <div class="be-med__palette">${palette}</div>
       <div class="be-med__move">
-        <button data-move="q">▲ up</button>
+        <button data-move="e">▲ up</button>
         <button data-move="w">▲</button>
-        <button data-move="e">▼ dn</button>
+        <button data-move="q">▼ dn</button>
         <button data-move="a">◀</button>
         <button data-move="s">▼</button>
         <button data-move="d">▶</button>

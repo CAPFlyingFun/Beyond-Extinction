@@ -1,9 +1,11 @@
 import * as THREE from "three";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
-import { loadModel, loadTexture } from "../engine/assets";
-import { createBillboard, updateBillboardsYAxis } from "../engine/Billboard";
+import { loadModel } from "../engine/assets";
+import { updateBillboardsYAxis } from "../engine/Billboard";
+import { buildIslandFoliage } from "../engine/islandFoliage";
 import { Navigator } from "../engine/Navigator";
 import { PlayerController } from "../engine/PlayerController";
+import { InventoryOverlay } from "../engine/InventoryOverlay";
 import { CameraDirector, type CameraZone } from "../engine/CameraDirector";
 import { ClipLibrary } from "../engine/ClipLibrary";
 import {
@@ -96,6 +98,7 @@ class ChapterOnePlaceholderScene implements IScene {
   // built but left dormant while firstPerson is true — easy to switch back.
   private firstPerson = true;
   private player?: PlayerController;
+  private inventory?: InventoryOverlay;
   private static readonly EYE = 5.5; // eye height above the terrain (JACK_HEIGHT 6.4)
 
   private cameraDirector!: CameraDirector<CameraZoneState>;
@@ -126,7 +129,9 @@ class ChapterOnePlaceholderScene implements IScene {
   private static readonly AUTOPLAY_DELAY_MS = 900;
   // The beach play area Jack/Sarah are clamped to (off the water, short of the
   // treeline).
-  private static readonly PLAY = { minX: -52, maxX: 52, minZ: -8, maxZ: 34 };
+  // A much larger roam area: a wide beach that runs from out in the shallow
+  // water (negative Z — you can wade in) up to the dunes/treeline inland.
+  private static readonly PLAY = { minX: -130, maxX: 130, minZ: -40, maxZ: 58 };
 
   constructor(private ctx: SceneContext) {
     this.camera = new THREE.PerspectiveCamera(
@@ -275,6 +280,16 @@ class ChapterOnePlaceholderScene implements IScene {
       this.player.setActive(true);
       this.jack.visible = false;
       this.applyFov();
+      // Jack's inventory (badge + coffee) + the DEV tab, same ARK overlay as the
+      // prologue. Opening it freezes movement; closing restores it.
+      this.inventory = new InventoryOverlay(this.ctx.uiLayer, {
+        getObjective: () => "",
+        setFrozen: (frozen) => this.ctx.input.setEnabled(!frozen),
+        canOpen: () => this.firstPerson && !this.disposed,
+        getRole: () => "JACK · Survivor",
+        playSfx: (n) => this.ctx.audio.playSfx(n),
+        onSave: () => this.manualSaveIsland(),
+      });
     } else {
       // Legacy directed-gameplay path (click-to-move + cinematic story).
       this.unsubClick = this.ctx.input.onClick(() => this.handleClick());
@@ -586,79 +601,11 @@ class ChapterOnePlaceholderScene implements IScene {
   // ---------- World building ----------
 
   private async buildJungle(): Promise<void> {
-    const [backdrop, palm, jungleTree, vine, bush, fern, grass, rock, log] =
-      await Promise.all([
-        loadTexture("assets/billboards/billboard_jungle_background_layer_01.png"),
-        loadTexture("assets/billboards/billboard_palm_tree_01.png"),
-        loadTexture("assets/billboards/billboard_jungle_tree_01.png"),
-        loadTexture("assets/billboards/billboard_vine_cluster_01.png"),
-        loadTexture("assets/billboards/billboard_bush_01.png"),
-        loadTexture("assets/billboards/billboard_fern_01.png"),
-        loadTexture("assets/billboards/billboard_grass_clump_01.png"),
-        loadTexture("assets/billboards/billboard_rock_01.png"),
-        loadTexture("assets/billboards/billboard_fallen_log_01.png"),
-      ]);
     if (this.disposed) return;
-    const scene = this.scene;
-
-    if (backdrop) {
-      for (let i = -2; i <= 2; i++) {
-        const b = createBillboard(backdrop, 70);
-        b.position.set(i * 95, 0, 115 + Math.random() * 15);
-        scene.add(b);
-        this.billboards.push(b);
-      }
-    }
-
-    const treeTextures = [palm, jungleTree].filter((t): t is THREE.Texture => !!t);
-    if (treeTextures.length) {
-      for (let i = 0; i < 16; i++) {
-        const tex = treeTextures[i % treeTextures.length];
-        const height = 16 + Math.random() * 8;
-        const tree = createBillboard(tex, height);
-        tree.position.set(-120 + i * 16 + Math.random() * 6, 0, 60 + Math.random() * 30);
-        scene.add(tree);
-        this.billboards.push(tree);
-      }
-    }
-
-    if (vine) {
-      for (let i = 0; i < 4; i++) {
-        const v = createBillboard(vine, 8 + Math.random() * 4);
-        v.position.set(-90 + i * 55 + Math.random() * 10, 6, 58 + Math.random() * 15);
-        scene.add(v);
-        this.billboards.push(v);
-      }
-    }
-
-    const scatterTextures = [bush, fern, grass, rock].filter(
-      (t): t is THREE.Texture => !!t,
-    );
-    if (scatterTextures.length) {
-      for (let i = 0; i < 14; i++) {
-        const tex = scatterTextures[i % scatterTextures.length];
-        const height = 2.5 + Math.random() * 2.5;
-        const s = createBillboard(tex, height);
-        s.position.set(-60 + Math.random() * 120, 0, 18 + Math.random() * 28);
-        scene.add(s);
-        this.billboards.push(s);
-      }
-    }
-
-    if (log) {
-      for (let i = 0; i < 2; i++) {
-        const l = createBillboard(log, 3);
-        l.position.set(-30 + i * 60 + Math.random() * 10, 0, 40 + Math.random() * 10);
-        scene.add(l);
-        this.billboards.push(l);
-      }
-    }
-
-    // Sit every jungle billboard on the terrain (they were placed at y=0 / a
-    // hang offset, which would bury them in the raised dunes inland).
-    for (const b of this.billboards) {
-      b.position.y += beachHeight(b.position.x, b.position.z);
-    }
+    // Procedural, instanced trees + bushes on the terrain (replaces the flat
+    // billboard jungle). Large trees fill the land beyond a shore-clearance band
+    // and never grow in the water; bushes scatter closer in. See islandFoliage.
+    this.scene.add(buildIslandFoliage({ treeClearance: 30, treeDensity: 0.55 }));
   }
 
   /**
@@ -756,11 +703,13 @@ class ChapterOnePlaceholderScene implements IScene {
     model.position.y -= grounded.min.y;
   }
 
-  /** Tip a character onto their back (prone) and re-ground, or restore upright. */
+  /** Tip a character onto their BACK (supine) and re-ground, or restore upright.
+   *  Tipping backward is a rotation about the model's local X axis; rolling about
+   *  Z (the old behaviour) laid them on their side instead. */
   private setProne(group: THREE.Group, prone: boolean): void {
     const model = group.userData.model as THREE.Object3D | undefined;
     if (!model) return;
-    model.rotation.z = prone ? Math.PI / 2 : 0;
+    model.rotation.x = prone ? -Math.PI / 2 : 0;
     const grounded = new THREE.Box3().setFromObject(model);
     model.position.y -= grounded.min.y;
     if (prone) group.userData.proneY = model.position.y;
@@ -770,7 +719,7 @@ class ChapterOnePlaceholderScene implements IScene {
   private wake(group: THREE.Group, ms: number): Promise<void> {
     const model = group.userData.model as THREE.Object3D | undefined;
     if (!model) return Promise.resolve();
-    const fromRot = model.rotation.z;
+    const fromRot = model.rotation.x;
     const fromY = model.position.y;
     const toY = (group.userData.standY as number) ?? 0;
     return new Promise<void>((resolve) => {
@@ -779,7 +728,7 @@ class ChapterOnePlaceholderScene implements IScene {
         if (this.disposed) return resolve();
         const k = Math.min((performance.now() - start) / ms, 1);
         const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
-        model.rotation.z = fromRot * (1 - e);
+        model.rotation.x = fromRot * (1 - e);
         model.position.y = THREE.MathUtils.lerp(fromY, toY, e);
         if (k < 1) requestAnimationFrame(tick);
         else resolve();
@@ -885,6 +834,19 @@ class ChapterOnePlaceholderScene implements IScene {
       x: THREE.MathUtils.clamp(nx, p.minX, p.maxX),
       z: THREE.MathUtils.clamp(nz, p.minZ, p.maxZ),
     };
+  }
+
+  /** Manual save from the island inventory screen. */
+  private manualSaveIsland(): void {
+    SaveManager.save("manual-1", {
+      label: "Chapter One — The Island",
+      scene: "island",
+      inventory: {
+        hasBadge: PlayerInventory.hasBadge,
+        heldItems: [...PlayerInventory.heldItems],
+      },
+    });
+    this.ctx.overlays.showToast("Game saved");
   }
 
   private faceTowards(obj: THREE.Object3D, target: THREE.Vector3): void {
@@ -1021,6 +983,7 @@ class ChapterOnePlaceholderScene implements IScene {
     this.ctx.overlays.cancelChoice();
     closeSettingsPanel();
     this.player?.dispose();
+    this.inventory?.dispose();
     this.unsubClick?.();
     this.unsubSettings?.();
     this.gearEl?.remove();

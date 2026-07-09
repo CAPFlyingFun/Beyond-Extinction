@@ -24,6 +24,7 @@ export const MARKER_TYPES: MarkerType[] = [
   { key: "barrel", label: "Barrel", icon: "◍", group: "prop" },
   { key: "sign", label: "Sign", icon: "▲", group: "prop" },
   { key: "rock", label: "Rock", icon: "⬢", group: "nature" },
+  { key: "tree", label: "Tree", icon: "🌳", group: "nature" },
   { key: "palm", label: "Palm", icon: "🌴", group: "nature" },
   { key: "bush", label: "Bush", icon: "❦", group: "nature" },
   { key: "torch", label: "Torch Light", icon: "✷", group: "light" },
@@ -111,6 +112,25 @@ function buildPalm(): THREE.Object3D {
   return g;
 }
 
+function buildTree(): THREE.Object3D {
+  // Matches the coded island foliage: trunk + two stacked canopy blobs.
+  const g = new THREE.Group();
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.28, 0.5, 7, 6),
+    mat(0x6b4a2a, { rough: 1 }),
+  );
+  trunk.position.y = 3.5;
+  const canopyMat = new THREE.MeshStandardMaterial({ color: 0x2f7d3a, roughness: 1, flatShading: true });
+  const low = new THREE.Mesh(new THREE.IcosahedronGeometry(3.2, 0), canopyMat);
+  low.scale.set(1, 0.8, 1);
+  low.position.y = 8;
+  const high = new THREE.Mesh(new THREE.IcosahedronGeometry(2.2, 0), canopyMat);
+  high.position.y = 11;
+  g.add(trunk, low, high);
+  g.traverse((o) => ((o as THREE.Mesh).castShadow = true));
+  return g;
+}
+
 function buildBush(): THREE.Object3D {
   const g = new THREE.Group();
   const m = mat(0x3a6d2e, { rough: 1 });
@@ -163,6 +183,9 @@ export function buildMarkerObject(def: MarkerDef): THREE.Object3D {
       break;
     case "rock":
       obj = buildRock();
+      break;
+    case "tree":
+      obj = buildTree();
       break;
     case "palm":
       obj = buildPalm();

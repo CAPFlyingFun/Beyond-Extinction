@@ -28,7 +28,11 @@ interface Keyframe {
 export interface AnimationEditorDeps {
   uiLayer: HTMLElement;
   domElement: HTMLCanvasElement;
-  input: { setEnabled: (b: boolean) => void };
+  input: {
+    setEnabled: (b: boolean) => void;
+    enableFpControls: (b: boolean) => void;
+    fpControlsActive: boolean;
+  };
   onOpenChange?: (open: boolean) => void;
   playSfx?: (n: string) => void;
   showToast?: (m: string) => void;
@@ -85,6 +89,7 @@ export class AnimationEditor {
   private clipName = "Custom_1";
   private playing = false;
   private busy = false;
+  private wasFp = false; // whether FP controls were active before opening
 
   // Orbit camera state.
   private orbitYaw = 0.5;
@@ -130,6 +135,8 @@ export class AnimationEditor {
     this.busy = true;
     this.open = true;
     this.deps.onOpenChange?.(true);
+    this.wasFp = this.deps.input.fpControlsActive;
+    if (this.wasFp) this.deps.input.enableFpControls(false);
     this.deps.input.setEnabled(false);
     this.buildHud();
     if (!this.model) await this.loadCharacter();
@@ -147,6 +154,7 @@ export class AnimationEditor {
     this.root?.remove();
     this.root = undefined;
     this.deps.input.setEnabled(true);
+    if (this.wasFp) this.deps.input.enableFpControls(true);
     this.deps.onOpenChange?.(false);
     this.deps.playSfx?.("ui-select");
   }
@@ -444,8 +452,13 @@ export class AnimationEditor {
   }
 
   // ── Listeners ────────────────────────────────────────────────────────────────
+  private prevTouchAction = "";
   private attachListeners(): void {
     const el = this.deps.domElement;
+    // Own the canvas's touch-action while editing (InputManager is disabled), so
+    // a touch drag orbits the model instead of scrolling the page.
+    this.prevTouchAction = el.style.touchAction;
+    el.style.touchAction = "none";
     el.addEventListener("pointerdown", this.onDown);
     el.addEventListener("pointermove", this.onMove);
     el.addEventListener("pointerup", this.onUp);
@@ -455,6 +468,7 @@ export class AnimationEditor {
   }
   private detachListeners(): void {
     const el = this.deps.domElement;
+    el.style.touchAction = this.prevTouchAction;
     el.removeEventListener("pointerdown", this.onDown);
     el.removeEventListener("pointermove", this.onMove);
     el.removeEventListener("pointerup", this.onUp);
@@ -465,6 +479,7 @@ export class AnimationEditor {
   private onDown = (e: PointerEvent): void => {
     if (this.pointerId !== null) return;
     this.pointerId = e.pointerId;
+    this.deps.domElement.setPointerCapture?.(e.pointerId);
     this.lastX = e.clientX;
     this.lastY = e.clientY;
   };
