@@ -73,6 +73,15 @@ export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void
         <span class="be-field__row"><span>Camera speed (press &amp; swipe)</span><b data-readout></b></span>
         <input type="range" />
       </label>
+      <div class="be-field" data-key="minimapCorner">
+        <span class="be-field__row"><span>Minimap position</span></span>
+        <div class="be-seg" role="group" aria-label="Minimap position">
+          <button type="button" data-corner="tl">Top L</button>
+          <button type="button" data-corner="tr">Top R</button>
+          <button type="button" data-corner="bl">Bot L</button>
+          <button type="button" data-corner="br">Bot R</button>
+        </div>
+      </div>
       <div class="be-settings__actions">
         <button class="be-btn" data-action="reset">Reset</button>
         <button class="be-btn be-btn--primary" data-action="close">Done</button>
@@ -115,6 +124,22 @@ export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void
   subtitlesInput.addEventListener("change", () => {
     setSettings({ subtitles: subtitlesInput.checked });
   });
+
+  // Minimap position — a 4-way corner preset (segmented buttons).
+  const cornerBtns = Array.from(
+    el.querySelectorAll<HTMLButtonElement>('[data-key="minimapCorner"] [data-corner]'),
+  );
+  const syncCorner = (corner: string): void => {
+    for (const b of cornerBtns) b.classList.toggle("active", b.dataset.corner === corner);
+  };
+  syncCorner(getSettings().minimapCorner);
+  for (const b of cornerBtns) {
+    b.addEventListener("click", () => {
+      const corner = b.dataset.corner as GameplaySettings["minimapCorner"];
+      setSettings({ minimapCorner: corner });
+      syncCorner(corner);
+    });
+  }
 
   function setupField(
     key: "fov" | "zoom" | "lookSensitivity",
@@ -169,6 +194,7 @@ export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void
     syncers.lookSensitivity(s.lookSensitivity);
     syncAutoPlay(s.autoPlay);
     syncSubtitles(s.subtitles);
+    syncCorner(s.minimapCorner);
   });
   el.addEventListener("click", (e) => {
     if (e.target === el) close();

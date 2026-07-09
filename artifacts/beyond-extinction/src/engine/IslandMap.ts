@@ -1,5 +1,6 @@
 import { assetUrl } from "./assets";
 import { worldToIslandUV, ISLAND_SPAN, METERS_PER_UNIT } from "./beachTerrain";
+import { getSettings, subscribeSettings, type MinimapCorner } from "./Settings";
 
 /**
  * Island map HUD for Chapter 2, drawn over the real satellite image.
@@ -43,6 +44,7 @@ export class IslandMap {
   private view = { scale: 1, tx: 0, ty: 0, base: 1 };
   private pointers = new Map<number, { x: number; y: number }>();
   private pinchPrev = 0;
+  private unsubSettings: () => void;
 
   constructor(private readonly parent: HTMLElement) {
     injectStyles();
@@ -53,6 +55,8 @@ export class IslandMap {
 
     this.root = document.createElement("div");
     this.root.className = "be-imap";
+    this.applyCorner(getSettings().minimapCorner);
+    this.unsubSettings = subscribeSettings((s) => this.applyCorner(s.minimapCorner));
     this.mm = document.createElement("canvas");
     this.mm.className = "be-imap__cv";
     this.root.appendChild(this.mm);
@@ -69,6 +73,12 @@ export class IslandMap {
       this.buildFog();
     };
     this.img.src = assetUrl("assets/textures/island_color.jpg");
+  }
+
+  /** Move the minimap panel to one of the four screen corners. */
+  private applyCorner(corner: MinimapCorner): void {
+    this.root.classList.remove("be-imap--tl", "be-imap--tr", "be-imap--bl", "be-imap--br");
+    this.root.classList.add(`be-imap--${corner}`);
   }
 
   /** Player world position + heading (radians, PlayerController.yaw). */
@@ -298,6 +308,7 @@ export class IslandMap {
   }
 
   dispose(): void {
+    this.unsubSettings();
     this.closeFull();
     this.root.remove();
   }
@@ -331,10 +342,15 @@ function injectStyles(): void {
   stylesInjected = true;
   const css = `
 .be-imap {
-  position: absolute; left: 14px; bottom: 14px; width: 150px; height: 150px;
+  position: absolute; width: 150px; height: 150px;
   border-radius: 50%; cursor: pointer; z-index: 60; pointer-events: auto;
   box-shadow: 0 6px 22px rgba(0,0,0,0.5); -webkit-tap-highlight-color: transparent;
 }
+/* Corner presets. Top corners clear the gear / inventory buttons a little. */
+.be-imap--tl { top: 14px; left: 14px; }
+.be-imap--tr { top: 74px; right: 14px; }
+.be-imap--bl { bottom: 14px; left: 14px; }
+.be-imap--br { bottom: 14px; right: 14px; }
 .be-imap__cv { width: 100%; height: 100%; display: block; border-radius: 50%; }
 .be-imap__range {
   position: absolute; right: 6px; bottom: 6px; padding: 1px 6px; border-radius: 8px;

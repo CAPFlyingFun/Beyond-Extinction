@@ -28,7 +28,13 @@ export interface GameplaySettings {
    * captions are opt-in for players who want the text on screen.
    */
   subtitles: boolean;
+  /** Which screen corner the island minimap sits in. */
+  minimapCorner: MinimapCorner;
 }
+
+/** Minimap corner preset: top/bottom × left/right. */
+export type MinimapCorner = "tl" | "tr" | "bl" | "br";
+export const MINIMAP_CORNERS: readonly MinimapCorner[] = ["tl", "tr", "bl", "br"];
 
 export const SETTINGS_RANGES = {
   fov: { min: 40, max: 75, step: 1, default: 75 },
@@ -42,6 +48,7 @@ const DEFAULTS: GameplaySettings = {
   autoPlay: false,
   lookSensitivity: SETTINGS_RANGES.lookSensitivity.default,
   subtitles: false,
+  minimapCorner: "bl",
 };
 
 // v3: the default lab framing baseline moved to FOV 75 / zoom 1.3, so a reset
@@ -76,6 +83,9 @@ function sanitize(raw: Partial<GameplaySettings>): GameplaySettings {
     ),
     subtitles:
       typeof raw.subtitles === "boolean" ? raw.subtitles : DEFAULTS.subtitles,
+    minimapCorner: MINIMAP_CORNERS.includes(raw.minimapCorner as MinimapCorner)
+      ? (raw.minimapCorner as MinimapCorner)
+      : DEFAULTS.minimapCorner,
   };
 }
 
