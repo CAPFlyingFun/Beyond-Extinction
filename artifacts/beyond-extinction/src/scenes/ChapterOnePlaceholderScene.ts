@@ -24,6 +24,7 @@ import { beachStory } from "../data/beachSequences";
 import {
   buildBeachTerrain,
   buildOceanWater,
+  loadIslandHeightmap,
   beachHeight,
   type OceanWater,
 } from "../engine/beachTerrain";
@@ -131,7 +132,9 @@ class ChapterOnePlaceholderScene implements IScene {
   // treeline).
   // A much larger roam area: a wide beach that runs from out in the shallow
   // water (negative Z — you can wade in) up to the dunes/treeline inland.
-  private static readonly PLAY = { minX: -130, maxX: 130, minZ: -40, maxZ: 58 };
+  // Roam the real island: from out in the shallows (−Z) up the south beach and
+  // inland toward the volcano to the north. (Heightmap island spans z≈−2..250.)
+  private static readonly PLAY = { minX: -165, maxX: 165, minZ: -30, maxZ: 200 };
 
   constructor(private ctx: SceneContext) {
     this.camera = new THREE.PerspectiveCamera(
@@ -185,14 +188,16 @@ class ChapterOnePlaceholderScene implements IScene {
     sun.castShadow = true;
     scene.add(sun);
 
-    // Procedural 3D beach terrain (noise heightmap): the sea floor slopes below
-    // sea level offshore and rises into dunes inland, so the waterline is a real
-    // coastline instead of a flat sand plane. See engine/beachTerrain.
-    scene.add(buildBeachTerrain());
+    // Real island terrain from the MeshyAI heightmap, with the aerial photo
+    // draped over it. Load both first (the heightmap must be sampled per vertex);
+    // if either fails, buildBeachTerrain falls back to the procedural beach.
+    await loadIslandHeightmap("assets/textures/island_height.png");
+    if (this.disposed) return;
+    const islandColor = await loadTexture("assets/textures/island_color.jpg");
+    if (this.disposed) return;
+    scene.add(buildBeachTerrain(islandColor));
 
-    // Real animated water at sea level (y=0). Because the terrain dips below y=0
-    // only on the sea side, the water shows offshore and is occluded by the dry
-    // beach — no more flat ocean plane overlapping/flickering across the sand.
+    // Animated water at sea level (y=0), surrounding the island.
     const ocean = buildOceanWater();
     this.oceanUniforms = ocean.uniforms;
     scene.add(ocean.mesh);
@@ -605,10 +610,10 @@ class ChapterOnePlaceholderScene implements IScene {
     // Placeholder bark until real tree models: the Godot walnut wood texture.
     const trunkMap = await loadTexture("assets/textures/wood_trunk.jpg");
     if (this.disposed) return;
-    // Procedural, instanced trees + bushes on the terrain (replaces the flat
-    // billboard jungle). Large trees fill the land beyond a shore-clearance band
-    // and never grow in the water; bushes scatter closer in. See islandFoliage.
-    this.scene.add(buildIslandFoliage({ treeClearance: 30, treeDensity: 0.55, trunkMap }));
+    // Instanced trees + bushes placed by elevation over the real island: they
+    // fill the land between the beach and the bare volcano rock. The draped
+    // aerial already reads as jungle, so density is moderate — 3D relief on top.
+    this.scene.add(buildIslandFoliage({ treeMinHeight: 2.5, treeDensity: 0.5, trunkMap }));
   }
 
   /**
