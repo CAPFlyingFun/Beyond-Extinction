@@ -105,7 +105,7 @@ class ChapterOnePlaceholderScene implements IScene {
   private firstPerson = true;
   private player?: PlayerController;
   private inventory?: InventoryOverlay;
-  private static readonly EYE = 5.5; // eye height above the terrain (JACK_HEIGHT 6.4)
+  private static readonly EYE = 6.4; // eye height above terrain ≈ 1.8 m (a standing stance)
   // Default island start points (SSW arrival beach), in the scaled world. Jack.rot
   // = facing degrees; Sarah.rot = mesh rotation.y (radians). Overridable + savable
   // via the Dev menu. (Base coords were tuned on the small island, so ×MAP_SCALE.)
@@ -990,8 +990,18 @@ class ChapterOnePlaceholderScene implements IScene {
         const c = this.clampToPlay(to.x, to.z);
         return { x: c.x, y: to.y, z: c.z };
       });
+      // Ride the terrain: sit EYE above the ground under the camera, but also
+      // sample a step ahead in the facing direction and lift to the higher of the
+      // two. Climbing a slope raises the eye *before* the near plane can clip into
+      // the rising ground, so the camera never pokes through the hillside.
       const EYE = ChapterOnePlaceholderScene.EYE;
-      this.camera.position.y = beachHeight(this.camera.position.x, this.camera.position.z) + EYE;
+      const cx = this.camera.position.x;
+      const cz = this.camera.position.z;
+      const AHEAD = 6; // ~1.7 m look-ahead
+      const yaw = this.player.yaw;
+      const gHere = beachHeight(cx, cz);
+      const gAhead = beachHeight(cx - Math.sin(yaw) * AHEAD, cz - Math.cos(yaw) * AHEAD);
+      this.camera.position.y = Math.max(gHere, gAhead) + EYE;
       this.oceanUniforms.uCamPos.value.copy(this.camera.position);
       // Keep hidden Jack under the camera and walking, so a later third-person
       // reveal reads correctly; Sarah idles where she woke.
