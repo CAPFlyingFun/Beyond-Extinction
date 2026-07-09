@@ -822,6 +822,52 @@ body {
   width: 100%;
 }
 
+/* ---------- Load Game list ---------- */
+.be-load__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 18px 0 22px;
+}
+.be-load__row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(120, 200, 255, 0.28);
+  background: rgba(16, 26, 40, 0.9);
+  color: #e8f3ff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.be-load__row:hover {
+  background: rgba(28, 52, 82, 0.95);
+  border-color: rgba(120, 200, 255, 0.55);
+}
+.be-load__row--empty {
+  opacity: 0.45;
+  cursor: default;
+}
+.be-load__slot {
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  opacity: 0.85;
+}
+.be-load__label {
+  font-size: 13px;
+}
+.be-load__meta {
+  font-size: 11px;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
 /* ---------- Tap-to-confirm prompt ---------- */
 .be-confirm {
   position: fixed;
@@ -1573,6 +1619,20 @@ body {
   border-radius: 4px;
   border: 1px solid rgba(51, 122, 148, 0.5);
   background: rgba(10, 30, 42, 0.9);
+}
+.be-inv__save {
+  margin-left: auto;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(80, 220, 150, 0.7);
+  background: rgba(18, 52, 40, 0.95);
+  color: #d6ffe8;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.be-inv__save + .be-inv__close {
+  margin-left: 0;
 }
 .be-inv__close {
   margin-left: auto;

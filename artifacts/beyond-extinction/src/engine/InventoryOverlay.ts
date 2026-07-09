@@ -43,6 +43,8 @@ export interface InventoryHooks {
   /** Current character label for the "YOU" column (e.g. "SARAH · Lead Scientist"). */
   getRole?: () => string;
   playSfx?: (name: string) => void;
+  /** Manual save from the inventory screen. When omitted, no Save button shows. */
+  onSave?: () => void;
 }
 
 export class InventoryOverlay {
@@ -82,6 +84,10 @@ export class InventoryOverlay {
     this.root
       .querySelector(".be-inv__close")
       ?.addEventListener("click", () => this.close());
+    this.root.querySelector(".be-inv__save")?.addEventListener("click", () => {
+      this.hooks.onSave?.();
+      this.hooks.playSfx?.("ui-confirm");
+    });
     // Click the dim backdrop (outside the frame) to close.
     this.root.addEventListener("click", (e) => {
       if (e.target === this.root) this.close();
@@ -191,6 +197,7 @@ export class InventoryOverlay {
         </div>
         <div class="be-inv__foot">
           <div class="be-inv__hotbar">${hot}</div>
+          ${this.hooks.onSave ? `<button class="be-inv__save" type="button">Save Game</button>` : ""}
           <button class="be-inv__close" type="button">[I] / Esc · Close</button>
         </div>
       </div>`;

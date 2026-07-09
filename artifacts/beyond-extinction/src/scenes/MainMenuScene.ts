@@ -3,7 +3,28 @@ import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { CameraManager } from "../engine/CameraManager";
 import { assetUrl } from "../engine/assets";
 import { createJournalIntroScene } from "./JournalIntroScene";
+import { createPrologueScene } from "./PrologueCafeteriaScene";
+import { createChapterOneScene } from "./ChapterOnePlaceholderScene";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
+import { SaveManager, type SaveSnapshot } from "../engine/SaveManager";
+
+/** Maps a save's scene id onto the factory that rebuilds it (see SaveManager). */
+const SCENE_FACTORIES: Record<string, SceneFactory> = {
+  prologue: createPrologueScene,
+  island: createChapterOneScene,
+};
+
+/** A short "when" string (e.g. "2m ago", "yesterday") for the Load list. */
+function timeAgo(ms: number, now: number): string {
+  const s = Math.max(0, Math.round((now - ms) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return d === 1 ? "yesterday" : `${d}d ago`;
+}
 
 const SPLASH_LANDSCAPE = assetUrl("assets/branding/splash-landscape.jpg");
 const SPLASH_PORTRAIT = assetUrl("assets/branding/splash-portrait.jpg");
@@ -33,6 +54,7 @@ class MainMenuScene implements IScene {
   private menuEl?: HTMLDivElement;
   private backdropEl?: HTMLDivElement;
   private creditsEl?: HTMLDivElement;
+  private loadEl?: HTMLDivElement;
   private rotateEl?: HTMLDivElement;
   /** Tears down the rotate gate's listeners/timers and unblocks its promise. */
   private rotateCleanup?: () => void;
@@ -133,12 +155,29 @@ class MainMenuScene implements IScene {
       this.startNewGame();
     });
 
-    for (const action of ["continue", "load"]) {
-      el.querySelector(`[data-action="${action}"]`)?.addEventListener("click", () => {
+    // Continue → resume the most recent save. Load → pick from all slots. Both
+    // are disabled (dimmed) until at least one save exists.
+    const hasSave = SaveManager.hasAny();
+    const continueBtn = el.querySelector<HTMLButtonElement>('[data-action="continue"]');
+    const loadBtn = el.querySelector<HTMLButtonElement>('[data-action="load"]');
+    if (continueBtn) continueBtn.disabled = !hasSave;
+    if (loadBtn) loadBtn.disabled = !hasSave;
+
+    continueBtn?.addEventListener("click", () => {
+      const latest = SaveManager.latest();
+      if (!latest) {
         this.ctx.audio.playSfx("ui-select");
-        this.ctx.overlays.showToast(`${this.label(action)} — Coming Soon`);
-      });
-    }
+        this.ctx.overlays.showToast("No saved game yet");
+        return;
+      }
+      this.ctx.audio.playSfx("ui-confirm");
+      this.resume(latest.snap);
+    });
+
+    loadBtn?.addEventListener("click", () => {
+      this.ctx.audio.playSfx("ui-select");
+      this.showLoad();
+    });
 
     el.querySelector('[data-action="credits"]')?.addEventListener("click", () => {
       this.ctx.audio.playSfx("ui-select");
@@ -151,17 +190,83 @@ class MainMenuScene implements IScene {
     });
   }
 
-  private label(action: string): string {
-    switch (action) {
-      case "continue":
-        return "Continue";
-      case "load":
-        return "Load Game";
-      case "settings":
-        return "Settings";
-      default:
-        return action;
+  /**
+   * Resume a saved game: stash the snapshot for the target scene to consume on
+   * enter (restores inventory + jumps to the saved beat), then open that scene.
+   * Falls back to a fresh New Game if the save points at an unknown scene id.
+   */
+  private resume(snap: SaveSnapshot): void {
+    if (this.starting) return;
+    const factory = SCENE_FACTORIES[snap.scene];
+    if (!factory) {
+      this.ctx.overlays.showToast("This save can't be opened");
+      return;
     }
+    this.starting = true;
+    this.menuEl?.querySelectorAll("button").forEach((b) => ((b as HTMLButtonElement).disabled = true));
+    SaveManager.setPendingResume(snap);
+    this.menuEl?.classList.remove("show");
+    this.backdropEl?.classList.remove("show");
+    setTimeout(() => {
+      if (this.disposed) return;
+      this.ctx.scenes.goTo(factory);
+    }, 600);
+  }
+
+  /** Load menu: one row per slot (autosave + three manual), newest resumable. */
+  private showLoad(): void {
+    if (this.loadEl) return;
+    const now = Date.now();
+    const rows = SaveManager.list()
+      .map(({ slot, snap }) => {
+        const isAuto = slot === "autosave";
+        const slotName = isAuto ? "Autosave" : `Manual ${slot.split("-")[1]}`;
+        if (!snap) {
+          return `<div class="be-load__row be-load__row--empty"><span class="be-load__slot">${slotName}</span><span class="be-load__meta">Empty</span></div>`;
+        }
+        return `<button class="be-load__row" data-slot="${slot}">
+            <span class="be-load__slot">${slotName}</span>
+            <span class="be-load__label">${snap.label}</span>
+            <span class="be-load__meta">${timeAgo(snap.savedAt, now)}</span>
+          </button>`;
+      })
+      .join("");
+
+    const el = document.createElement("div");
+    el.className = "be-credits be-load";
+    el.innerHTML = `
+      <div class="be-credits__panel be-load__panel">
+        <h2>Load Game</h2>
+        <div class="be-load__rows">${rows}</div>
+        <button class="be-btn be-btn--primary" data-action="close">Close</button>
+      </div>`;
+    this.ctx.uiLayer.appendChild(el);
+    this.loadEl = el;
+    requestAnimationFrame(() => el.classList.add("show"));
+
+    const close = () => {
+      this.ctx.audio.playSfx("ui-select");
+      el.classList.remove("show");
+      setTimeout(() => {
+        el.remove();
+        this.loadEl = undefined;
+      }, 300);
+    };
+    el.querySelectorAll<HTMLButtonElement>(".be-load__row[data-slot]").forEach((row) => {
+      row.addEventListener("click", () => {
+        const slot = row.dataset.slot as Parameters<typeof SaveManager.load>[0];
+        const snap = SaveManager.load(slot);
+        if (!snap) return;
+        this.ctx.audio.playSfx("ui-confirm");
+        el.remove();
+        this.loadEl = undefined;
+        this.resume(snap);
+      });
+    });
+    el.querySelector('[data-action="close"]')?.addEventListener("click", close);
+    el.addEventListener("click", (e) => {
+      if (e.target === el) close();
+    });
   }
 
   private showCredits(): void {
@@ -343,6 +448,7 @@ class MainMenuScene implements IScene {
     this.menuEl?.remove();
     this.backdropEl?.remove();
     this.creditsEl?.remove();
+    this.loadEl?.remove();
     this.rotateEl?.remove();
     this.scene.traverse((o) => {
       const m = o as THREE.Mesh;

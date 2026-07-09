@@ -53,6 +53,7 @@ import { CameraOwnership } from "../engine/CameraOwnership";
 import { PlayerInventory } from "../engine/PlayerInventory";
 import { Interactable } from "../engine/Interactable";
 import { ProximityDoor, type DoorPanel } from "../engine/ProximityDoor";
+import { SaveManager } from "../engine/SaveManager";
 
 /**
  * Total run-time (ms) of the opening narration timeline — the baked VO lengths
@@ -213,6 +214,10 @@ class PrologueCafeteriaScene implements IScene {
   private mainLights: THREE.Light[] = [];
 
   private phase: Phase = "coffee";
+  // The walking beat to resume at when the player picked "Continue" — resolved
+  // from the pending save snapshot in enter(). null = a fresh run (play the cold
+  // open + journal narration normally).
+  private resumeAt: Phase | null = null;
   private coffeeCount = 0;
   private interactables: THREE.Object3D[] = [];
   private unsubClick?: () => void;
@@ -429,6 +434,14 @@ class PrologueCafeteriaScene implements IScene {
   }
 
   async enter(): Promise<void> {
+    // If the menu handed us a "Continue" snapshot for this scene, resolve the
+    // beat to resume at. The world is built the same either way; only the cold
+    // open (journal narration) is skipped and the player is dropped in mid-flow.
+    const resume = SaveManager.consumeResume();
+    if (resume && resume.scene === "prologue") {
+      this.resumeAt = this.resolveResumePhase(resume.phase);
+    }
+
     const scene = this.scene;
     scene.background = new THREE.Color(0x3a4f73);
     scene.fog = new THREE.Fog(0x3a4f73, 60, 190);
@@ -657,6 +670,7 @@ class PrologueCafeteriaScene implements IScene {
           ? "SARAH · Lead Scientist"
           : "JACK · Lab Technician",
       playSfx: (n) => this.ctx.audio.playSfx(n),
+      onSave: () => this.manualSave(),
     });
     // Snap straight to Camera 1 (the hallway-follow third-person zone, which is
     // active throughout the coffee phase) on the very first rendered frame, so
@@ -672,7 +686,13 @@ class PrologueCafeteriaScene implements IScene {
     // blend, not a hard cut. Anchored here, after the async model/shader setup
     // above, so it starts the moment the scene actually appears.
     this.ctx.audio.playMusic("lab-calm");
-    void this.playLabOpening();
+    if (this.resumeAt) {
+      // Resuming: skip the journal cold open and drop the player straight into
+      // first person at the saved beat, with the world state that beat implies.
+      this.resumeAtPhase(this.resumeAt);
+    } else {
+      void this.playLabOpening();
+    }
 
     // Camera settings: apply persisted prefs, react to live slider changes, and
     // mount the in-game gear that opens the panel.
@@ -2796,6 +2816,170 @@ class PrologueCafeteriaScene implements IScene {
     this.camera.fov = 75;
     this.camera.updateProjectionMatrix();
     this.ctx.quest.activate("coffee-1");
+    this.checkpoint();
+  }
+
+  // ---------- Save checkpoints & resume ----------
+
+  /**
+   * Human-readable label for the current beat, shown in the menu's Continue /
+   * Load list so the player recognises where they left off.
+   */
+  private phaseLabel(): string {
+    switch (this.phase) {
+      case "coffee":
+        return "Prologue — grab the coffees";
+      case "to-glass":
+        return "Prologue — badge in at Lab Seven";
+      case "knock":
+        return "Prologue — knock on the lab door";
+      case "to-badge":
+        return "Prologue — find your badge";
+      case "to-sarah":
+        return "Prologue — reach Sarah";
+      default:
+        return "Prologue — Lab Seven";
+    }
+  }
+
+  /** Manual save (from the inventory screen) into the first manual slot. */
+  private manualSave(): void {
+    SaveManager.save("manual-1", {
+      label: this.phaseLabel(),
+      scene: "prologue",
+      phase: this.phase,
+      inventory: {
+        hasBadge: PlayerInventory.hasBadge,
+        heldItems: [...PlayerInventory.heldItems],
+      },
+    });
+    this.ctx.overlays.showToast("Game saved");
+  }
+
+  /** Autosave the current beat + inventory. Called at each walking checkpoint. */
+  private checkpoint(): void {
+    SaveManager.autosave({
+      label: this.phaseLabel(),
+      scene: "prologue",
+      phase: this.phase,
+      inventory: {
+        hasBadge: PlayerInventory.hasBadge,
+        heldItems: [...PlayerInventory.heldItems],
+      },
+    });
+  }
+
+  /**
+   * Map any saved phase onto the nearest beat we can safely drop the player
+   * into. The interactive walking beats resume exactly; the transient knock and
+   * the scripted accident/cutscene fold back to the last walkable beat (the
+   * player re-plays that short stretch rather than resuming inside a cutscene).
+   */
+  private resolveResumePhase(saved: string | undefined): Phase {
+    switch (saved) {
+      case "to-glass":
+      case "knock":
+        return "to-glass";
+      case "to-badge":
+        return "to-badge";
+      case "to-sarah":
+      case "accident":
+      case "sarah-flashlight":
+      case "sarah-power":
+      case "cutscene":
+      case "done":
+        return "to-sarah";
+      default:
+        return "coffee";
+    }
+  }
+
+  /**
+   * Rebuild the minimum world state a beat implies (coffees in hand, the badge
+   * found and the glass door open, etc.) and hand the player first-person
+   * control there — the resume equivalent of enterFirstPerson, minus the cold
+   * open. Positions are nudged onto open floor so a resume can never wedge the
+   * player inside a collider.
+   */
+  private resumeAtPhase(phase: Phase): void {
+    // Beats from to-glass onward all follow collecting both coffees.
+    const collectedCoffee = phase === "to-glass" || phase === "to-badge" || phase === "to-sarah";
+    if (collectedCoffee) {
+      this.coffeeCount = 2;
+      for (const s of this.coffeeStations) s.parent?.remove(s);
+      this.coffeeStations = [];
+      this.spawnCoffee(0);
+      this.spawnCoffee(1);
+      PlayerInventory.hold("coffee");
+      PlayerInventory.hold("coffee");
+    }
+    if (phase === "to-badge") {
+      // The reader already denied access once, so re-scanning goes to the knock.
+      this.glassDenied = true;
+    }
+    if (phase === "to-sarah") {
+      // Badge found and scanned: remove the prop, hold it, and open the door.
+      PlayerInventory.hasBadge = true;
+      PlayerInventory.hold("badge");
+      if (this.badgeProp) {
+        this.badgeProp.parent?.remove(this.badgeProp);
+        this.badgeProp = undefined;
+      }
+      this.glassDenied = true;
+      this.badgeSpotted = true;
+      this.glassDoor?.openPermanently();
+    }
+
+    // Drop the player at a sensible spot facing their next objective.
+    let spot: THREE.Vector3;
+    let lookAt: THREE.Vector3;
+    switch (phase) {
+      case "to-glass":
+        spot = new THREE.Vector3(DOORS.labGlass.x - 4, 0, DOORS.labGlass.z);
+        lookAt = new THREE.Vector3(DOORS.labGlass.x, 0, DOORS.labGlass.z);
+        break;
+      case "to-badge":
+        spot = new THREE.Vector3(DOORS.serverHall.x, 0, DOORS.serverHall.z + 3);
+        lookAt = ANCHORS.badge;
+        break;
+      case "to-sarah":
+        spot = new THREE.Vector3(DOORS.labGlass.x + 4, 0, DOORS.labGlass.z);
+        lookAt = ANCHORS.sarah;
+        break;
+      default: // coffee
+        spot = ANCHORS.jackSpawn.clone();
+        lookAt = this.coffeeCounterWorld;
+        break;
+    }
+    this.jack.position.set(spot.x, 0, spot.z);
+    this.nudgeToOpenFloor(this.jack);
+
+    // Hand over first person (mirrors enterFirstPerson, but at the saved beat).
+    this.phase = phase;
+    this.controlledActor = this.jack;
+    this.ownership.set("player");
+    this.player.placeAt(
+      this.jack.position.x,
+      this.jack.position.z,
+      this.headingTo(this.jack.position, lookAt),
+    );
+    this.ctx.input.setEnabled(true);
+    this.player.setActive(true);
+    this.jack.visible = false;
+    this.camera.fov = 75;
+    this.camera.updateProjectionMatrix();
+    this.cameraDirector.cut();
+
+    const objective =
+      phase === "to-glass"
+        ? "reach-lab"
+        : phase === "to-badge"
+          ? "find-badge"
+          : phase === "to-sarah"
+            ? "reach-sarah"
+            : "coffee-1";
+    this.ctx.quest.activate(objective);
+    this.ctx.overlays.showHint(this.phaseLabel().replace("Prologue — ", ""));
   }
 
   /**
@@ -3242,6 +3426,7 @@ class PrologueCafeteriaScene implements IScene {
       this.currentFpTarget = null;
       this.ctx.quest.complete("coffee-2", { nextId: "reach-lab" });
       this.ctx.overlays.showHint("Take the coffees to Lab Seven — badge in at the door");
+      this.checkpoint();
     }
   }
 
@@ -3262,6 +3447,7 @@ class PrologueCafeteriaScene implements IScene {
       this.ctx.overlays.showToast("ACCESS GRANTED");
       this.phase = "to-sarah";
       this.currentFpTarget = null;
+      this.checkpoint();
       return;
     }
     if (this.glassDenied) return; // already denied — advance to the knock beat
@@ -3309,6 +3495,7 @@ class PrologueCafeteriaScene implements IScene {
         this.ctx.overlays.showHint("Find your badge — check the server room");
         this.phase = "to-badge";
         this.ctx.input.setEnabled(true);
+        this.checkpoint();
       }
     }
   }

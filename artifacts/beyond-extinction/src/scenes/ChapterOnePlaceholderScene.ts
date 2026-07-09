@@ -24,6 +24,8 @@ import {
   beachHeight,
   type OceanWater,
 } from "../engine/beachTerrain";
+import { SaveManager } from "../engine/SaveManager";
+import { PlayerInventory } from "../engine/PlayerInventory";
 
 /** The animation actions a rigged character drives (idle/walk crossfade). */
 interface CharacterActions {
@@ -125,6 +127,23 @@ class ChapterOnePlaceholderScene implements IScene {
   }
 
   async enter(): Promise<void> {
+    // Reaching the island is the game's main progression checkpoint: from here
+    // "Continue" brings the player straight back to the beach. Restore inventory
+    // if this was a resume, then (re)write the island autosave. (See SaveManager.)
+    const resume = SaveManager.consumeResume();
+    if (resume && resume.scene === "island") {
+      PlayerInventory.hasBadge = resume.inventory.hasBadge;
+      PlayerInventory.heldItems = [...resume.inventory.heldItems];
+    }
+    SaveManager.autosave({
+      label: "Chapter One — The Island",
+      scene: "island",
+      inventory: {
+        hasBadge: PlayerInventory.hasBadge,
+        heldItems: [...PlayerInventory.heldItems],
+      },
+    });
+
     const scene = this.scene;
     // Unnaturally vivid, high-oxygen sky.
     scene.background = new THREE.Color(0x2f8ff5);
