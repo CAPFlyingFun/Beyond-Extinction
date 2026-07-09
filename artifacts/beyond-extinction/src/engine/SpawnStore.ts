@@ -18,7 +18,9 @@ export interface IslandSpawns {
   sarah?: SpawnPoint;
 }
 
-const KEY = "be-island-spawns-v1";
+// v2: the world was rescaled (~40×), so any v1 points saved in the old
+// coordinate system are meaningless now — a new key retires them cleanly.
+const KEY = "be-island-spawns-v2";
 
 export const SpawnStore = {
   get(): IslandSpawns {

@@ -1,5 +1,11 @@
 import * as THREE from "three";
-import { beachHeight, ISLAND_CENTER, VOLCANO_ROCK_H } from "./beachTerrain";
+import { beachHeight, ISLAND_CENTER, VOLCANO_ROCK_H, MAP_SCALE, HEIGHT_SCALE } from "./beachTerrain";
+
+// Foliage scales with the world so the forest looks the same at any MAP_SCALE:
+// PLANT is the tree/bush size multiplier (a ~2 m sapling becomes a believable
+// jungle tree on the big island); spacing and the beach-clearance band scale to
+// match, keeping the tree COUNT and density roughly constant.
+const PLANT = MAP_SCALE / 5.2; // ≈ 8 at the shipping scale → ~15 m trees
 
 /**
  * Procedural island vegetation — coded trees + bushes scattered over the beach
@@ -40,10 +46,10 @@ function hash(i: number, j: number, salt: number): number {
  * land between the beach and the bare volcanic rock; bushes reach nearer the shore.
  */
 export function buildIslandFoliage(opts: FoliageOptions = {}): THREE.Group {
-  const treeMin = opts.treeMinHeight ?? 2.5;
+  const treeMin = opts.treeMinHeight ?? 2.5 * HEIGHT_SCALE;
   const density = opts.treeDensity ?? 0.5;
-  const AX = opts.areaX ?? 180;
-  const AZ = opts.areaZ ?? 180;
+  const AX = opts.areaX ?? 145 * MAP_SCALE; // cover the whole island by default
+  const AZ = opts.areaZ ?? 145 * MAP_SCALE;
   const CX = ISLAND_CENTER.x;
   const CZ = ISLAND_CENTER.z;
 
@@ -53,7 +59,7 @@ export function buildIslandFoliage(opts: FoliageOptions = {}): THREE.Group {
   const trees: { m: THREE.Matrix4; tint: THREE.Color; palm: boolean }[] = [];
   const bushes: { m: THREE.Matrix4; tint: THREE.Color }[] = [];
 
-  const TREE_STEP = 11;
+  const TREE_STEP = 11 * PLANT; // spacing scales with tree size → constant density
   const dummy = new THREE.Object3D();
   for (let x = CX - AX; x <= CX + AX; x += TREE_STEP) {
     for (let z = CZ - AZ; z <= CZ + AZ; z += TREE_STEP) {
@@ -64,7 +70,7 @@ export function buildIslandFoliage(opts: FoliageOptions = {}): THREE.Group {
       const pz = z + (hash(i, j, 3) - 0.5) * TREE_STEP * 0.9;
       const h = beachHeight(px, pz);
       if (h < treeMin || h > VOLCANO_ROCK_H) continue; // off beach, off bare rock
-      const scale = 0.8 + hash(i, j, 4) * 0.9;
+      const scale = (0.8 + hash(i, j, 4) * 0.9) * PLANT;
       const palm = hash(i, j, 5) > 0.5;
       dummy.position.set(px, h, pz);
       dummy.rotation.set(0, hash(i, j, 6) * Math.PI * 2, (hash(i, j, 7) - 0.5) * 0.14);
@@ -75,7 +81,7 @@ export function buildIslandFoliage(opts: FoliageOptions = {}): THREE.Group {
     }
   }
 
-  const BUSH_STEP = 7;
+  const BUSH_STEP = 7 * PLANT;
   for (let x = CX - AX; x <= CX + AX; x += BUSH_STEP) {
     for (let z = CZ - AZ; z <= CZ + AZ; z += BUSH_STEP) {
       const i = Math.round(x / BUSH_STEP);
@@ -84,8 +90,8 @@ export function buildIslandFoliage(opts: FoliageOptions = {}): THREE.Group {
       const px = x + (hash(i, j, 12) - 0.5) * BUSH_STEP;
       const pz = z + (hash(i, j, 13) - 0.5) * BUSH_STEP;
       const h = beachHeight(px, pz);
-      if (h < 0.5 || h > VOLCANO_ROCK_H + 8) continue;
-      const scale = 0.7 + hash(i, j, 14) * 1.1;
+      if (h < 0.5 * HEIGHT_SCALE || h > VOLCANO_ROCK_H + 8 * HEIGHT_SCALE) continue;
+      const scale = (0.7 + hash(i, j, 14) * 1.1) * PLANT;
       dummy.position.set(px, h, pz);
       dummy.rotation.set(0, hash(i, j, 15) * Math.PI * 2, 0);
       dummy.scale.setScalar(scale);

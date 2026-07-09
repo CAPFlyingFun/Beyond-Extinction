@@ -16,18 +16,29 @@ import { assetUrl } from "./assets";
  * −Z is open sea, +Z is inland toward the volcano.
  */
 
-const HM_SPAN = 300; // world units the heightmap spans
-const HM_CZ = 122; // world z at the heightmap's vertical centre
-const HM_SEA = 0.10; // grey fraction that maps to sea level (y=0)
-const HM_SCALE = 58; // world height per grey fraction above sea level
-const HM_DEEP = -6; // height returned off the map (open ocean)
+/**
+ * World scale. The MeshyAI island is authored tiny (~76 m across, ~15 m tall).
+ * The design — and the Godot build — call for a ~3.2 km island with a 350 m
+ * volcano. Jack is a fixed size (~1.8 m ≈ 0.28 world units·m⁻¹), so we blow the
+ * terrain up in world units. Horizontal and vertical scales differ so we hit
+ * BOTH the width (~3.2 km) and the height (350 m) targets; the island ends up
+ * proportionally gentler than the raw cone, which also helps walkability.
+ */
+export const MAP_SCALE = 40.8; // horizontal — island ≈ 3.12 km across (matches blueprint scale bar)
+export const HEIGHT_SCALE = 24; // vertical — volcano ≈ 350 m tall (Godot parity)
+
+const HM_SPAN = 300 * MAP_SCALE; // world units the heightmap spans
+const HM_CZ = 122 * MAP_SCALE; // world z at the heightmap's vertical centre
+const HM_SEA = 0.1; // grey fraction that maps to sea level (y=0)
+const HM_SCALE = 58 * HEIGHT_SCALE; // world height per grey fraction above sea level
+const HM_DEEP = -6 * HEIGHT_SCALE; // height returned off the map (open ocean)
 
 /** World Z near the southern waterline (spawn beach); kept for compatibility. */
-export const SHORE_Z = -2;
+export const SHORE_Z = -2 * MAP_SCALE;
 /** Approx world centre of the island (terrain + water are built around this). */
 export const ISLAND_CENTER = { x: 0, z: HM_CZ };
 /** Height (world units) above which the terrain is bare volcanic rock. */
-export const VOLCANO_ROCK_H = 40;
+export const VOLCANO_ROCK_H = 40 * HEIGHT_SCALE;
 
 let hmData: Float32Array | null = null;
 let hmSize = 0;
@@ -216,6 +227,7 @@ function makeTerrainMaterial(aerial: THREE.Texture, g: IslandGround): THREE.Mesh
     shader.uniforms.uSpan = { value: HM_SPAN };
     shader.uniforms.uCz = { value: HM_CZ };
     shader.uniforms.uRockH = { value: VOLCANO_ROCK_H };
+    shader.uniforms.uVScale = { value: HEIGHT_SCALE }; // scales the biome-band heights
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nvarying vec3 vWXZ;\nvarying vec3 vWN;")
       .replace(
@@ -228,7 +240,7 @@ function makeTerrainMaterial(aerial: THREE.Texture, g: IslandGround): THREE.Mesh
         `#include <common>
          varying vec3 vWXZ; varying vec3 vWN;
          uniform sampler2D uReef, uSand, uGrass, uJungle, uDirt, uSwamp, uMountain, uCliff, uVolcano, uAerial;
-         uniform float uDetail, uSpan, uCz, uRockH;
+         uniform float uDetail, uSpan, uCz, uRockH, uVScale;
          float hash21(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
          float vnoise(vec2 p){
            vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
@@ -256,19 +268,22 @@ function makeTerrainMaterial(aerial: THREE.Texture, g: IslandGround): THREE.Mesh
          // beach almost to the summit (the island reads lush green like the
          // reference); bare rock only high on the volcano's flanks, bare basalt
          // in the caldera above uRockH.
+         // Band edges are authored in "small island" height units, so scale them
+         // to the current world with uVScale (= HEIGHT_SCALE).
+         float S = uVScale;
          vec3 col = reef;
-         col = mix(col, sand,   smoothstep(-1.6, 0.4, h));
-         col = mix(col, grass,  smoothstep(1.5, 4.0, h));
-         col = mix(col, jungle, smoothstep(5.0, 9.0, h));
-         col = mix(col, mtn,    smoothstep(30.0, 38.0, h));
-         col = mix(col, volc,   smoothstep(uRockH, uRockH + 10.0, h));
+         col = mix(col, sand,   smoothstep(-1.6 * S, 0.4 * S, h));
+         col = mix(col, grass,  smoothstep(1.5 * S, 4.0 * S, h));
+         col = mix(col, jungle, smoothstep(5.0 * S, 9.0 * S, h));
+         col = mix(col, mtn,    smoothstep(30.0 * S, 38.0 * S, h));
+         col = mix(col, volc,   smoothstep(uRockH, uRockH + 10.0 * S, h));
          // Patchy swamp mud in the low, flat wetlands near the water.
          float nS = vnoise(vWXZ.xz * 0.035);
-         float swampM = smoothstep(-0.5, 1.5, h) * (1.0 - smoothstep(3.5, 6.5, h)) * smoothstep(0.45, 0.75, nS);
+         float swampM = smoothstep(-0.5 * S, 1.5 * S, h) * (1.0 - smoothstep(3.5 * S, 6.5 * S, h)) * smoothstep(0.45, 0.75, nS);
          col = mix(col, swamp, swampM * 0.75);
          // Patchy dirt trails through the jungle band.
          float nD = vnoise(vWXZ.xz * 0.05 + 13.0);
-         float dirtM = smoothstep(6.5, 10.0, h) * (1.0 - smoothstep(17.0, 21.0, h)) * smoothstep(0.55, 0.8, nD);
+         float dirtM = smoothstep(6.5 * S, 10.0 * S, h) * (1.0 - smoothstep(17.0 * S, 21.0 * S, h)) * smoothstep(0.55, 0.8, nD);
          col = mix(col, dirt, dirtM * 0.65);
          // Only genuinely steep faces -> coastal cliff rock; gentle hillsides
          // stay jungle so the island reads green like the reference.
@@ -295,8 +310,8 @@ export function buildBeachTerrain(
   colorMap?: THREE.Texture | null,
   ground?: IslandGround | null,
 ): THREE.Mesh {
-  const SIZE = 440;
-  const SEG = 288;
+  const SIZE = 440 * MAP_SCALE;
+  const SEG = 512; // match the heightmap resolution (further SEG buys nothing)
   const geo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
   geo.rotateX(-Math.PI / 2); // into XZ (y up)
   geo.translate(0, 0, HM_CZ); // vertices now hold real world coords
@@ -328,21 +343,24 @@ export function buildBeachTerrain(
 
 const WATER_VERT = /* glsl */ `
   uniform float uTime;
+  uniform float uWaveAmp;
+  uniform float uWaveFreq;
   varying vec3 vWorld;
   varying float vCrest;
-  float waves(vec2 p) {
+  float waves(vec2 pin) {
+    vec2 p = pin * uWaveFreq;
     float h = 0.0;
     h += sin(dot(p, vec2( 0.8, 0.6)) * 0.10 + uTime * 1.1) * 0.24;
     h += sin(dot(p, vec2(-0.4, 0.9)) * 0.16 + uTime * 0.9) * 0.16;
     h += sin(dot(p, vec2( 0.3,-0.7)) * 0.24 + uTime * 1.5) * 0.10;
     h += sin(dot(p, vec2(-0.7, 0.3)) * 0.33 + uTime * 1.8) * 0.06;
-    return h;
+    return h * uWaveAmp;
   }
   void main() {
     vec3 p = position;
     float h = waves(p.xz);
     p.y += h;
-    vCrest = clamp(h * 1.4 + 0.5, 0.0, 1.0);
+    vCrest = clamp((h / max(uWaveAmp, 0.001)) * 1.4 + 0.5, 0.0, 1.0);
     vec4 wp = modelMatrix * vec4(p, 1.0);
     vWorld = wp.xyz;
     gl_Position = projectionMatrix * viewMatrix * wp;
@@ -351,6 +369,8 @@ const WATER_VERT = /* glsl */ `
 
 const WATER_FRAG = /* glsl */ `
   uniform vec3 uCamPos;
+  uniform float uShallow;
+  uniform float uDeepDist;
   varying vec3 vWorld;
   varying float vCrest;
   void main() {
@@ -358,7 +378,7 @@ const WATER_FRAG = /* glsl */ `
     vec3 shallow = vec3(0.10, 0.50, 0.52);
     vec3 surf    = vec3(0.62, 0.88, 0.90);
     float dist = length(vWorld.xz - uCamPos.xz);
-    float depthT = smoothstep(50.0, 800.0, dist);
+    float depthT = smoothstep(uShallow, uDeepDist, dist);
     vec3 col = mix(shallow, deep, depthT);
     float foam = smoothstep(0.74, 0.92, vCrest);
     col = mix(col, surf, foam);
@@ -381,8 +401,16 @@ export function buildOceanWater(): OceanWater {
   const uniforms = {
     uTime: { value: 0 },
     uCamPos: { value: new THREE.Vector3() },
+    // Longer, taller swell + shore/deep fade distances scaled to the big world.
+    uWaveAmp: { value: 9 * (HEIGHT_SCALE / 24) },
+    uWaveFreq: { value: 0.18 },
+    uShallow: { value: 50 * MAP_SCALE },
+    uDeepDist: { value: 800 * MAP_SCALE },
   };
-  const geo = new THREE.PlaneGeometry(2600, 2600, 180, 180);
+  // Big enough to reach the horizon well past the ~3 km island; the vertex-
+  // displaced swell only needs to read near shore, so tessellation stays moderate.
+  const SPAN = 60000;
+  const geo = new THREE.PlaneGeometry(SPAN, SPAN, 384, 384);
   geo.rotateX(-Math.PI / 2);
   const mat = new THREE.ShaderMaterial({
     uniforms,

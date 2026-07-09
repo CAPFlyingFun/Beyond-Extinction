@@ -27,6 +27,8 @@ import {
   loadIslandHeightmap,
   loadIslandGround,
   beachHeight,
+  MAP_SCALE,
+  HEIGHT_SCALE,
   type OceanWater,
 } from "../engine/beachTerrain";
 import { SaveManager } from "../engine/SaveManager";
@@ -104,10 +106,11 @@ class ChapterOnePlaceholderScene implements IScene {
   private player?: PlayerController;
   private inventory?: InventoryOverlay;
   private static readonly EYE = 5.5; // eye height above the terrain (JACK_HEIGHT 6.4)
-  // Default island start points (SSW arrival beach). Jack.rot = facing degrees;
-  // Sarah.rot = mesh rotation.y (radians). Overridable + savable via the Dev menu.
-  private static readonly JACK_SPAWN = { x: -106, z: 62, rot: 300 };
-  private static readonly SARAH_SPAWN = { x: -108, z: 68, rot: Math.PI / 2 };
+  // Default island start points (SSW arrival beach), in the scaled world. Jack.rot
+  // = facing degrees; Sarah.rot = mesh rotation.y (radians). Overridable + savable
+  // via the Dev menu. (Base coords were tuned on the small island, so ×MAP_SCALE.)
+  private static readonly JACK_SPAWN = { x: -106 * MAP_SCALE, z: 62 * MAP_SCALE, rot: 300 };
+  private static readonly SARAH_SPAWN = { x: -108 * MAP_SCALE, z: 68 * MAP_SCALE, rot: Math.PI / 2 };
   private jackFacingDeg = ChapterOnePlaceholderScene.JACK_SPAWN.rot;
 
   private cameraDirector!: CameraDirector<CameraZoneState>;
@@ -142,14 +145,19 @@ class ChapterOnePlaceholderScene implements IScene {
   // water (negative Z — you can wade in) up to the dunes/treeline inland.
   // Roam the real island: from out in the shallows (−Z) up the south beach and
   // inland toward the volcano to the north. (Heightmap island spans z≈−2..250.)
-  private static readonly PLAY = { minX: -165, maxX: 165, minZ: -30, maxZ: 200 };
+  private static readonly PLAY = {
+    minX: -165 * MAP_SCALE,
+    maxX: 165 * MAP_SCALE,
+    minZ: -30 * MAP_SCALE,
+    maxZ: 200 * MAP_SCALE,
+  };
 
   constructor(private ctx: SceneContext) {
     this.camera = new THREE.PerspectiveCamera(
       52,
       window.innerWidth / window.innerHeight,
-      0.1,
-      3000,
+      2, // near ~0.56 m — the island is ~3 km, so push far out for the horizon
+      60000,
     );
   }
 
@@ -185,14 +193,14 @@ class ChapterOnePlaceholderScene implements IScene {
     const scene = this.scene;
     // Unnaturally vivid, high-oxygen sky.
     scene.background = new THREE.Color(0x2f8ff5);
-    scene.fog = new THREE.Fog(0x9fd2ff, 140, 700);
+    scene.fog = new THREE.Fog(0x9fd2ff, 140 * MAP_SCALE, 900 * MAP_SCALE);
 
     this.ctx.audio.playMusic("beach-dawn");
 
     const hemi = new THREE.HemisphereLight(0xbfe4ff, 0xc8b78a, 1.0);
     scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xfff2d6, 2.3);
-    sun.position.set(120, 120, -60);
+    sun.position.set(120 * MAP_SCALE, 120 * MAP_SCALE, -60 * MAP_SCALE);
     sun.castShadow = true;
     scene.add(sun);
 
@@ -251,14 +259,14 @@ class ChapterOnePlaceholderScene implements IScene {
     scene.add(this.sarah);
     this.setProne(this.sarah, true);
 
-    // A curious dodo nearby.
+    // A curious dodo nearby (set-dressing positions scale with the world).
     this.dodo = this.buildDodo();
-    this.dodo.position.set(14, beachHeight(14, 0), 0);
+    this.dodo.position.set(14 * MAP_SCALE, beachHeight(14 * MAP_SCALE, 0), 0);
     scene.add(this.dodo);
 
     // Driftwood scattered up the sand (the "gather" objective anchor).
     const driftwood = this.buildDriftwood();
-    driftwood.position.set(22, beachHeight(22, 14), 14);
+    driftwood.position.set(22 * MAP_SCALE, beachHeight(22 * MAP_SCALE, 14 * MAP_SCALE), 14 * MAP_SCALE);
     scene.add(driftwood);
 
     this.registerInteractions(driftwood);
@@ -299,7 +307,9 @@ class ChapterOnePlaceholderScene implements IScene {
       // the camera rides the terrain surface each frame (see update()).
       this.player = new PlayerController(this.camera, this.ctx.input, {
         eyeHeight: ChapterOnePlaceholderScene.EYE,
-        moveSpeed: 15,
+        // The island is now ~3 km across; a walking pace would take ~12 min to
+        // cross, so run at a brisk sprint. (Tunable; mounts/vehicles come later.)
+        moveSpeed: 55,
         lookSensitivity: this.settings.lookSensitivity,
       });
       this.player.placeAt(this.jack.position.x, this.jack.position.z, this.jackFacingDeg);
