@@ -1466,6 +1466,17 @@ body {
   color: #dbf1ff;
   border-bottom: 2px solid #59d0ff;
 }
+.be-inv__tab--dev {
+  margin-left: auto;
+  color: #b58cff;
+  cursor: pointer;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.be-inv__tab--dev:hover {
+  color: #d6c2ff;
+  border-bottom: 2px solid #b58cff;
+}
 .be-inv__search {
   display: flex;
   gap: 8px;

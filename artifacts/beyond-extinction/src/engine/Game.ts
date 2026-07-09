@@ -10,6 +10,7 @@ import { MarkerEditor } from "./MarkerEditor";
 import { MarkerStore } from "./MarkerStore";
 import { AnimationEditor } from "./AnimationEditor";
 import { AnimStore } from "./AnimStore";
+import { DevAccess } from "./DevAccess";
 import type { SceneContext, SceneFactory } from "./IScene";
 
 /**
@@ -81,6 +82,8 @@ export class Game {
       onMarkerEditor: () => this.markerEditor.toggle(),
       onAnimationEditor: () => this.animEditor.toggle(),
     });
+    // The inventory's DEV tab opens the same PIN gate directly (no 10s hold).
+    DevAccess.open = () => this.devPortal.requestUnlock();
 
     const ctx: SceneContext = {
       renderer: this.renderer,

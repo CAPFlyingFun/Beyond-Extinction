@@ -129,6 +129,16 @@ export class DevPortal {
     if (s) this.cancelHold();
   }
 
+  /**
+   * Open the PIN gate directly — the quick path used by the inventory's DEV tab
+   * (no 10s hold). Ignored while an editor is already open.
+   */
+  requestUnlock(): void {
+    if (this.suspended || this.overlayOpen) return;
+    this.cancelHold();
+    this.openOverlay();
+  }
+
   private onDown = (e: PointerEvent): void => {
     if (this.overlayOpen || this.suspended || !e.isPrimary) return;
     this.holding = true;

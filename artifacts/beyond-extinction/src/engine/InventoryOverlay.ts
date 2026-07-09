@@ -1,4 +1,5 @@
 import { PlayerInventory } from "./PlayerInventory";
+import { DevAccess } from "./DevAccess";
 
 /**
  * ARK-style inventory screen — a web port of the Godot project's inventory_ui.gd.
@@ -88,6 +89,13 @@ export class InventoryOverlay {
       this.hooks.onSave?.();
       this.hooks.playSfx?.("ui-confirm");
     });
+    // DEV tab → close the inventory and open the PIN gate (Marker + Animation
+    // editors live behind it). Same PIN as the 10s-hold portal, no wait.
+    this.root.querySelector(".be-inv__tab--dev")?.addEventListener("click", () => {
+      this.hooks.playSfx?.("ui-select");
+      this.close();
+      DevAccess.request();
+    });
     // Click the dim backdrop (outside the frame) to close.
     this.root.addEventListener("click", (e) => {
       if (e.target === this.root) this.close();
@@ -176,6 +184,7 @@ export class InventoryOverlay {
               <span class="be-inv__tab on">INVENTORY</span>
               <span class="be-inv__tab">COSMETICS</span>
               <span class="be-inv__tab">CRAFTING</span>
+              <span class="be-inv__tab be-inv__tab--dev">DEV</span>
             </div>
             <div class="be-inv__search"><input placeholder="Search" disabled /><span class="be-inv__mini">A-Z</span></div>
             <div class="be-inv__grid"></div>
