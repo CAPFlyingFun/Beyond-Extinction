@@ -167,35 +167,65 @@ export class IslandMap {
     }
     c.setTransform(dpr, 0, 0, dpr, 0, 0);
     c.clearRect(0, 0, size, size);
+    const cc = size / 2;
     c.save();
     c.beginPath();
-    c.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+    c.arc(cc, cc, cc, 0, Math.PI * 2);
     c.clip();
     c.fillStyle = "#12303a";
     c.fillRect(0, 0, size, size);
 
     if (this.ready) {
       const { u, v } = worldToIslandUV(this.px, this.pz);
-      const frac = MINIMAP_RANGE_M / METERS_PER_UNIT / ISLAND_SPAN; // half-window
-      const iw = this.img.width;
-      const ih = this.img.height;
-      c.drawImage(this.img, (u - frac) * iw, (v - frac) * ih, 2 * frac * iw, 2 * frac * ih, 0, 0, size, size);
-      c.drawImage(this.fog, (u - frac) * FOG_W, (v - frac) * FOG_W, 2 * frac * FOG_W, 2 * frac * FOG_W, 0, 0, size, size);
+      const frac = MINIMAP_RANGE_M / METERS_PER_UNIT / ISLAND_SPAN; // radius as image fraction
+      // Heading-up + view-matched. The 3D world is right-handed with +X=east and
+      // +Z=north, so facing north the camera puts east on the LEFT — the mirror of
+      // a plain north-up crop. This transform [[cos,sin],[sin,-cos]] rotates the
+      // crop so the player's forward is UP and reflects it so left/right match the
+      // first-person view exactly, in every facing direction.
+      const cy = Math.cos(this.yaw);
+      const sy = Math.sin(this.yaw);
+      const layer = (src: HTMLImageElement | HTMLCanvasElement, dim: number) => {
+        const sc = cc / (frac * dim); // image px → canvas px so the edge = range
+        c.save();
+        c.translate(cc, cc);
+        c.transform(cy, sy, sy, -cy, 0, 0);
+        c.scale(sc, sc);
+        c.drawImage(src, -u * dim, -v * dim); // whole layer, player pixel at origin
+        c.restore();
+      };
+      layer(this.img, this.img.width);
+      layer(this.fog, FOG_W);
     }
     c.restore();
 
-    // Frame + N marker (north is up).
+    // Frame.
     c.strokeStyle = "rgba(120,200,255,0.85)";
     c.lineWidth = 2;
     c.beginPath();
-    c.arc(size / 2, size / 2, size / 2 - 1, 0, Math.PI * 2);
+    c.arc(cc, cc, cc - 1, 0, Math.PI * 2);
     c.stroke();
+    // North marker — rotates to show where compass-north lies on the heading-up map.
+    const nx = -Math.sin(this.yaw);
+    const ny = Math.cos(this.yaw);
     c.fillStyle = "rgba(200,230,255,0.9)";
     c.font = "bold 11px ui-monospace, monospace";
     c.textAlign = "center";
-    c.fillText("N", size / 2, 12);
+    c.textBaseline = "middle";
+    c.fillText("N", cc + nx * (cc - 11), cc + ny * (cc - 11));
+    c.textBaseline = "alphabetic";
 
-    drawArrow(c, size / 2, size / 2, this.yaw, 7);
+    // Player marker: fixed upward triangle (heading-up → you always face the top).
+    c.fillStyle = "rgba(80,255,120,1)";
+    c.strokeStyle = "rgba(0,0,0,0.5)";
+    c.lineWidth = 1.5;
+    c.beginPath();
+    c.moveTo(cc, cc - 8);
+    c.lineTo(cc - 6, cc + 6);
+    c.lineTo(cc + 6, cc + 6);
+    c.closePath();
+    c.fill();
+    c.stroke();
   }
 
   // ── full-screen map ────────────────────────────────────────────────────────
