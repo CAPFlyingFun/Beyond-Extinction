@@ -21,6 +21,16 @@ class PlayerInventoryStore {
   /** Loose items currently held in-hand (e.g. "coffee", "coffee"). */
   heldItems: string[] = [];
 
+  // ── Companion (Sarah) ──────────────────────────────────────────────────────
+  // The primary fields above are the CONTROLLED character (Jack in the prologue
+  // and on the island). Sarah travels with the party and carries her own kit
+  // (badge + flashlight) on the island, tracked here so future crafting can read
+  // each character's pack. Set explicitly by the island scene on arrival.
+  /** True if Sarah is carrying a badge. */
+  companionHasBadge = false;
+  /** Loose items Sarah is carrying (e.g. "flashlight"). */
+  companionItems: string[] = [];
+
   /** Pick up / start holding an item (allows duplicates — two coffee cups). */
   hold(item: string): void {
     this.heldItems.push(item);
@@ -46,6 +56,8 @@ class PlayerInventoryStore {
   reset(): void {
     this.hasBadge = false;
     this.heldItems = [];
+    this.companionHasBadge = false;
+    this.companionItems = [];
   }
 }
 

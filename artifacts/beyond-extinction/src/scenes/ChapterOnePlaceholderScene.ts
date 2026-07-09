@@ -3,6 +3,7 @@ import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { loadModel, loadTexture } from "../engine/assets";
 import { createBillboard, updateBillboardsYAxis } from "../engine/Billboard";
 import { Navigator } from "../engine/Navigator";
+import { PlayerController } from "../engine/PlayerController";
 import { CameraDirector, type CameraZone } from "../engine/CameraDirector";
 import { ClipLibrary } from "../engine/ClipLibrary";
 import {
@@ -91,6 +92,12 @@ class ChapterOnePlaceholderScene implements IScene {
   private mixers: THREE.AnimationMixer[] = [];
   private readonly clipLibrary = new ClipLibrary();
 
+  // First-person Jack (hybrid FPS controls). The cinematic camera director is
+  // built but left dormant while firstPerson is true — easy to switch back.
+  private firstPerson = true;
+  private player?: PlayerController;
+  private static readonly EYE = 5.5; // eye height above the terrain (JACK_HEIGHT 6.4)
+
   private cameraDirector!: CameraDirector<CameraZoneState>;
   private highlights: ObjectiveHighlight[] = [];
   private interactions = new Map<string, BeachInteraction>();
@@ -136,9 +143,20 @@ class ChapterOnePlaceholderScene implements IScene {
     // if this was a resume, then (re)write the island autosave. (See SaveManager.)
     const resume = SaveManager.consumeResume();
     if (resume && resume.scene === "island") {
+      // Loading an island save — keep exactly what was saved.
       PlayerInventory.hasBadge = resume.inventory.hasBadge;
       PlayerInventory.heldItems = [...resume.inventory.heldItems];
+    } else {
+      // Fresh arrival through the portal: set Jack's carry-over loadout
+      // explicitly (the prologue's end-state inventory is unreliable). Jack keeps
+      // a badge and one coffee.
+      PlayerInventory.hasBadge = true;
+      PlayerInventory.heldItems = ["coffee"];
     }
+    // Sarah travels with the party on the island carrying her own badge +
+    // flashlight (tracked separately from Jack's pack for future crafting).
+    PlayerInventory.companionHasBadge = true;
+    PlayerInventory.companionItems = ["flashlight"];
     SaveManager.autosave({
       label: "Chapter One — The Island",
       scene: "island",
@@ -241,14 +259,32 @@ class ChapterOnePlaceholderScene implements IScene {
     });
     this.buildSettingsButton();
 
-    this.unsubClick = this.ctx.input.onClick(() => this.handleClick());
     this.ctx.input.setEnabled(true);
 
+    if (this.firstPerson) {
+      // Hand the beach to the player in first person (same hybrid controls as the
+      // prologue: drag-look + WASD / on-screen joystick). The cinematic director
+      // stays dormant. Jack's mesh is hidden — the camera sits in his head — and
+      // the camera rides the terrain surface each frame (see update()).
+      this.player = new PlayerController(this.camera, this.ctx.input, {
+        eyeHeight: ChapterOnePlaceholderScene.EYE,
+        moveSpeed: 15,
+        lookSensitivity: this.settings.lookSensitivity,
+      });
+      this.player.placeAt(this.jack.position.x, this.jack.position.z, 180); // face inland
+      this.player.setActive(true);
+      this.jack.visible = false;
+      this.applyFov();
+    } else {
+      // Legacy directed-gameplay path (click-to-move + cinematic story).
+      this.unsubClick = this.ctx.input.onClick(() => this.handleClick());
+    }
+
     // The prologue hands off with the screen blacked out (its closing cut); lift
-    // it so the beach is actually visible before the story plays.
+    // it so the beach is actually visible.
     await this.ctx.overlays.fadeFromBlack(900);
     if (this.disposed) return;
-    void this.runStory();
+    if (!this.firstPerson) void this.runStory();
   }
 
   // ---------- Story ----------
@@ -907,6 +943,42 @@ class ChapterOnePlaceholderScene implements IScene {
   update(dt: number, elapsed: number): void {
     this.elapsed = elapsed;
     this.oceanUniforms.uTime.value = elapsed;
+
+    if (this.firstPerson && this.player) {
+      // Drive first-person movement, clamped to the play area, then ride the
+      // beach surface so the camera walks the terrain instead of a flat plane.
+      const res = this.player.update(dt, (_from, to) => {
+        const c = this.clampToPlay(to.x, to.z);
+        return { x: c.x, y: to.y, z: c.z };
+      });
+      const EYE = ChapterOnePlaceholderScene.EYE;
+      this.camera.position.y = beachHeight(this.camera.position.x, this.camera.position.z) + EYE;
+      this.oceanUniforms.uCamPos.value.copy(this.camera.position);
+      // Keep hidden Jack under the camera and walking, so a later third-person
+      // reveal reads correctly; Sarah idles where she woke.
+      if (this.jack) {
+        this.jack.position.set(
+          this.camera.position.x,
+          beachHeight(this.camera.position.x, this.camera.position.z),
+          this.camera.position.z,
+        );
+        this.jack.rotation.y = this.player.yaw;
+        this.applyLocomotion(this.jack, res.moving, dt);
+      }
+      this.applyLocomotion(this.sarah, false, dt);
+      for (const m of this.mixers) m.update(dt);
+      for (const h of this.highlights) h.update(dt);
+      updateBillboardsYAxis(this.billboards, this.camera.position);
+      if (this.dodo) {
+        this.dodo.position.x = this.dodo.userData.baseX + Math.sin(elapsed * 0.6) * 2;
+        this.dodo.position.y =
+          beachHeight(this.dodo.position.x, this.dodo.position.z) +
+          Math.abs(Math.sin(elapsed * 4)) * 0.3;
+        this.dodo.rotation.y = this.hissDone ? Math.PI : Math.sin(elapsed * 0.6) * 0.4;
+      }
+      return;
+    }
+
     this.oceanUniforms.uCamPos.value.copy(this.camera.position);
 
     const jackMoving = this.jackNav?.update(dt) ?? false;
@@ -948,6 +1020,7 @@ class ChapterOnePlaceholderScene implements IScene {
     // into the next scene.
     this.ctx.overlays.cancelChoice();
     closeSettingsPanel();
+    this.player?.dispose();
     this.unsubClick?.();
     this.unsubSettings?.();
     this.gearEl?.remove();
