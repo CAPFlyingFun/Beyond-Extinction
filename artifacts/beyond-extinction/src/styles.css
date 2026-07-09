@@ -1350,6 +1350,32 @@ body {
   transform: translateY(1px);
 }
 
+.be-fp-jump {
+  position: absolute;
+  right: 30px;
+  bottom: 110px;
+  width: 62px;
+  height: 62px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.6rem;
+  line-height: 1;
+  color: #0c1422;
+  background: linear-gradient(180deg, #dff1ff, #93c8ee);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+}
+.be-fp-jump:active {
+  transform: translateY(1px);
+  filter: brightness(1.1);
+}
+
 /* ── Blueprint minimap (top-right; tap or M to expand) ───────────────────── */
 .be-minimap {
   position: fixed;

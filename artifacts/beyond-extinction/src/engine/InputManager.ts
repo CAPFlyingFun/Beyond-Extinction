@@ -57,6 +57,7 @@ export class InputManager {
   private readonly fpLook = { x: 0, y: 0 }; // accumulated raw drag delta (px)
   private readonly fpJoyRadius = 56;
   private readonly interactHandlers = new Set<() => void>();
+  private jumpRequested = false;
   // Long-press-to-interact: a stationary hold fires these with the touch point
   // (NDC) so the scene can raycast the item under the finger. Movement past
   // LONG_PRESS_MOVE_PX cancels it (that gesture is a look-drag / joystick).
@@ -73,9 +74,14 @@ export class InputManager {
     ) {
       return;
     }
-    if (this.fpMode && (e.code === "KeyE" || e.code === "Space")) {
+    if (this.fpMode && e.code === "KeyE") {
       e.preventDefault();
       this.fireInteract();
+      return;
+    }
+    if (this.fpMode && e.code === "Space") {
+      e.preventDefault();
+      this.jumpRequested = true;
       return;
     }
     this.keys.add(e.code);
@@ -203,7 +209,14 @@ export class InputManager {
     return out;
   }
 
-  /** Register a handler fired by the interact button / E / Space. */
+  /** True once if a jump was requested (Space / jump button) since last call. */
+  consumeJump(): boolean {
+    const j = this.jumpRequested;
+    this.jumpRequested = false;
+    return j;
+  }
+
+  /** Register a handler fired by the interact button / E. */
   onInteract(cb: () => void): () => void {
     this.interactHandlers.add(cb);
     return () => this.interactHandlers.delete(cb);
@@ -279,6 +292,20 @@ export class InputManager {
       this.fireInteract();
     });
     layer.appendChild(interactBtn);
+
+    // Jump button (mobile) — pointerdown so it fires instantly and never starts
+    // a move/look drag.
+    const jumpBtn = document.createElement("button");
+    jumpBtn.className = "be-fp-jump";
+    jumpBtn.type = "button";
+    jumpBtn.setAttribute("aria-label", "Jump");
+    jumpBtn.textContent = "⤒";
+    jumpBtn.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.jumpRequested = true;
+    });
+    layer.appendChild(jumpBtn);
 
     layer.addEventListener("pointerdown", this.onFpPointerDown);
     layer.addEventListener("pointermove", this.onFpPointerMove);

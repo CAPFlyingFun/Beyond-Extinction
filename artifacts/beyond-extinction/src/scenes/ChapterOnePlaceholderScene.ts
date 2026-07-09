@@ -114,6 +114,14 @@ class ChapterOnePlaceholderScene implements IScene {
   private static readonly JACK_SPAWN = { x: -106 * MAP_SCALE, z: 62 * MAP_SCALE, rot: 300 };
   private static readonly SARAH_SPAWN = { x: -108 * MAP_SCALE, z: 68 * MAP_SCALE, rot: Math.PI / 2 };
   private jackFacingDeg = ChapterOnePlaceholderScene.JACK_SPAWN.rot;
+  // Vertical physics for first person: the eye rests on the ground but isn't
+  // locked to it — gravity pulls it down, jump pushes it up, you fall off ledges.
+  private static readonly GRAVITY = 38; // world u/s² (~9.8 m/s²)
+  private static readonly JUMP_SPEED = 18; // world u/s (~1.3 m jump)
+  private static readonly STEP = 3; // step-down snap tolerance (u) so gentle slopes stay grounded
+  private vy = 0; // vertical velocity (world u/s)
+  private camY = 0; // integrated eye height (the controller resets camera.y each frame)
+  private onGround = true;
 
   private cameraDirector!: CameraDirector<CameraZoneState>;
   private highlights: ObjectiveHighlight[] = [];
@@ -315,6 +323,7 @@ class ChapterOnePlaceholderScene implements IScene {
         lookSensitivity: this.settings.lookSensitivity,
       });
       this.player.placeAt(this.jack.position.x, this.jack.position.z, this.jackFacingDeg);
+      this.camY = beachHeight(this.jack.position.x, this.jack.position.z) + ChapterOnePlaceholderScene.EYE;
       this.player.setActive(true);
       this.jack.visible = false;
       this.applyFov();
@@ -994,18 +1003,31 @@ class ChapterOnePlaceholderScene implements IScene {
         const c = this.clampToPlay(to.x, to.z);
         return { x: c.x, y: to.y, z: c.z };
       });
-      // Ride the terrain: sit EYE above the ground under the camera, but also
-      // sample a step ahead in the facing direction and lift to the higher of the
-      // two. Climbing a slope raises the eye *before* the near plane can clip into
-      // the rising ground, so the camera never pokes through the hillside.
+      // Vertical physics: the eye rests EYE above the ground under it, but is not
+      // locked there. Gravity pulls it down; a jump launches it up; walking off a
+      // ledge lets it fall. Gentle slopes (drop < STEP per frame) stay grounded so
+      // you don't float downhill.
       const EYE = ChapterOnePlaceholderScene.EYE;
       const cx = this.camera.position.x;
       const cz = this.camera.position.z;
-      const AHEAD = 6; // ~1.7 m look-ahead
       const yaw = this.player.yaw;
-      const gHere = beachHeight(cx, cz);
-      const gAhead = beachHeight(cx - Math.sin(yaw) * AHEAD, cz - Math.cos(yaw) * AHEAD);
-      this.camera.position.y = Math.max(gHere, gAhead) + EYE;
+      const groundEye = beachHeight(cx, cz) + EYE;
+      if (this.ctx.input.consumeJump() && this.onGround) {
+        this.vy = ChapterOnePlaceholderScene.JUMP_SPEED;
+        this.onGround = false;
+      }
+      this.vy -= ChapterOnePlaceholderScene.GRAVITY * dt;
+      // Integrate our OWN eye height — PlayerController.applyToCamera() overwrites
+      // camera.position.y with the flat eye height every frame, so we can't read it.
+      this.camY += this.vy * dt;
+      if (this.vy <= 0 && this.camY <= groundEye + ChapterOnePlaceholderScene.STEP) {
+        this.camY = groundEye; // land / stick to the surface
+        this.vy = 0;
+        this.onGround = true;
+      } else {
+        this.onGround = false;
+      }
+      this.camera.position.y = this.camY;
       this.oceanUniforms.uCamPos.value.copy(this.camera.position);
       this.islandMap?.setPlayer(cx, cz, yaw);
       this.islandMap?.update(dt);
