@@ -7,6 +7,7 @@ import { createPrologueScene } from "./PrologueCafeteriaScene";
 import { createChapterOneScene } from "./ChapterOnePlaceholderScene";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 import { SaveManager, type SaveSnapshot } from "../engine/SaveManager";
+import { DevAccess } from "../engine/DevAccess";
 
 /** Maps a save's scene id onto the factory that rebuilds it (see SaveManager). */
 const SCENE_FACTORIES: Record<string, SceneFactory> = {
@@ -144,7 +145,7 @@ class MainMenuScene implements IScene {
       </div>
       <div class="be-menu__footer">
         <span>PWA Engine · Prologue</span>
-        <span>Three.js · v${__APP_VERSION__}</span>
+        <span>Three.js · v${__APP_VERSION__} · <button class="be-menu__dev" data-action="dev">dev</button></span>
       </div>`;
     this.ctx.uiLayer.appendChild(el);
     this.menuEl = el;
@@ -177,6 +178,13 @@ class MainMenuScene implements IScene {
     loadBtn?.addEventListener("click", () => {
       this.ctx.audio.playSfx("ui-select");
       this.showLoad();
+    });
+
+    // Discreet dev entry point: opens the PIN gate (Dev menu has Skip to Island
+    // + the editors). Same PIN as the 10s-hold portal, no wait.
+    el.querySelector('[data-action="dev"]')?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      DevAccess.request();
     });
 
     el.querySelector('[data-action="credits"]')?.addEventListener("click", () => {

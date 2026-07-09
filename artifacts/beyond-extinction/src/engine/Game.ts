@@ -11,6 +11,7 @@ import { MarkerStore } from "./MarkerStore";
 import { AnimationEditor } from "./AnimationEditor";
 import { AnimStore } from "./AnimStore";
 import { DevAccess } from "./DevAccess";
+import { createChapterOneScene } from "../scenes/ChapterOnePlaceholderScene";
 import type { SceneContext, SceneFactory } from "./IScene";
 
 /**
@@ -81,6 +82,7 @@ export class Game {
     this.devPortal = new DevPortal({
       onMarkerEditor: () => this.markerEditor.toggle(),
       onAnimationEditor: () => this.animEditor.toggle(),
+      onSkipToIsland: () => this.skipToIsland(),
     });
     // The inventory's DEV tab opens the same PIN gate directly (no 10s hold).
     DevAccess.open = () => this.devPortal.requestUnlock();
@@ -124,10 +126,21 @@ export class Game {
   };
 
   async start(initial: SceneFactory): Promise<void> {
-    await this.scenes.goTo(initial, false);
+    // Dev shortcut: `?skip=island` boots straight to the beach, past the menu +
+    // lab prologue (handy for testing the island). Same jump the Dev menu's
+    // "Skip to Island" performs.
+    const skip = new URLSearchParams(location.search).get("skip") === "island";
+    await this.scenes.goTo(skip ? createChapterOneScene : initial, false);
     this.running = true;
     this.lastTime = performance.now();
     this.loop();
+  }
+
+  /** Jump to the island, closing any open editor first (Dev menu shortcut). */
+  private skipToIsland(): void {
+    this.markerEditor.close();
+    this.animEditor.close();
+    void this.scenes.goTo(createChapterOneScene);
   }
 
   private loop = () => {

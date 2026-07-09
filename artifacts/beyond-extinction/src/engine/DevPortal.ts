@@ -24,6 +24,8 @@ export interface DevPortalActions {
   onMarkerEditor: () => void;
   /** Open the Animation Editor (optional until it ships). */
   onAnimationEditor?: () => void;
+  /** Jump straight to the island (skip the lab prologue) — dev shortcut. */
+  onSkipToIsland?: () => void;
 }
 
 export class DevPortal {
@@ -219,6 +221,7 @@ export class DevPortal {
         <div class="be-dev__tools">
           <button class="be-dev__tool" data-tool="markers">◈ Marker Editor</button>
           <button class="be-dev__tool" data-tool="anim">🦴 Animation Editor</button>
+          <button class="be-dev__tool" data-tool="island">🏝️ Skip to Island</button>
         </div>
         <button class="be-dev__key be-dev__key--cancel be-dev__menuclose" type="button">Close</button>
       </div>`;
@@ -244,6 +247,15 @@ export class DevPortal {
     } else if (animBtn) {
       animBtn.disabled = true;
       animBtn.textContent = "🦴 Animation Editor — soon";
+    }
+    const islandBtn = menu.querySelector<HTMLButtonElement>('[data-tool="island"]');
+    if (this.actions.onSkipToIsland) {
+      islandBtn?.addEventListener("click", () => {
+        close();
+        this.actions.onSkipToIsland!();
+      });
+    } else if (islandBtn) {
+      islandBtn.remove();
     }
     menu.querySelector(".be-dev__menuclose")?.addEventListener("click", close);
   }

@@ -260,6 +260,22 @@ body {
   text-transform: uppercase;
   pointer-events: none;
 }
+/* Discreet dev entry point in the footer — clickable despite the footer's
+   pointer-events:none, opens the PIN gate (Skip to Island + editors). */
+.be-menu__dev {
+  pointer-events: auto;
+  cursor: pointer;
+  background: none;
+  border: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: rgba(181, 140, 255, 0.75);
+  padding: 0 2px;
+}
+.be-menu__dev:hover {
+  color: #d6c2ff;
+}
 
 /* ---------- Rotate-to-landscape gate ---------- */
 .be-rotate {
