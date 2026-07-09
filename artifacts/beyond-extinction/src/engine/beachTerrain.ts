@@ -40,6 +40,19 @@ export const ISLAND_CENTER = { x: 0, z: HM_CZ };
 /** Height (world units) above which the terrain is bare volcanic rock. */
 export const VOLCANO_ROCK_H = 40 * HEIGHT_SCALE;
 
+/** Real-world metres per world unit (Jack is 6.4 u ≈ 1.8 m tall). */
+export const METERS_PER_UNIT = 1.8 / 6.4;
+/** World units the satellite/heightmap image spans edge-to-edge. */
+export const ISLAND_SPAN = HM_SPAN;
+/**
+ * Map a world XZ to normalized coordinates on the island satellite/heightmap
+ * image (u,v ∈ 0..1; u = left→right = west→east, v = top→bottom = north→south),
+ * using the exact same projection the terrain drape uses.
+ */
+export function worldToIslandUV(x: number, z: number): { u: number; v: number } {
+  return { u: 0.5 + x / HM_SPAN, v: 0.5 - (z - HM_CZ) / HM_SPAN };
+}
+
 let hmData: Float32Array | null = null;
 let hmSize = 0;
 

@@ -34,6 +34,7 @@ import {
 import { SaveManager } from "../engine/SaveManager";
 import { SpawnStore } from "../engine/SpawnStore";
 import { SpawnTools } from "../engine/SpawnTools";
+import { IslandMap } from "../engine/IslandMap";
 import { PlayerInventory } from "../engine/PlayerInventory";
 import { MarkerStore } from "../engine/MarkerStore";
 import { spawnSceneMarkers } from "../engine/MarkerEditor";
@@ -105,6 +106,7 @@ class ChapterOnePlaceholderScene implements IScene {
   private firstPerson = true;
   private player?: PlayerController;
   private inventory?: InventoryOverlay;
+  private islandMap?: IslandMap;
   private static readonly EYE = 6.4; // eye height above terrain ≈ 1.8 m (a standing stance)
   // Default island start points (SSW arrival beach), in the scaled world. Jack.rot
   // = facing degrees; Sarah.rot = mesh rotation.y (radians). Overridable + savable
@@ -329,6 +331,8 @@ class ChapterOnePlaceholderScene implements IScene {
       // Expose spawn-editing to the Dev menu: walk to a spot, open Dev tools, and
       // save it as Jack's or Sarah's island start point (persists to localStorage).
       this.registerSpawnTools();
+      // Satellite minimap (tap to open the full map with pinch-zoom/pan).
+      this.islandMap = new IslandMap(this.ctx.uiLayer);
     } else {
       // Legacy directed-gameplay path (click-to-move + cinematic story).
       this.unsubClick = this.ctx.input.onClick(() => this.handleClick());
@@ -1003,6 +1007,8 @@ class ChapterOnePlaceholderScene implements IScene {
       const gAhead = beachHeight(cx - Math.sin(yaw) * AHEAD, cz - Math.cos(yaw) * AHEAD);
       this.camera.position.y = Math.max(gHere, gAhead) + EYE;
       this.oceanUniforms.uCamPos.value.copy(this.camera.position);
+      this.islandMap?.setPlayer(cx, cz, yaw);
+      this.islandMap?.update(dt);
       // Keep hidden Jack under the camera and walking, so a later third-person
       // reveal reads correctly; Sarah idles where she woke.
       if (this.jack) {
@@ -1070,6 +1076,7 @@ class ChapterOnePlaceholderScene implements IScene {
     this.ctx.overlays.cancelChoice();
     closeSettingsPanel();
     if (SpawnTools.current) SpawnTools.current = undefined; // Dev spawn tools leave with the scene
+    this.islandMap?.dispose();
     this.player?.dispose();
     this.inventory?.dispose();
     this.unsubClick?.();
