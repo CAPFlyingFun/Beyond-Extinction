@@ -32,6 +32,11 @@ const HM_CZ = 122 * MAP_SCALE; // world z at the heightmap's vertical centre
 const HM_SEA = 0.1; // grey fraction that maps to sea level (y=0)
 const HM_SCALE = 58 * HEIGHT_SCALE; // world height per grey fraction above sea level
 const HM_DEEP = -6 * HEIGHT_SCALE; // height returned off the map (open ocean)
+// Coastal-apron shaping: a power curve on the height-above-sea. >1 flattens the
+// low band into a wide, gentle beach → jungle slope (no steep wall behind the
+// spawn) while keeping the summit, matching the topographic profile. 1.0 = raw.
+const HM_APRON = 1.8;
+const HM_MAXH = (1 - HM_SEA) * HM_SCALE; // world height at full-white grey (summit)
 
 /** World Z near the southern waterline (spawn beach); kept for compatibility. */
 export const SHORE_Z = -2 * MAP_SCALE;
@@ -51,6 +56,11 @@ export const ISLAND_SPAN = HM_SPAN;
  */
 export function worldToIslandUV(x: number, z: number): { u: number; v: number } {
   return { u: 0.5 + x / HM_SPAN, v: 0.5 - (z - HM_CZ) / HM_SPAN };
+}
+
+/** Inverse of {@link worldToIslandUV}: image (u,v) → world (x,z). */
+export function islandUVToWorld(u: number, v: number): { x: number; z: number } {
+  return { x: (u - 0.5) * HM_SPAN, z: HM_CZ - (v - 0.5) * HM_SPAN };
 }
 
 let hmData: Float32Array | null = null;
@@ -144,7 +154,9 @@ export function beachHeight(x: number, z: number): number {
       s(x1, y0) * tx * (1 - ty) +
       s(x0, y1) * (1 - tx) * ty +
       s(x1, y1) * tx * ty;
-    return (n - HM_SEA) * HM_SCALE;
+    const above = (n - HM_SEA) / (1 - HM_SEA); // 0..1 above sea level
+    if (above <= 0) return (n - HM_SEA) * HM_SCALE; // underwater — keep linear
+    return Math.pow(above, HM_APRON) * HM_MAXH; // gradual apron, summit preserved
   }
   return proceduralHeight(x, z);
 }
