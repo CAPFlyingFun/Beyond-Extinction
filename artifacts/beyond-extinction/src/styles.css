@@ -1974,7 +1974,16 @@ body {
   color: #e8f3ff; font: inherit; font-size: 13px; white-space: nowrap;
 }
 .be-ae__play { background: rgba(120,200,255,0.18) !important; border-color: rgba(120,200,255,0.5) !important; }
-.be-ae__scrub { flex: 1; }
+/* Scrub track + keyframe markers overlaid on it. */
+.be-ae__scrubwrap { position: relative; flex: 1; display: flex; align-items: center; }
+.be-ae__scrub { flex: 1; position: relative; z-index: 1; }
+.be-ae__ticks { position: absolute; left: 0; right: 0; top: 0; bottom: 0; pointer-events: none; }
+.be-ae__tick {
+  position: absolute; top: 50%; width: 3px; height: 15px;
+  transform: translate(-50%, -50%); border-radius: 1.5px;
+  background: #f6c97a; box-shadow: 0 0 0 1px rgba(0,0,0,0.5);
+}
+.be-ae__tick.is-current { background: #7dffb0; height: 19px; width: 4px; }
 .be-ae__time { font-size: 12px; min-width: 48px; }
 .be-ae__kfs { font-size: 11px; opacity: 0.6; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .be-ae__hint {

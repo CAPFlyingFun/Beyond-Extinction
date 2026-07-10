@@ -139,6 +139,10 @@ export class AnimationEditor {
     if (this.wasFp) this.deps.input.enableFpControls(false);
     this.deps.input.setEnabled(false);
     this.buildHud();
+    // Match the render camera to the canvas NOW — resize() otherwise only fires
+    // on a window-resize event, so opening on a wide desktop left the aspect at
+    // its initial 1 and stretched the character horizontally ("warped").
+    this.resize(window.innerWidth, window.innerHeight);
     if (!this.model) await this.loadCharacter();
     this.busy = false;
     this.attachListeners();
@@ -530,7 +534,10 @@ export class AnimationEditor {
       </div>
       <div class="be-ae__timeline">
         <button data-act="play" class="be-ae__play">▶ Play</button>
-        <input class="be-ae__scrub" type="range" min="0" max="1000" value="0" />
+        <div class="be-ae__scrubwrap">
+          <input class="be-ae__scrub" type="range" min="0" max="1000" value="0" />
+          <div class="be-ae__ticks"></div>
+        </div>
         <span class="be-ae__time">0.00s</span>
         <button data-act="key">＋ Key</button>
         <button data-act="delkey">✕ Key</button>
@@ -610,6 +617,21 @@ export class AnimationEditor {
       kfs.textContent = this.keyframes.length
         ? `${this.keyframes.length} keys: ${this.keyframes.map((k) => k.time.toFixed(1)).join(", ")}`
         : "no keyframes";
+    // Keyframe markers on the timeline: a tick per key at its time, the one at
+    // the playhead highlighted — so placed/imported keys are visible + findable.
+    const ticks = this.root?.querySelector(".be-ae__ticks");
+    if (ticks) {
+      const dur = Math.max(this.duration, 1e-3);
+      ticks.innerHTML = "";
+      for (const k of this.keyframes) {
+        const t = document.createElement("div");
+        t.className = "be-ae__tick";
+        t.style.left = `${Math.max(0, Math.min(100, (k.time / dur) * 100))}%`;
+        t.title = `${k.time.toFixed(2)}s`;
+        if (Math.abs(k.time - this.scrubT) <= KEY_EPS) t.classList.add("is-current");
+        ticks.appendChild(t);
+      }
+    }
   }
 
   private setPlayButton(on: boolean): void {
