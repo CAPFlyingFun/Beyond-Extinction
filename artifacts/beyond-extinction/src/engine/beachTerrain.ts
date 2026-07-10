@@ -334,11 +334,17 @@ function makeTerrainMaterial(aerial: THREE.Texture, g: IslandGround): THREE.Mesh
          col = mix(col, jungle, smoothstep(148.0, 195.0, h));  // coast -> jungle ~45 m
          col = mix(col, mtn,    smoothstep(555.0, 620.0, h));  // jungle -> highland ~160 m
          col = mix(col, volc,   smoothstep(uRockH, uRockH + 90.0, h)); // crags/volcano ~250 m
-         // Patchy swamp mud in the low, flat wetlands near the water (Godot's
-         // swamp lives below ~30 m elevation).
-         float nS = vnoise(vWXZ.xz * 0.035);
-         float swampM = smoothstep(-2.0, 8.0, h) * (1.0 - smoothstep(85.0, 110.0, h)) * smoothstep(0.45, 0.75, nS);
-         col = mix(col, swamp, swampM * 0.75);
+         // Patchy swamp mud — Godot keeps swamp to the low, flat NW basin
+         // (island_biomes.gd SWAMP box, <30 m). Gate it to the NW quadrant
+         // (west: −x, north: z < uCz) so mud never blankets the SW spawn beach,
+         // and only on low ground.
+         float nS = vnoise(vWXZ.xz * 0.0018);
+         float swampRegion =
+           smoothstep(0.0, uSpan * 0.12, -vWXZ.x) *
+           smoothstep(0.0, uSpan * 0.12, uCz - vWXZ.z);
+         float swampM = smoothstep(20.0, 45.0, h) * (1.0 - smoothstep(85.0, 110.0, h)) *
+                        smoothstep(0.5, 0.72, nS) * swampRegion;
+         col = mix(col, swamp, swampM * 0.7);
          // Patchy dirt trails through the jungle band.
          float nD = vnoise(vWXZ.xz * 0.05 + 13.0);
          float dirtM = smoothstep(170.0, 230.0, h) * (1.0 - smoothstep(480.0, 540.0, h)) * smoothstep(0.55, 0.8, nD);

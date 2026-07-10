@@ -97,6 +97,9 @@ class ChapterOnePlaceholderScene implements IScene {
   private billboards: THREE.Mesh[] = [];
   // Wind + draw-distance tick for the instanced tree species (see islandTrees).
   private treesUpdate?: (dt: number, camPos: THREE.Vector3) => void;
+  // Sun with a player-following shadow frustum (see updateSun). The shadow box
+  // is tight (~140 m) because a directional shadow can't span the 8 km island.
+  private sun?: THREE.DirectionalLight;
 
   private jack!: THREE.Group;
   private sarah!: THREE.Group;
@@ -122,6 +125,13 @@ class ChapterOnePlaceholderScene implements IScene {
   private jackFacingDeg = ChapterOnePlaceholderScene.JACK_SPAWN.rot;
   // Vertical physics for first person: the eye rests on the ground but isn't
   // locked to it — gravity pulls it down, jump pushes it up, you fall off ledges.
+  // Sun / shadow rig (see enter()). SUN_DIR is the fixed light direction (a
+  // low morning sun); the light sits SUN_DIST up-sun from the player and its
+  // shadow frustum is ±SHADOW_HALF (~140 m) so nearby character/prop shadows
+  // stay crisp on the huge island.
+  private static readonly SUN_DIR = new THREE.Vector3(0.6, 0.66, -0.33).normalize();
+  private static readonly SUN_DIST = 900;
+  private static readonly SHADOW_HALF = 500;
   private static readonly GRAVITY = 38; // world u/s² (~9.8 m/s²)
   private static readonly JUMP_SPEED = 18; // world u/s (~1.3 m jump)
   private static readonly STEP = 3; // step-down snap tolerance (u) so gentle slopes stay grounded
@@ -217,9 +227,28 @@ class ChapterOnePlaceholderScene implements IScene {
     const hemi = new THREE.HemisphereLight(0xbfe4ff, 0xc8b78a, 1.0);
     scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xfff2d6, 2.3);
-    sun.position.set(120 * MAP_SCALE, 120 * MAP_SCALE, -60 * MAP_SCALE);
     sun.castShadow = true;
+    // A directional shadow can't cover an 8 km island at usable resolution, so
+    // the shadow frustum is a tight box that FOLLOWS the player (updateSun()).
+    // Without this the default ±5-unit shadow camera sits at the origin, ~20 000
+    // units from the player, and projects garbage onto the terrain (a hard dark
+    // quad + acne). SUN_DIR is the fixed light direction; the light rides a
+    // fixed offset up-sun from the player each frame and targets them.
+    sun.shadow.mapSize.set(2048, 2048);
+    const shCam = sun.shadow.camera;
+    const SH = ChapterOnePlaceholderScene.SHADOW_HALF;
+    shCam.left = -SH;
+    shCam.right = SH;
+    shCam.top = SH;
+    shCam.bottom = -SH;
+    shCam.near = 1;
+    shCam.far = ChapterOnePlaceholderScene.SUN_DIST * 2;
+    sun.shadow.bias = -0.0006;
+    sun.shadow.normalBias = 2;
     scene.add(sun);
+    scene.add(sun.target);
+    this.sun = sun;
+    this.updateSun(); // frame the spawn before the first render
 
     // Real island terrain from the MeshyAI heightmap, with the aerial photo
     // draped over it. Load both first (the heightmap must be sampled per vertex);
@@ -1050,6 +1079,7 @@ class ChapterOnePlaceholderScene implements IScene {
       }
       this.camera.position.y = this.camY;
       this.oceanUniforms.uCamPos.value.copy(this.camera.position);
+      this.updateSun();
       this.islandMap?.setPlayer(cx, cz, yaw);
       this.islandMap?.update(dt);
       // Keep hidden Jack under the camera and walking, so a later third-person
@@ -1079,6 +1109,7 @@ class ChapterOnePlaceholderScene implements IScene {
     }
 
     this.oceanUniforms.uCamPos.value.copy(this.camera.position);
+    this.updateSun();
 
     const jackMoving = this.jackNav?.update(dt) ?? false;
     this.applyLocomotion(this.jack, jackMoving, dt);
@@ -1099,6 +1130,23 @@ class ChapterOnePlaceholderScene implements IScene {
         Math.abs(Math.sin(elapsed * 4)) * 0.3;
       this.dodo.rotation.y = this.hissDone ? Math.PI : Math.sin(elapsed * 0.6) * 0.4;
     }
+  }
+
+  /**
+   * Keep the sun's shadow frustum centred on the player. The light rides a
+   * fixed offset up-sun from the camera and targets the ground beneath it, so
+   * the tight ±SHADOW_HALF shadow box always covers what the player can see —
+   * the only way to get crisp directional shadows on an 8 km island.
+   */
+  private updateSun(): void {
+    const sun = this.sun;
+    if (!sun) return;
+    const c = this.camera.position;
+    const dir = ChapterOnePlaceholderScene.SUN_DIR;
+    const d = ChapterOnePlaceholderScene.SUN_DIST;
+    sun.target.position.set(c.x, beachHeight(c.x, c.z), c.z);
+    sun.position.set(c.x + dir.x * d, sun.target.position.y + dir.y * d, c.z + dir.z * d);
+    sun.target.updateMatrixWorld();
   }
 
   /** Post-main-render passes: the island map's live top-down minimap. */
