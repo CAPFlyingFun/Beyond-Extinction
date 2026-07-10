@@ -2736,10 +2736,20 @@ class PrologueCafeteriaScene implements IScene {
       return { position: p, lookAt: l };
     }
     if (id === "core-pull") {
-      // Wide on the accelerator core as both are drawn into it.
+      // Wide on the accelerator core as both are drawn into it. The offset
+      // scales with framingScale so portrait phones dolly back, but the core
+      // sits at z=0 and the lab's south wall is at z=30 with a 5m ceiling at
+      // y=20 — an unclamped pull-back (up to ×1.4 in portrait) shoves the
+      // camera *through* the south wall and *above* the ceiling, so it stares
+      // at wall backing instead of the accelerator. Clamp to the lab interior.
       const core = this.coreWorld.clone();
+      const pos = core
+        .clone()
+        .add(new THREE.Vector3(0, 15, 24).multiplyScalar(s.framingScale));
+      pos.z = Math.min(pos.z, 27); // south wall z=30 (interior ~29.6)
+      pos.y = Math.min(pos.y, 17.5); // 5m ceiling at y=20
       return {
-        position: core.clone().add(new THREE.Vector3(0, 16, 30).multiplyScalar(s.framingScale)),
+        position: pos,
         lookAt: core.clone().add(new THREE.Vector3(0, 3, 0)),
       };
     }
