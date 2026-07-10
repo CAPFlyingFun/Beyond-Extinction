@@ -111,8 +111,11 @@ class ChapterOnePlaceholderScene implements IScene {
   // Default island start points (SSW arrival beach), in the scaled world. Jack.rot
   // = facing degrees; Sarah.rot = mesh rotation.y (radians). Overridable + savable
   // via the Dev menu. (Base coords were tuned on the small island, so ×MAP_SCALE.)
-  private static readonly JACK_SPAWN = { x: -106 * MAP_SCALE, z: 62 * MAP_SCALE, rot: 300 };
-  private static readonly SARAH_SPAWN = { x: -108 * MAP_SCALE, z: 68 * MAP_SCALE, rot: Math.PI / 2 };
+  // z values are mirrored about the island centre (z' = 244·MS − z) from the
+  // pre-"true aerial view" coords — see worldToIslandUV — with headings
+  // mirrored to match (H' = 180 − H; mesh yaw θ' = π − θ).
+  private static readonly JACK_SPAWN = { x: -106 * MAP_SCALE, z: 182 * MAP_SCALE, rot: 240 };
+  private static readonly SARAH_SPAWN = { x: -108 * MAP_SCALE, z: 176 * MAP_SCALE, rot: Math.PI / 2 };
   private jackFacingDeg = ChapterOnePlaceholderScene.JACK_SPAWN.rot;
   // Vertical physics for first person: the eye rests on the ground but isn't
   // locked to it — gravity pulls it down, jump pushes it up, you fall off ledges.
@@ -153,13 +156,14 @@ class ChapterOnePlaceholderScene implements IScene {
   // treeline).
   // A much larger roam area: a wide beach that runs from out in the shallow
   // water (negative Z — you can wade in) up to the dunes/treeline inland.
-  // Roam the real island: from out in the shallows (−Z) up the south beach and
-  // inland toward the volcano to the north. (Heightmap island spans z≈−2..250.)
+  // Roam the real island: from out in the shallows (+Z, south of the arrival
+  // beach) inland toward the volcano in the north (−Z). Mirrored about the
+  // island centre with the true-aerial-view flip (map spans z ≈ −28..272).
   private static readonly PLAY = {
     minX: -165 * MAP_SCALE,
     maxX: 165 * MAP_SCALE,
-    minZ: -30 * MAP_SCALE,
-    maxZ: 200 * MAP_SCALE,
+    minZ: 44 * MAP_SCALE,
+    maxZ: 274 * MAP_SCALE,
   };
 
   constructor(private ctx: SceneContext) {
@@ -271,12 +275,20 @@ class ChapterOnePlaceholderScene implements IScene {
 
     // A curious dodo nearby (set-dressing positions scale with the world).
     this.dodo = this.buildDodo();
-    this.dodo.position.set(14 * MAP_SCALE, beachHeight(14 * MAP_SCALE, 0), 0);
+    this.dodo.position.set(
+      14 * MAP_SCALE,
+      beachHeight(14 * MAP_SCALE, 244 * MAP_SCALE),
+      244 * MAP_SCALE, // mirrored with the true-aerial-view flip (was z=0)
+    );
     scene.add(this.dodo);
 
     // Driftwood scattered up the sand (the "gather" objective anchor).
     const driftwood = this.buildDriftwood();
-    driftwood.position.set(22 * MAP_SCALE, beachHeight(22 * MAP_SCALE, 14 * MAP_SCALE), 14 * MAP_SCALE);
+    driftwood.position.set(
+      22 * MAP_SCALE,
+      beachHeight(22 * MAP_SCALE, 230 * MAP_SCALE),
+      230 * MAP_SCALE, // mirrored with the true-aerial-view flip (was z=14)
+    );
     scene.add(driftwood);
 
     this.registerInteractions(driftwood);

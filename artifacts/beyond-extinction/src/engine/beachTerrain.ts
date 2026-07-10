@@ -53,14 +53,19 @@ export const ISLAND_SPAN = HM_SPAN;
  * Map a world XZ to normalized coordinates on the island satellite/heightmap
  * image (u,v ∈ 0..1; u = left→right = west→east, v = top→bottom = north→south),
  * using the exact same projection the terrain drape uses.
+ *
+ * TRUE AERIAL VIEW: image-top = world −Z (north — the engine-wide heading-0
+ * direction) and image-right = world +X (east). The previous convention (+Z at
+ * the top) displayed a MIRRORED aerial view, which made the heading-up minimap
+ * impossible to orient with any rotation (one of N/S or E/W always flipped).
  */
 export function worldToIslandUV(x: number, z: number): { u: number; v: number } {
-  return { u: 0.5 + x / HM_SPAN, v: 0.5 - (z - HM_CZ) / HM_SPAN };
+  return { u: 0.5 + x / HM_SPAN, v: 0.5 + (z - HM_CZ) / HM_SPAN };
 }
 
 /** Inverse of {@link worldToIslandUV}: image (u,v) → world (x,z). */
 export function islandUVToWorld(u: number, v: number): { x: number; z: number } {
-  return { x: (u - 0.5) * HM_SPAN, z: HM_CZ - (v - 0.5) * HM_SPAN };
+  return { x: (u - 0.5) * HM_SPAN, z: HM_CZ + (v - 0.5) * HM_SPAN };
 }
 
 let hmData: Float32Array | null = null;
@@ -138,7 +143,7 @@ function proceduralHeight(x: number, z: number): number {
 export function beachHeight(x: number, z: number): number {
   if (hmData) {
     const u = 0.5 + x / HM_SPAN;
-    const v = 0.5 - (z - HM_CZ) / HM_SPAN;
+    const v = 0.5 + (z - HM_CZ) / HM_SPAN; // image rows — same as worldToIslandUV
     if (u <= 0 || u >= 1 || v <= 0 || v >= 1) return HM_DEEP;
     const fx = u * (hmSize - 1);
     const fy = v * (hmSize - 1);
@@ -315,7 +320,9 @@ function makeTerrainMaterial(aerial: THREE.Texture, g: IslandGround): THREE.Mesh
          float slope = 1.0 - clamp(vWN.y, 0.0, 1.0);
          col = mix(col, cliff, smoothstep(0.52, 0.78, slope));
          // Faint aerial macro tint so the island's big-picture colour still reads.
-         vec2 auv = vec2(0.5 + vWXZ.x / uSpan, 0.5 + (vWXZ.z - uCz) / uSpan);
+         // flipY texture space: v_tex = 1 - image_v, so the sign is opposite
+         // to worldToIslandUV's image-row v.
+         vec2 auv = vec2(0.5 + vWXZ.x / uSpan, 0.5 - (vWXZ.z - uCz) / uSpan);
          vec3 macro = texture2D(uAerial, auv).rgb;
          diffuseColor.rgb *= col * (0.82 + 0.36 * macro);`,
       );
@@ -348,7 +355,8 @@ export function buildBeachTerrain(
     const z = pos.getZ(i);
     pos.setY(i, beachHeight(x, z));
     // Drape UVs: align the aerial image to the same mapping as the heightmap.
-    uv.setXY(i, 0.5 + x / HM_SPAN, 0.5 + (z - HM_CZ) / HM_SPAN);
+    // flipY texture space, so the v sign is opposite to worldToIslandUV's rows.
+    uv.setXY(i, 0.5 + x / HM_SPAN, 0.5 - (z - HM_CZ) / HM_SPAN);
     const [r, g, b] = beachColor(pos.getY(i));
     colors[i * 3] = r;
     colors[i * 3 + 1] = g;

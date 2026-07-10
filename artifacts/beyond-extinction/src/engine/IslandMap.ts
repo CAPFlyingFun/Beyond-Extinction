@@ -178,18 +178,19 @@ export class IslandMap {
     if (this.ready) {
       const { u, v } = worldToIslandUV(this.px, this.pz);
       const frac = MINIMAP_RANGE_M / METERS_PER_UNIT / ISLAND_SPAN; // radius as image fraction
-      // Heading-up: rotate the north-up crop by (π + yaw) so the player's forward
-      // points to the top and left/right match the first-person view. The map
-      // must turn the OPPOSITE way to the player — turn right and the world
-      // swings left under you — so the yaw terms are negated relative to a
-      // same-direction spin. R(π+yaw) = [[−cos,sin],[−sin,−cos]].
+      // Heading-up: with the map a TRUE aerial view (image-top = −Z = north,
+      // see worldToIslandUV), the derivation is textbook. Player forward is
+      // f = (−sin ψ, −cos ψ) and right is r = (cos ψ, −sin ψ); a canvas offset
+      // (dx, dy) must show the world point dx·r − dy·f, whose image offset is
+      // k·[[cos ψ, sin ψ],[−sin ψ, cos ψ]]·(dx, dy). Inverting for the draw
+      // gives the pure rotation R(ψ) — identity when facing north.
       const cy = Math.cos(this.yaw);
       const sy = Math.sin(this.yaw);
       const layer = (src: HTMLImageElement | HTMLCanvasElement, dim: number) => {
         const sc = cc / (frac * dim); // image px → canvas px so the edge = range
         c.save();
         c.translate(cc, cc);
-        c.transform(-cy, -sy, sy, -cy, 0, 0);
+        c.transform(cy, sy, -sy, cy, 0, 0);
         c.scale(sc, sc);
         c.drawImage(src, -u * dim, -v * dim); // whole layer, player pixel at origin
         c.restore();
@@ -205,11 +206,11 @@ export class IslandMap {
     c.beginPath();
     c.arc(cc, cc, cc - 1, 0, Math.PI * 2);
     c.stroke();
-    // North marker — rotates to show where compass-north lies on the heading-up
-    // map. Placed by the same R(π+yaw) that turns the crop, so its yaw term is
-    // negated to match (north = (−c,−d) of the layer transform).
-    const nx = -Math.sin(this.yaw);
-    const ny = Math.cos(this.yaw);
+    // North marker — where compass-north (−Z) lies on the heading-up map:
+    // R(ψ) applied to image-up gives (sin ψ, −cos ψ). Facing north → marker
+    // at the top, turn right → north slides left, matching the crop.
+    const nx = Math.sin(this.yaw);
+    const ny = -Math.cos(this.yaw);
     c.fillStyle = "rgba(200,230,255,0.9)";
     c.font = "bold 11px ui-monospace, monospace";
     c.textAlign = "center";
@@ -357,12 +358,13 @@ export class IslandMap {
 
 /** A green facing arrow at (x,y); heading = PlayerController.yaw (radians). */
 function drawArrow(c: CanvasRenderingContext2D, x: number, y: number, yaw: number, r: number): void {
-  // World forward = (-sin yaw, -cos yaw); on the north-up map +Z (north) is up,
-  // so canvas dir = (fx, -fz).
+  // World forward = (-sin yaw, -cos yaw); the map is a true aerial view
+  // (image-top = −Z north, image y grows with world +z), so canvas dir maps
+  // 1:1 — (fx, fz).
   const fx = -Math.sin(yaw);
   const fz = -Math.cos(yaw);
   const dx = fx;
-  const dy = -fz;
+  const dy = fz;
   const px = -dy;
   const py = dx;
   c.fillStyle = "rgba(80,255,120,1)";

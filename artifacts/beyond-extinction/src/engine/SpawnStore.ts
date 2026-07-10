@@ -20,7 +20,9 @@ export interface IslandSpawns {
 
 // v2: the world was rescaled (~40×), so any v1 points saved in the old
 // coordinate system are meaningless now — a new key retires them cleanly.
-const KEY = "be-island-spawns-v2";
+// v3: the true-aerial-view flip (see worldToIslandUV) mirrored the island
+// north/south — old points would land on the wrong terrain (possibly water).
+const KEY = "be-island-spawns-v3";
 
 export const SpawnStore = {
   get(): IslandSpawns {
