@@ -117,6 +117,10 @@ class ChapterOnePlaceholderScene implements IScene {
   private static readonly CROUCH_EYE = 4.1; // ≈ 1.15 m — a crouch-walk stance
   private static readonly CRAWL_EYE = 1.5; // ≈ 0.4 m — prone, near the ground
   private eyeOffset = ChapterOnePlaceholderScene.EYE; // lerps toward the posture target
+  // Dev-only on-screen readout of movement state (WALK/RUN/CROUCH/CRAWL + eye
+  // height + flags). Off in shipped builds; flip to true to diagnose input.
+  private static readonly DEBUG_MOVE = false;
+  private dbgEl?: HTMLDivElement;
   // Default island start points (SSW arrival beach), in the scaled world. Jack.rot
   // = facing degrees; Sarah.rot = mesh rotation.y (radians). Overridable + savable
   // via the Dev menu. (Base coords were tuned on the small island, so ×MAP_SCALE.)
@@ -382,6 +386,16 @@ class ChapterOnePlaceholderScene implements IScene {
       this.player.setActive(true);
       this.jack.visible = false;
       this.applyFov();
+      if (ChapterOnePlaceholderScene.DEBUG_MOVE) {
+        const dbg = document.createElement("div");
+        dbg.style.cssText =
+          "position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:80;" +
+          "padding:6px 12px;border-radius:8px;background:rgba(6,12,20,0.78);" +
+          "color:#8fffb0;font:600 13px/1.35 ui-monospace,monospace;white-space:pre;" +
+          "text-align:center;pointer-events:none;letter-spacing:0.3px;";
+        this.ctx.uiLayer.appendChild(dbg);
+        this.dbgEl = dbg;
+      }
       // Jack's inventory (badge + coffee) + the DEV tab, same ARK overlay as the
       // prologue. Opening it freezes movement; closing restores it.
       this.inventory = new InventoryOverlay(this.ctx.uiLayer, {
@@ -1080,6 +1094,18 @@ class ChapterOnePlaceholderScene implements IScene {
       const cz = this.camera.position.z;
       const yaw = this.player.yaw;
       const groundEye = beachHeight(cx, cz) + this.eyeOffset;
+      if (this.dbgEl) {
+        const inp = this.ctx.input;
+        const crawl = inp.isCrawling();
+        const crouch = inp.isCrouching();
+        const run = inp.isRunning();
+        const posture = crawl ? "CRAWL" : crouch ? "CROUCH" : run ? "RUN" : "WALK";
+        const M = 0.28125; // metres per unit
+        this.dbgEl.textContent =
+          `▶ ${posture}   eye ${(this.eyeOffset * M).toFixed(2)}m (${this.eyeOffset.toFixed(1)}u)\n` +
+          `run=${run ? 1 : 0}  crouch=${crouch ? 1 : 0}  crawl=${crawl ? 1 : 0}  ` +
+          `ground=${this.onGround ? 1 : 0}`;
+      }
       if (this.ctx.input.consumeJump() && this.onGround) {
         this.vy = ChapterOnePlaceholderScene.JUMP_SPEED;
         this.onGround = false;
@@ -1199,6 +1225,7 @@ class ChapterOnePlaceholderScene implements IScene {
     this.unsubSettings?.();
     this.gearEl?.remove();
     this.endCardEl?.remove();
+    this.dbgEl?.remove();
     this.ctx.overlays.hideHint();
     this.ctx.overlays.setBlackInstant(false);
     for (const h of this.highlights) h.dispose();
