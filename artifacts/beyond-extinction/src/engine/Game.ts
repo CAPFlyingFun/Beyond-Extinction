@@ -167,6 +167,7 @@ export class Game {
     if (active) {
       const cam = this.markerEditor.overrideCamera() ?? active.camera;
       this.renderer.render(active.scene, cam);
+      active.renderOverlays?.(this.renderer.renderer);
     }
   };
 

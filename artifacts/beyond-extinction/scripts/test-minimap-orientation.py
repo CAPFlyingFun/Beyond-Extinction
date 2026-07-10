@@ -31,7 +31,7 @@ import numpy as np
 from PIL import Image
 
 # ---- constants mirrored from src/engine/beachTerrain.ts --------------------
-MAP_SCALE = 40.8
+MAP_SCALE = 8192 / 84.375  # island = 8192 m across (Godot parity)
 HM_SPAN = 300 * MAP_SCALE
 HM_CZ = 122 * MAP_SCALE
 HM_SEA = 0.1

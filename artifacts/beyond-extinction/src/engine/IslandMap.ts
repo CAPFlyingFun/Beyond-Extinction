@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import { assetUrl } from "./assets";
 import { worldToIslandUV, ISLAND_SPAN, METERS_PER_UNIT } from "./beachTerrain";
 import { getSettings, subscribeSettings, type MinimapCorner } from "./Settings";
@@ -23,6 +24,18 @@ const REVEAL_ALL = true; // TESTING: start fully revealed. Flip to false for fog
 const FOG_KEY = "be-island-fog-v1";
 const FOG_W = 256; // fog-mask resolution
 
+// ── live minimap (render-to-texture) ─────────────────────────────────────────
+// When a world scene is provided, the minimap is a LIVE top-down orthographic
+// render of what's actually there — no baked image, no scaling worries. The
+// RTT refreshes at ~15 Hz; the heading-up rotation is applied every frame by
+// spinning the composited circle, so turning stays silky.
+const LIVE_RT_SIZE = 256; // top-down render resolution
+const LIVE_CAM_Y = 3000; // fixed camera height (volcano summit ≈ 1253 u)
+const LIVE_REFRESH_MS = 66; // ~15 Hz world re-render
+/** Scene-graph names hidden from the map pass (trees read as noise from above;
+ *  swap for a dimmed-opacity pass later if preferred). */
+const LIVE_HIDE = new Set(["island-trees", "island-foliage"]);
+
 export class IslandMap {
   private readonly root: HTMLDivElement;
   private readonly mm: HTMLCanvasElement;
@@ -46,7 +59,20 @@ export class IslandMap {
   private pinchPrev = 0;
   private unsubSettings: () => void;
 
-  constructor(private readonly parent: HTMLElement) {
+  // Live top-down minimap (see renderLive). Present only when a world scene
+  // was passed; otherwise the minimap falls back to the baked map image.
+  private rt?: THREE.WebGLRenderTarget;
+  private liveCam?: THREE.OrthographicCamera;
+  private compScene?: THREE.Scene;
+  private compCam?: THREE.OrthographicCamera;
+  private liveMesh?: THREE.Mesh;
+  private lastLive = 0;
+  private readonly vp = new THREE.Vector4();
+
+  constructor(
+    private readonly parent: HTMLElement,
+    private readonly world?: THREE.Scene,
+  ) {
     injectStyles();
     this.cellFrac = CELL_M / METERS_PER_UNIT / ISLAND_SPAN;
     this.fog = document.createElement("canvas");
@@ -95,6 +121,74 @@ export class IslandMap {
     this.acc = 0;
     this.drawMinimap();
     if (this.full) this.drawFull();
+  }
+
+  /**
+   * Live minimap render passes — call AFTER the main scene render each frame
+   * (see IScene.renderOverlays). Pass 1 re-renders the world top-down into a
+   * small render target (throttled); pass 2 composites the heading-up circle
+   * into the minimap's screen rect via viewport+scissor, leaving the corners
+   * showing the 3D view underneath. All renderer state is restored.
+   */
+  renderLive(renderer: THREE.WebGLRenderer): void {
+    if (!this.world || this.full) return; // full-screen map open → HUD hidden anyway
+    if (!this.rt) this.initLive();
+    const rt = this.rt!;
+    const now = performance.now();
+    if (now - this.lastLive > LIVE_REFRESH_MS) {
+      this.lastLive = now;
+      const cam = this.liveCam!;
+      cam.position.set(this.px, LIVE_CAM_Y, this.pz);
+      cam.up.set(0, 0, -1); // world −Z (north) at the top → true aerial view
+      cam.lookAt(this.px, 0, this.pz);
+      const hidden: THREE.Object3D[] = [];
+      this.world.traverse((o) => {
+        if (LIVE_HIDE.has(o.name) && o.visible) {
+          o.visible = false;
+          hidden.push(o);
+        }
+      });
+      const prevTarget = renderer.getRenderTarget();
+      renderer.setRenderTarget(rt);
+      renderer.render(this.world, cam);
+      renderer.setRenderTarget(prevTarget);
+      for (const o of hidden) o.visible = true;
+    }
+
+    // Composite the circle, heading-up: content rotates opposite the player
+    // (rotation.z = −yaw; identity when facing north).
+    const rect = this.root.getBoundingClientRect();
+    const el = renderer.domElement;
+    if (rect.width === 0 || el.clientHeight === 0) return;
+    this.liveMesh!.rotation.z = -this.yaw;
+    renderer.getViewport(this.vp);
+    const prevAutoClear = renderer.autoClear;
+    renderer.autoClear = false;
+    const y = el.clientHeight - rect.bottom; // GL viewport origin: bottom-left
+    renderer.setViewport(rect.left, y, rect.width, rect.height);
+    renderer.setScissor(rect.left, y, rect.width, rect.height);
+    renderer.setScissorTest(true);
+    renderer.render(this.compScene!, this.compCam!);
+    renderer.setScissorTest(false);
+    renderer.setViewport(this.vp);
+    renderer.autoClear = prevAutoClear;
+  }
+
+  private initLive(): void {
+    this.rt = new THREE.WebGLRenderTarget(LIVE_RT_SIZE, LIVE_RT_SIZE, {
+      depthBuffer: true,
+    });
+    const R = MINIMAP_RANGE_M / METERS_PER_UNIT; // world units to the circle edge
+    this.liveCam = new THREE.OrthographicCamera(-R, R, R, -R, 1, LIVE_CAM_Y + 2000);
+    this.compScene = new THREE.Scene();
+    this.compCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    // Unit circle in NDC: its UVs span the full RTT, so the circle shows the
+    // inscribed disc — the edge of the minimap is exactly MINIMAP_RANGE_M out.
+    this.liveMesh = new THREE.Mesh(
+      new THREE.CircleGeometry(1, 48),
+      new THREE.MeshBasicMaterial({ map: this.rt.texture, toneMapped: false }),
+    );
+    this.compScene.add(this.liveMesh);
   }
 
   /** Clear all exploration (fog back to nothing). */
@@ -172,10 +266,15 @@ export class IslandMap {
     c.beginPath();
     c.arc(cc, cc, cc, 0, Math.PI * 2);
     c.clip();
-    c.fillStyle = "#12303a";
-    c.fillRect(0, 0, size, size);
+    // Live mode: the map content is GL-composited underneath (see renderLive),
+    // so this canvas keeps its disc transparent and only draws the HUD chrome
+    // (frame ring, N marker, player triangle) on top.
+    if (!this.world) {
+      c.fillStyle = "#12303a";
+      c.fillRect(0, 0, size, size);
+    }
 
-    if (this.ready) {
+    if (this.ready && !this.world) {
       const { u, v } = worldToIslandUV(this.px, this.pz);
       const frac = MINIMAP_RANGE_M / METERS_PER_UNIT / ISLAND_SPAN; // radius as image fraction
       // Heading-up: with the map a TRUE aerial view (image-top = −Z = north,
@@ -353,6 +452,11 @@ export class IslandMap {
     this.unsubSettings();
     this.closeFull();
     this.root.remove();
+    this.rt?.dispose();
+    if (this.liveMesh) {
+      this.liveMesh.geometry.dispose();
+      (this.liveMesh.material as THREE.Material).dispose();
+    }
   }
 }
 

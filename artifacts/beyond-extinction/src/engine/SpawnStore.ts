@@ -18,11 +18,11 @@ export interface IslandSpawns {
   sarah?: SpawnPoint;
 }
 
-// v2: the world was rescaled (~40×), so any v1 points saved in the old
-// coordinate system are meaningless now — a new key retires them cleanly.
 // v3: the true-aerial-view flip (see worldToIslandUV) mirrored the island
 // north/south — old points would land on the wrong terrain (possibly water).
-const KEY = "be-island-spawns-v3";
+// v4: the island grew to 8192 m (Godot parity) — v3 world coords are ~2.4×
+// too small and would drop the player in the wrong place.
+const KEY = "be-island-spawns-v4";
 
 export const SpawnStore = {
   get(): IslandSpawns {

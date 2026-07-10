@@ -35,6 +35,13 @@ export interface IScene {
   enter(): Promise<void> | void;
   /** Per-frame update. dt = seconds since last frame, elapsed = total seconds. */
   update(dt: number, elapsed: number): void;
+  /**
+   * Optional extra render passes drawn AFTER the main scene render each frame
+   * (e.g. the island's live minimap: a top-down render-to-texture + a scissored
+   * composite into the HUD corner). Runs on the shared renderer — implementations
+   * must restore any state they change (render target, viewport, autoClear).
+   */
+  renderOverlays?(renderer: THREE.WebGLRenderer): void;
   /** Called on window resize. */
   resize(width: number, height: number): void;
   /** Tear down listeners, geometry, DOM, etc. */

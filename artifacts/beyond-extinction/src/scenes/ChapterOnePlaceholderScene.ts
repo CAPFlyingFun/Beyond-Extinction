@@ -159,14 +159,14 @@ class ChapterOnePlaceholderScene implements IScene {
   // treeline).
   // A much larger roam area: a wide beach that runs from out in the shallow
   // water (negative Z — you can wade in) up to the dunes/treeline inland.
-  // Roam the real island: from out in the shallows (+Z, south of the arrival
-  // beach) inland toward the volcano in the north (−Z). Mirrored about the
-  // island centre with the true-aerial-view flip (map spans z ≈ −28..272).
+  // Roam the WHOLE island: the heightmap spans x ±150·MS, z −28..272·MS —
+  // these bounds cover all of it plus a swimmable shallows margin, so nothing
+  // stops you mid-island (the volcano included).
   private static readonly PLAY = {
-    minX: -165 * MAP_SCALE,
-    maxX: 165 * MAP_SCALE,
-    minZ: 44 * MAP_SCALE,
-    maxZ: 274 * MAP_SCALE,
+    minX: -170 * MAP_SCALE,
+    maxX: 170 * MAP_SCALE,
+    minZ: -48 * MAP_SCALE,
+    maxZ: 292 * MAP_SCALE,
   };
 
   constructor(private ctx: SceneContext) {
@@ -356,7 +356,9 @@ class ChapterOnePlaceholderScene implements IScene {
       // save it as Jack's or Sarah's island start point (persists to localStorage).
       this.registerSpawnTools();
       // Satellite minimap (tap to open the full map with pinch-zoom/pan).
-      this.islandMap = new IslandMap(this.ctx.uiLayer);
+      // Passing the world scene switches the minimap to a LIVE top-down render
+      // (what's really there — no baked image, immune to world rescales).
+      this.islandMap = new IslandMap(this.ctx.uiLayer, this.scene);
     } else {
       // Legacy directed-gameplay path (click-to-move + cinematic story).
       this.unsubClick = this.ctx.input.onClick(() => this.handleClick());
@@ -669,9 +671,11 @@ class ChapterOnePlaceholderScene implements IScene {
 
   private async buildJungle(): Promise<void> {
     if (this.disposed) return;
-    // Ground cover: keep the instanced bushes; the canopy layer is now the
-    // five real Meshy tree species (islandTrees), placed by elevation band
-    // with chunked instancing + shader wind sway.
+    // Foliage + trees are OFF while the 8192 m terrain is being signed off —
+    // bare ground textures make the new scale and slopes easy to judge. Flip
+    // this back on (and retune islandTrees spacing to metres) afterwards.
+    const FOLIAGE_ENABLED = false;
+    if (!FOLIAGE_ENABLED) return;
     this.scene.add(buildIslandFoliage({ trees: false }));
     const trees = await loadIslandTrees();
     if (this.disposed) return;
@@ -1095,6 +1099,11 @@ class ChapterOnePlaceholderScene implements IScene {
         Math.abs(Math.sin(elapsed * 4)) * 0.3;
       this.dodo.rotation.y = this.hissDone ? Math.PI : Math.sin(elapsed * 0.6) * 0.4;
     }
+  }
+
+  /** Post-main-render passes: the island map's live top-down minimap. */
+  renderOverlays(renderer: THREE.WebGLRenderer): void {
+    this.islandMap?.renderLive(renderer);
   }
 
   resize(width: number, height: number): void {

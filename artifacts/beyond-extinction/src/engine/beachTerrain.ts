@@ -18,13 +18,15 @@ import { assetUrl } from "./assets";
 
 /**
  * World scale. The MeshyAI island is authored tiny (~76 m across, ~15 m tall).
- * The design — and the Godot build — call for a ~3.2 km island with a 350 m
- * volcano. Jack is a fixed size (~1.8 m ≈ 0.28 world units·m⁻¹), so we blow the
+ * The Godot build ships Hanifat at 8192 m across (2048 px heightmap at 4 m/px —
+ * "comparable to ARK: The Island", per its generator) with a 350 m volcano.
+ * Jack is a fixed size (~1.8 m ≈ 0.28125 m per world unit), so we blow the
  * terrain up in world units. Horizontal and vertical scales differ so we hit
- * BOTH the width (~3.2 km) and the height (350 m) targets; the island ends up
- * proportionally gentler than the raw cone, which also helps walkability.
+ * BOTH the width (8192 m) and the height (350 m) targets; the same 350 m spread
+ * over the wider island also makes every slope ~2.6× gentler than the old
+ * ~3.1 km version — the "huge map with gentle slopes" feel of the Godot build.
  */
-export const MAP_SCALE = 40.8; // horizontal — island ≈ 3.12 km across (matches blueprint scale bar)
+export const MAP_SCALE = 8192 / 84.375; // horizontal — island = 8192 m across (84.375 = 300 map-units × 0.28125 m/u)
 export const HEIGHT_SCALE = 24; // vertical — volcano ≈ 350 m tall (Godot parity)
 
 const HM_SPAN = 300 * MAP_SCALE; // world units the heightmap spans
@@ -42,11 +44,25 @@ const HM_MAXH = (1 - HM_SEA) * HM_SCALE; // world height at full-white grey (sum
 export const SHORE_Z = -2 * MAP_SCALE;
 /** Approx world centre of the island (terrain + water are built around this). */
 export const ISLAND_CENTER = { x: 0, z: HM_CZ };
-/** Height (world units) above which the terrain is bare volcanic rock. */
-export const VOLCANO_ROCK_H = 40 * HEIGHT_SCALE;
+/** Height (world units) above which the terrain is bare volcanic rock.
+ *  Godot parity: crags/volcano rock begins at ~250 m (island_biomes.gd). */
+export const VOLCANO_ROCK_H = 37 * HEIGHT_SCALE; // 888 u ≈ 250 m
 
 /** Real-world metres per world unit (Jack is 6.4 u ≈ 1.8 m tall). */
 export const METERS_PER_UNIT = 1.8 / 6.4;
+
+/**
+ * Landing-zone flatten (Godot parity: island_terrain.gd LANDING_*): the
+ * arrival beach is perfectly flat within 55 m of the default spawn at 4 m
+ * above sea level, feathered back into the natural terrain by 200 m — so
+ * Jack & Sarah always wash up on a gentle pad no matter how the heightmap
+ * slopes there. Keep the centre in sync with JACK_SPAWN (ChapterOne scene).
+ */
+const LANDING_X = -106 * MAP_SCALE;
+const LANDING_Z = 182 * MAP_SCALE;
+const LANDING_FLAT_R = 55 / METERS_PER_UNIT;
+const LANDING_FEATHER_R = 200 / METERS_PER_UNIT;
+const LANDING_H = 4 / METERS_PER_UNIT;
 /** World units the satellite/heightmap image spans edge-to-edge. */
 export const ISLAND_SPAN = HM_SPAN;
 /**
@@ -141,6 +157,7 @@ function proceduralHeight(x: number, z: number): number {
 
 /** Terrain height at a world XZ (heightmap when loaded, else procedural). */
 export function beachHeight(x: number, z: number): number {
+  let h: number;
   if (hmData) {
     const u = 0.5 + x / HM_SPAN;
     const v = 0.5 + (z - HM_CZ) / HM_SPAN; // image rows — same as worldToIslandUV
@@ -160,10 +177,24 @@ export function beachHeight(x: number, z: number): number {
       s(x0, y1) * (1 - tx) * ty +
       s(x1, y1) * tx * ty;
     const above = (n - HM_SEA) / (1 - HM_SEA); // 0..1 above sea level
-    if (above <= 0) return (n - HM_SEA) * HM_SCALE; // underwater — keep linear
-    return Math.pow(above, HM_APRON) * HM_MAXH; // gradual apron, summit preserved
+    h =
+      above <= 0
+        ? (n - HM_SEA) * HM_SCALE // underwater — keep linear
+        : Math.pow(above, HM_APRON) * HM_MAXH; // gradual apron, summit preserved
+  } else {
+    h = proceduralHeight(x, z);
   }
-  return proceduralHeight(x, z);
+  // Landing-zone flatten: blend to the 4 m pad near the arrival spawn.
+  const dLand = Math.hypot(x - LANDING_X, z - LANDING_Z);
+  if (dLand < LANDING_FEATHER_R) {
+    const t =
+      dLand <= LANDING_FLAT_R
+        ? 0
+        : (dLand - LANDING_FLAT_R) / (LANDING_FEATHER_R - LANDING_FLAT_R);
+    const e = t * t * (3 - 2 * t); // smoothstep out to natural terrain
+    h = LANDING_H * (1 - e) + h * e;
+  }
+  return h;
 }
 
 function smoothstep(a: number, b: number, x: number): number {
@@ -180,10 +211,10 @@ function beachColor(h: number): number[] {
   const coast = [0.34, 0.52, 0.22];
   const jungle = [0.13, 0.34, 0.12];
   const rock = [0.3, 0.29, 0.28];
-  let c = mix3(wetsand, sand, smoothstep(-1.5, 1.2, h));
-  c = mix3(c, coast, smoothstep(2.5, 8, h));
-  c = mix3(c, jungle, smoothstep(11, 26, h));
-  c = mix3(c, rock, smoothstep(VOLCANO_ROCK_H, VOLCANO_ROCK_H + 12, h));
+  let c = mix3(wetsand, sand, smoothstep(-5, 10, h));
+  c = mix3(c, coast, smoothstep(18, 34, h));
+  c = mix3(c, jungle, smoothstep(148, 195, h));
+  c = mix3(c, rock, smoothstep(VOLCANO_ROCK_H, VOLCANO_ROCK_H + 43, h));
   return c;
 }
 
@@ -257,7 +288,6 @@ function makeTerrainMaterial(aerial: THREE.Texture, g: IslandGround): THREE.Mesh
     shader.uniforms.uSpan = { value: HM_SPAN };
     shader.uniforms.uCz = { value: HM_CZ };
     shader.uniforms.uRockH = { value: VOLCANO_ROCK_H };
-    shader.uniforms.uVScale = { value: HEIGHT_SCALE }; // scales the biome-band heights
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nvarying vec3 vWXZ;\nvarying vec3 vWN;")
       .replace(
@@ -270,7 +300,7 @@ function makeTerrainMaterial(aerial: THREE.Texture, g: IslandGround): THREE.Mesh
         `#include <common>
          varying vec3 vWXZ; varying vec3 vWN;
          uniform sampler2D uReef, uSand, uGrass, uJungle, uDirt, uSwamp, uMountain, uCliff, uVolcano, uAerial;
-         uniform float uDetail, uSpan, uCz, uRockH, uVScale;
+         uniform float uDetail, uSpan, uCz, uRockH;
          float hash21(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
          float vnoise(vec2 p){
            vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
@@ -294,26 +324,24 @@ function makeTerrainMaterial(aerial: THREE.Texture, g: IslandGround): THREE.Mesh
          vec3 bw = abs(vWN); bw = pow(bw, vec3(4.0)); bw /= (bw.x + bw.y + bw.z);
          vec3 pw = vWXZ * uDetail;
          vec3 cliff = texture2D(uCliff, pw.zy).rgb * bw.x + texture2D(uCliff, pw.xz).rgb * bw.y + texture2D(uCliff, pw.xy).rgb * bw.z;
-         // Elevation bands, low -> high. Jungle dominates from just above the
-         // beach almost to the summit (the island reads lush green like the
-         // reference); bare rock only high on the volcano's flanks, bare basalt
-         // in the caldera above uRockH.
-         // Band edges are authored in "small island" height units, so scale them
-         // to the current world with uVScale (= HEIGHT_SCALE).
-         float S = uVScale;
+         // Elevation bands, low -> high — Godot parity (island_biomes.gd):
+         // beach <=6 m, coastal grass <=45 m, jungle <=160 m, highland <=250 m,
+         // volcanic rock above (uRockH ~= 250 m). Edges are world units
+         // (1 m = 3.556 u), with a little overlap so bands blend naturally.
          vec3 col = reef;
-         col = mix(col, sand,   smoothstep(-1.6 * S, 0.4 * S, h));
-         col = mix(col, grass,  smoothstep(1.5 * S, 4.0 * S, h));
-         col = mix(col, jungle, smoothstep(5.0 * S, 9.0 * S, h));
-         col = mix(col, mtn,    smoothstep(30.0 * S, 38.0 * S, h));
-         col = mix(col, volc,   smoothstep(uRockH, uRockH + 10.0 * S, h));
-         // Patchy swamp mud in the low, flat wetlands near the water.
+         col = mix(col, sand,   smoothstep(-14.0, 10.0, h));   // waterline -> beach
+         col = mix(col, grass,  smoothstep(18.0, 34.0, h));    // beach ends ~6 m
+         col = mix(col, jungle, smoothstep(148.0, 195.0, h));  // coast -> jungle ~45 m
+         col = mix(col, mtn,    smoothstep(555.0, 620.0, h));  // jungle -> highland ~160 m
+         col = mix(col, volc,   smoothstep(uRockH, uRockH + 90.0, h)); // crags/volcano ~250 m
+         // Patchy swamp mud in the low, flat wetlands near the water (Godot's
+         // swamp lives below ~30 m elevation).
          float nS = vnoise(vWXZ.xz * 0.035);
-         float swampM = smoothstep(-0.5 * S, 1.5 * S, h) * (1.0 - smoothstep(3.5 * S, 6.5 * S, h)) * smoothstep(0.45, 0.75, nS);
+         float swampM = smoothstep(-2.0, 8.0, h) * (1.0 - smoothstep(85.0, 110.0, h)) * smoothstep(0.45, 0.75, nS);
          col = mix(col, swamp, swampM * 0.75);
          // Patchy dirt trails through the jungle band.
          float nD = vnoise(vWXZ.xz * 0.05 + 13.0);
-         float dirtM = smoothstep(6.5 * S, 10.0 * S, h) * (1.0 - smoothstep(17.0 * S, 21.0 * S, h)) * smoothstep(0.55, 0.8, nD);
+         float dirtM = smoothstep(170.0, 230.0, h) * (1.0 - smoothstep(480.0, 540.0, h)) * smoothstep(0.55, 0.8, nD);
          col = mix(col, dirt, dirtM * 0.65);
          // Only genuinely steep faces -> coastal cliff rock; gentle hillsides
          // stay jungle so the island reads green like the reference.
@@ -342,8 +370,12 @@ export function buildBeachTerrain(
   colorMap?: THREE.Texture | null,
   ground?: IslandGround | null,
 ): THREE.Mesh {
-  const SIZE = 440 * MAP_SCALE;
-  const SEG = 512; // match the heightmap resolution (further SEG buys nothing)
+  // Mesh covers the heightmap plus a ~30-map-unit ocean-floor skirt each side.
+  // At 8192 m across, 512 segments give ~19 m cells — right beside the Godot
+  // build's 16 m (its 8192 m / GRID 512). The old 440-unit span wasted ~2/5 of
+  // the vertex budget on flat deep-ocean floor.
+  const SIZE = 360 * MAP_SCALE;
+  const SEG = 512;
   const geo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
   geo.rotateX(-Math.PI / 2); // into XZ (y up)
   geo.translate(0, 0, HM_CZ); // vertices now hold real world coords
