@@ -1075,14 +1075,15 @@ class ChapterOnePlaceholderScene implements IScene {
     if (this.firstPerson && this.player) {
       // Drive first-person movement, clamped to the play area, then ride the
       // beach surface so the camera walks the terrain instead of a flat plane.
+      // Effective stance, clamped by the slope under the player: you can't crawl
+      // a grade > 5° or crouch one > 15°, so holding that key on steeper ground
+      // falls back to the next stance that fits — never a frozen posture you
+      // can't move in. Drives BOTH the move gate and the eye height below.
+      const posture = this.effectivePosture(this.camera.position.x, this.camera.position.z);
       const res = this.player.update(dt, (from, to) => {
-        // Slope gate: a stance can only traverse ground up to its steepness
-        // limit — crawl ≤5°, crouch ≤15°, walk/run ≤45°; steeper than 45° needs
-        // gear we don't have yet. If the destination is too steep, try sliding
-        // along one axis (walk the contour) before blocking outright.
-        const input = this.ctx.input;
-        const limit = input.isCrawling() ? 5 : input.isCrouching() ? 15 : 45;
-        const ok = (x: number, z: number) => beachSlopeDeg(x, z) <= limit;
+        // Move gate: reject a step onto ground steeper than the stance allows;
+        // try sliding along one axis (walk the contour) before blocking.
+        const ok = (x: number, z: number) => beachSlopeDeg(x, z) <= posture.limit;
         const c = this.clampToPlay(to.x, to.z);
         if (ok(c.x, c.z)) return { x: c.x, y: to.y, z: c.z };
         const cx = this.clampToPlay(to.x, from.z); // slide in X only
@@ -1095,14 +1096,10 @@ class ChapterOnePlaceholderScene implements IScene {
       // locked there. Gravity pulls it down; a jump launches it up; walking off a
       // ledge lets it fall. Gentle slopes (drop < STEP per frame) stay grounded so
       // you don't float downhill.
-      // Posture: ease the eye height toward stand / crouch / crawl so the camera
-      // visibly drops when you crouch (C) or crawl (X).
-      const targetEye = this.ctx.input.isCrawling()
-        ? ChapterOnePlaceholderScene.CRAWL_EYE
-        : this.ctx.input.isCrouching()
-          ? ChapterOnePlaceholderScene.CROUCH_EYE
-          : ChapterOnePlaceholderScene.EYE;
-      this.eyeOffset += (targetEye - this.eyeOffset) * Math.min(1, dt * 9);
+      // Posture: ease the eye height toward the EFFECTIVE stance (slope-clamped),
+      // so on ground too steep to crawl you crouch/stand instead of dropping to
+      // a stuck prone camera.
+      this.eyeOffset += (posture.eye - this.eyeOffset) * Math.min(1, dt * 9);
       const cx = this.camera.position.x;
       const cz = this.camera.position.z;
       const yaw = this.player.yaw;
@@ -1204,6 +1201,23 @@ class ChapterOnePlaceholderScene implements IScene {
     sun.target.position.set(c.x, beachHeight(c.x, c.z), c.z);
     sun.position.set(c.x + dir.x * d, sun.target.position.y + dir.y * d, c.z + dir.z * d);
     sun.target.updateMatrixWorld();
+  }
+
+  /**
+   * The stance actually in effect at (x,z), clamped by the terrain slope there:
+   * crawl needs ≤5°, crouch ≤15°, else walk/run. Holding a key on ground too
+   * steep for it falls back to the next stance that fits, so you can never be
+   * stuck in a posture that can't move. Returns that stance's slope limit (for
+   * the move gate) and eye height (for the camera).
+   */
+  private effectivePosture(x: number, z: number): { limit: number; eye: number } {
+    const S = ChapterOnePlaceholderScene;
+    const slope = beachSlopeDeg(x, z);
+    const input = this.ctx.input;
+    if (input.isCrawling() && slope <= 5) return { limit: 5, eye: S.CRAWL_EYE };
+    if ((input.isCrawling() || input.isCrouching()) && slope <= 15)
+      return { limit: 15, eye: S.CROUCH_EYE };
+    return { limit: 45, eye: S.EYE };
   }
 
   /** Post-main-render passes: the island map's live top-down minimap. */
