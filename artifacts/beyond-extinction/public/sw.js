@@ -18,7 +18,7 @@
  *
  * Bump VERSION whenever the caching logic changes to retire old caches.
  */
-const VERSION = "v34";
+const VERSION = "v35";
 const CACHE = `beyond-extinction-${VERSION}`;
 
 // Base path this SW is served from, e.g. "/Beyond-Extinction/" or "/".
@@ -56,6 +56,12 @@ const OPTIONAL = [
   BASE + "assets/textures/mountain.jpg",
   BASE + "assets/textures/cliff.jpg",
   BASE + "assets/textures/volcano.jpg",
+  // Island tree species — cached best-effort so the jungle works offline.
+  BASE + "assets/models/trees/palm.glb",
+  BASE + "assets/models/trees/fern.glb",
+  BASE + "assets/models/trees/banyan.glb",
+  BASE + "assets/models/trees/monkeypuzzle.glb",
+  BASE + "assets/models/trees/conifer.glb",
 ];
 
 self.addEventListener("install", (event) => {

@@ -3,6 +3,7 @@ import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { loadModel, loadTexture } from "../engine/assets";
 import { updateBillboardsYAxis } from "../engine/Billboard";
 import { buildIslandFoliage } from "../engine/islandFoliage";
+import { loadIslandTrees } from "../engine/islandTrees";
 import { Navigator } from "../engine/Navigator";
 import { PlayerController } from "../engine/PlayerController";
 import { InventoryOverlay } from "../engine/InventoryOverlay";
@@ -94,6 +95,8 @@ class ChapterOnePlaceholderScene implements IScene {
   private oceanUniforms!: OceanWater["uniforms"];
   private dodo!: THREE.Group;
   private billboards: THREE.Mesh[] = [];
+  // Wind + draw-distance tick for the instanced tree species (see islandTrees).
+  private treesUpdate?: (dt: number, camPos: THREE.Vector3) => void;
 
   private jack!: THREE.Group;
   private sarah!: THREE.Group;
@@ -666,13 +669,15 @@ class ChapterOnePlaceholderScene implements IScene {
 
   private async buildJungle(): Promise<void> {
     if (this.disposed) return;
-    // Placeholder bark until real tree models: the Godot walnut wood texture.
-    const trunkMap = await loadTexture("assets/textures/wood_trunk.jpg");
+    // Ground cover: keep the instanced bushes; the canopy layer is now the
+    // five real Meshy tree species (islandTrees), placed by elevation band
+    // with chunked instancing + shader wind sway.
+    this.scene.add(buildIslandFoliage({ trees: false }));
+    const trees = await loadIslandTrees();
     if (this.disposed) return;
-    // Instanced trees + bushes placed by elevation over the real island: they
-    // fill the land between the beach and the bare volcano rock. The draped
-    // aerial already reads as jungle, so density is moderate — 3D relief on top.
-    this.scene.add(buildIslandFoliage({ treeMinHeight: 2.5, treeDensity: 0.5, trunkMap }));
+    this.scene.add(trees.group);
+    this.treesUpdate = trees.update;
+    console.info(`[Beyond Extinction] island trees placed: ${trees.count}`);
   }
 
   /**
@@ -1056,6 +1061,7 @@ class ChapterOnePlaceholderScene implements IScene {
       }
       this.applyLocomotion(this.sarah, false, dt);
       for (const m of this.mixers) m.update(dt);
+      this.treesUpdate?.(dt, this.camera.position);
       for (const h of this.highlights) h.update(dt);
       updateBillboardsYAxis(this.billboards, this.camera.position);
       if (this.dodo) {
@@ -1076,6 +1082,7 @@ class ChapterOnePlaceholderScene implements IScene {
     // Keep the walking hero on the terrain surface (Sarah is static until reached).
     if (this.jack) this.jack.position.y = beachHeight(this.jack.position.x, this.jack.position.z);
     for (const m of this.mixers) m.update(dt);
+    this.treesUpdate?.(dt, this.camera.position);
 
     this.cameraDirector?.update(this.cameraState(), dt);
     for (const h of this.highlights) h.update(dt);

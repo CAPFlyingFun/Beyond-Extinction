@@ -31,6 +31,9 @@ export interface FoliageOptions {
   areaZ?: number;
   /** Optional bark/wood texture for the trunks (placeholder until real models). */
   trunkMap?: THREE.Texture | null;
+  /** Set false to skip the low-poly placeholder trees (bushes only) — used now
+   *  that the real tree models (islandTrees) cover the canopy layer. */
+  trees?: boolean;
 }
 
 // ── deterministic hash (stable per grid cell) ────────────────────────────────
@@ -61,6 +64,7 @@ export function buildIslandFoliage(opts: FoliageOptions = {}): THREE.Group {
 
   const TREE_STEP = 11 * PLANT; // spacing scales with tree size → constant density
   const dummy = new THREE.Object3D();
+  if (opts.trees !== false)
   for (let x = CX - AX; x <= CX + AX; x += TREE_STEP) {
     for (let z = CZ - AZ; z <= CZ + AZ; z += TREE_STEP) {
       const i = Math.round(x / TREE_STEP);

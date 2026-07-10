@@ -1,0 +1,58 @@
+<!doctype html>
+<!-- Dev-only GLB inspector: /tree-viewer.html?m=assets/tmp-trees/t1.glb -->
+<html>
+<head>
+<meta charset="utf-8" />
+<style>html,body{margin:0;height:100%;background:#cfd8dc}canvas{display:block}#info{position:fixed;top:8px;left:8px;font:12px monospace;background:rgba(255,255,255,.85);padding:6px;white-space:pre}</style>
+<script type="importmap">
+{"imports":{"three":"/node_modules/three/build/three.module.js","three/addons/":"/node_modules/three/examples/jsm/"}}
+</script>
+</head>
+<body>
+<div id="info">loading…</div>
+<script type="module">
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
+
+const url = new URLSearchParams(location.search).get("m") || "assets/models/trees/palm.glb";
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xcfd8dc);
+const cam = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.01, 1000);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x667755, 1.2));
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(3, 6, 4);
+scene.add(sun);
+
+const draco = new DRACOLoader();
+draco.setDecoderPath("/draco/");
+const loader = new GLTFLoader();
+loader.setDRACOLoader(draco);
+loader.load("/" + url, (g) => {
+  const root = g.scene;
+  scene.add(root);
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3());
+  const c = box.getCenter(new THREE.Vector3());
+  const d = Math.max(size.x, size.y, size.z);
+  cam.position.set(c.x + d * 0.9, c.y + d * 0.35, c.z + d * 1.1);
+  cam.lookAt(c);
+  let meshes = 0, tris = 0, skinned = 0;
+  root.traverse((o) => {
+    if (o.isMesh) { meshes++; tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; if (o.isSkinnedMesh) skinned++; }
+  });
+  document.getElementById("info").textContent =
+    `${url}\nsize: ${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)}\n` +
+    `meshes: ${meshes} (skinned ${skinned})  tris: ${Math.round(tris)}\n` +
+    `clips: ${g.animations.map((a) => `${a.name}(${a.duration.toFixed(1)}s)`).join(", ") || "none"}`;
+  window.__loaded = true;
+  renderer.render(scene, cam);
+}, undefined, (e) => { document.getElementById("info").textContent = "ERROR " + e; window.__loaded = "error"; });
+function loop(){ requestAnimationFrame(loop); renderer.render(scene, cam); }
+loop();
+</script>
+</body>
+</html>
