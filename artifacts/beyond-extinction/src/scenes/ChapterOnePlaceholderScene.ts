@@ -1176,7 +1176,7 @@ class ChapterOnePlaceholderScene implements IScene {
       if (this.jack) {
         const bodyDrop = ChapterOnePlaceholderScene.EYE - this.eyeOffset; // 0 stand, + when low
         this.jack.position.set(cx, beachHeight(cx, cz) - bodyDrop, cz);
-        this.jack.rotation.y = this.player.yaw;
+        this.jack.rotation.y = this.player.yaw + Math.PI; // model forward is +Z, look yaw is -Z
         this.applyLocomotion(this.jack, res.moving, dt);
       }
       // Godot cam_fwd_offset: nudge the eye forward of the head bone along the
