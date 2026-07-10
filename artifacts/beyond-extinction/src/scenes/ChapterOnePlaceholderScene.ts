@@ -132,8 +132,8 @@ class ChapterOnePlaceholderScene implements IScene {
   private static readonly SUN_DIR = new THREE.Vector3(0.6, 0.66, -0.33).normalize();
   private static readonly SUN_DIST = 900;
   private static readonly SHADOW_HALF = 500;
-  private static readonly GRAVITY = 38; // world u/s² (~9.8 m/s²)
-  private static readonly JUMP_SPEED = 18; // world u/s (~1.3 m jump)
+  private static readonly GRAVITY = 34.84; // 9.8 m/s² (0.28125 m/u)
+  private static readonly JUMP_SPEED = 17.07; // 4.8 m/s (Godot jump velocity)
   private static readonly STEP = 3; // step-down snap tolerance (u) so gentle slopes stay grounded
   private vy = 0; // vertical velocity (world u/s)
   private camY = 0; // integrated eye height (the controller resets camera.y each frame)
@@ -361,11 +361,11 @@ class ChapterOnePlaceholderScene implements IScene {
       // the camera rides the terrain surface each frame (see update()).
       this.player = new PlayerController(this.camera, this.ctx.input, {
         eyeHeight: ChapterOnePlaceholderScene.EYE,
-        // Realistic human pace. Full joystick = WALK at 3 mph (1.34 m/s ≈ 4.76
-        // u/s); hold-Shift / the Run toggle sprints at 10 mph (4.47 m/s). The
-        // 8 km island is a long walk on foot by design — mounts/vehicles later.
-        moveSpeed: 4.76,
-        runMultiplier: 3.34,
+        // Godot base_character.gd parity (m/s → u/s at 0.28125 m/u): walk 3.2,
+        // run (Shift/toggle) 6.2 = ×1.9375, crawl (Ctrl/toggle) 1.4 = ×0.4375.
+        moveSpeed: 11.38, // 3.2 m/s
+        runMultiplier: 1.9375, // 6.2 m/s
+        crawlMultiplier: 0.4375, // 1.4 m/s
         lookSensitivity: this.settings.lookSensitivity,
       });
       this.player.placeAt(this.jack.position.x, this.jack.position.z, this.jackFacingDeg);

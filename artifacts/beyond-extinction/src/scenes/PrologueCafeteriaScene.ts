@@ -380,10 +380,10 @@ class PrologueCafeteriaScene implements IScene {
   private readonly ownership = new CameraOwnership("cinematic");
   private player!: PlayerController;
   // First-person hop physics (jump button / Space). This scene runs at 4u = 1m,
-  // so gravity ≈ 9.8 m/s² × 4 and the jump speed gives a modest ~0.45 m hop.
+  // Godot parity at 4 u/m: gravity 9.8 m/s² ×4, jump 4.8 m/s ×4 (~1.17 m apex).
   private static readonly FP_EYE = 6.3;
-  private static readonly FP_GRAVITY = 39;
-  private static readonly FP_JUMP_SPEED = 12;
+  private static readonly FP_GRAVITY = 39.2;
+  private static readonly FP_JUMP_SPEED = 19.2;
   private fpVy = 0;
   private fpCamY = PrologueCafeteriaScene.FP_EYE;
   private fpOnGround = true;
@@ -631,8 +631,11 @@ class PrologueCafeteriaScene implements IScene {
     // 7.2, nav speed 16), not real-world meters.
     this.player = new PlayerController(this.camera, this.ctx.input, {
       eyeHeight: PrologueCafeteriaScene.FP_EYE,
-      moveSpeed: 14,
-      runMultiplier: 1.5, // Shift / Run toggle jogs across the lab
+      // Godot base_character.gd parity at this scene's 4 u/m: walk 3.2 m/s,
+      // run ×1.9375 (6.2 m/s), crawl ×0.4375 (1.4 m/s).
+      moveSpeed: 12.8,
+      runMultiplier: 1.9375,
+      crawlMultiplier: 0.4375,
       lookSensitivity: this.lookSensitivity(),
     });
     this.player.onInteract(() => this.fpTryInteract());

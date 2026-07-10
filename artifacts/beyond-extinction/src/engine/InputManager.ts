@@ -53,7 +53,9 @@ export class InputManager {
   private fpPromptEl: HTMLDivElement | null = null;
   private fpInteractBtn: HTMLButtonElement | null = null;
   private fpRunBtn: HTMLButtonElement | null = null;
+  private fpCrawlBtn: HTMLButtonElement | null = null;
   private runToggled = false; // mobile Run toggle (desktop uses hold-Shift)
+  private crawlToggled = false; // mobile Crawl toggle (desktop uses hold-Ctrl)
   private readonly fpPointers = new Map<number, FpPointerState>();
   private readonly fpJoy = { x: 0, y: 0 }; // joystick vector, forward = +y
   private readonly fpLook = { x: 0, y: 0 }; // accumulated raw drag delta (px)
@@ -212,6 +214,15 @@ export class InputManager {
     return this.runToggled || this.isDown("ShiftLeft", "ShiftRight");
   }
 
+  /**
+   * True while the player should CRAWL (slow, real-walking-pace state): hold-Ctrl
+   * on desktop, or the latched mobile Crawl toggle. Takes precedence over run
+   * (see PlayerController.update).
+   */
+  isCrawling(): boolean {
+    return this.crawlToggled || this.isDown("ControlLeft", "ControlRight");
+  }
+
   /** Drag-look delta (raw px) accumulated since the last call; resets on read. */
   consumeLook(): { x: number; y: number } {
     const out = { x: this.fpLook.x, y: this.fpLook.y };
@@ -263,8 +274,10 @@ export class InputManager {
     this.fpJoy.y = 0;
     this.fpLook.x = 0;
     this.fpLook.y = 0;
-    this.runToggled = false; // don't leave run latched across FP sessions
+    this.runToggled = false; // don't leave run/crawl latched across FP sessions
+    this.crawlToggled = false;
     this.fpRunBtn?.classList.remove("is-active");
+    this.fpCrawlBtn?.classList.remove("is-active");
     if (this.fpJoyBase) this.fpJoyBase.style.display = "none";
     if (this.fpJoyStick) {
       this.fpJoyStick.style.transform = "translate(-50%, -50%)";
@@ -332,10 +345,34 @@ export class InputManager {
       e.preventDefault();
       e.stopPropagation();
       this.runToggled = !this.runToggled;
+      if (this.runToggled) {
+        this.crawlToggled = false;
+        this.fpCrawlBtn?.classList.remove("is-active");
+      }
       runBtn.classList.toggle("is-active", this.runToggled);
     });
     layer.appendChild(runBtn);
     this.fpRunBtn = runBtn;
+
+    // Crawl button (mobile) — also a toggle, mutually exclusive with Run. PC
+    // uses hold-Ctrl. Crawl is the slow, real-walking-pace state (see isCrawling).
+    const crawlBtn = document.createElement("button");
+    crawlBtn.className = "be-fp-crawl";
+    crawlBtn.type = "button";
+    crawlBtn.setAttribute("aria-label", "Crawl");
+    crawlBtn.textContent = "CRWL";
+    crawlBtn.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.crawlToggled = !this.crawlToggled;
+      if (this.crawlToggled) {
+        this.runToggled = false;
+        this.fpRunBtn?.classList.remove("is-active");
+      }
+      crawlBtn.classList.toggle("is-active", this.crawlToggled);
+    });
+    layer.appendChild(crawlBtn);
+    this.fpCrawlBtn = crawlBtn;
 
     layer.addEventListener("pointerdown", this.onFpPointerDown);
     layer.addEventListener("pointermove", this.onFpPointerMove);
