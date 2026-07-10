@@ -138,6 +138,11 @@ export class AnimationEditor {
     this.wasFp = this.deps.input.fpControlsActive;
     if (this.wasFp) this.deps.input.enableFpControls(false);
     this.deps.input.setEnabled(false);
+    // Isolate the editor: hide every other HUD/menu overlay in the UI layer so
+    // the island minimap, first-person buttons, main-menu splash, etc. can't
+    // show through or overlap it (the 3D character is on the canvas behind, and
+    // the editor scene fills that canvas, so we only need to hide sibling DOM).
+    this.deps.uiLayer.classList.add("be-ae-open");
     this.buildHud();
     // Match the render camera to the canvas NOW — resize() otherwise only fires
     // on a window-resize event, so opening on a wide desktop left the aspect at
@@ -157,6 +162,7 @@ export class AnimationEditor {
     this.detachListeners();
     this.root?.remove();
     this.root = undefined;
+    this.deps.uiLayer.classList.remove("be-ae-open");
     this.deps.input.setEnabled(true);
     if (this.wasFp) this.deps.input.enableFpControls(true);
     this.deps.onOpenChange?.(false);
@@ -165,7 +171,24 @@ export class AnimationEditor {
 
   update(dt: number): void {
     if (!this.open) return;
-    if (this.playing && this.mixer) this.mixer.update(dt);
+    if (this.playing && this.mixer) {
+      this.mixer.update(dt);
+      // Advance the scrubber + time label with playback so the playhead tracks
+      // the frames (it was frozen — the mixer played but the UI never moved).
+      if (this.playAction) {
+        this.scrubT = this.playAction.time % Math.max(this.duration, 1e-3);
+        this.updatePlayhead();
+      }
+    }
+  }
+
+  /** Move just the scrub thumb + time label to the current scrubT (no tick
+   *  rebuild) — cheap enough to call every frame during playback. */
+  private updatePlayhead(): void {
+    const scrub = this.root?.querySelector<HTMLInputElement>(".be-ae__scrub");
+    if (scrub) scrub.value = String(Math.round((this.scrubT / Math.max(this.duration, 1e-3)) * 1000));
+    const time = this.root?.querySelector(".be-ae__time");
+    if (time) time.textContent = `${this.scrubT.toFixed(2)}s`;
   }
 
   resize(w: number, h: number): void {

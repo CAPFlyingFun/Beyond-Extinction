@@ -1903,12 +1903,15 @@ body {
 .be-ae {
   position: fixed;
   inset: 0;
-  z-index: 61;
+  z-index: 120; /* above every game HUD layer (minimap 60, FP, inventory, menu) */
   pointer-events: none;
   font-family: ui-monospace, monospace;
   color: #e8f3ff;
 }
 .be-ae > * { pointer-events: auto; }
+/* While the Animation Editor is open, hide every other overlay in the UI layer
+   so nothing (island minimap, FP buttons, main-menu splash) shows through it. */
+#be-ui-layer.be-ae-open > *:not(.be-ae) { display: none !important; }
 .be-ae__bar {
   position: absolute;
   top: 0; left: 0; right: 0;
