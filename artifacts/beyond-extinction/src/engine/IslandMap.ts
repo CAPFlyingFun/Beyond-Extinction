@@ -1,6 +1,11 @@
 import * as THREE from "three";
 import { assetUrl } from "./assets";
-import { worldToIslandUV, ISLAND_SPAN, METERS_PER_UNIT } from "./beachTerrain";
+import {
+  worldToIslandUV,
+  ISLAND_SPAN,
+  ISLAND_CENTER,
+  METERS_PER_UNIT,
+} from "./beachTerrain";
 import { getSettings, subscribeSettings, type MinimapCorner } from "./Settings";
 
 /**
@@ -29,9 +34,11 @@ const FOG_W = 256; // fog-mask resolution
 // render of what's actually there — no baked image, no scaling worries. The
 // RTT refreshes at ~15 Hz; the heading-up rotation is applied every frame by
 // spinning the composited circle, so turning stays silky.
-const LIVE_RT_SIZE = 256; // top-down render resolution
+const LIVE_RT_SIZE = 256; // minimap top-down render resolution
 const LIVE_CAM_Y = 3000; // fixed camera height (volcano summit ≈ 1253 u)
 const LIVE_REFRESH_MS = 66; // ~15 Hz world re-render
+const FULL_RT_SIZE = 1536; // full-map top-down render resolution (whole island)
+const FULL_CAM_Y = 4000; // above the volcano summit for the whole-island shot
 /** Scene-graph names hidden from the map pass (trees read as noise from above;
  *  swap for a dimmed-opacity pass later if preferred). */
 const LIVE_HIDE = new Set(["island-trees", "island-foliage"]);
@@ -68,6 +75,12 @@ export class IslandMap {
   private liveMesh?: THREE.Mesh;
   private lastLive = 0;
   private readonly vp = new THREE.Vector4();
+  // Full-map live snapshot: a one-off top-down render of the WHOLE island into
+  // a canvas (drawn by the 2D full-map compositor in place of the baked photo).
+  private fullRT?: THREE.WebGLRenderTarget;
+  private fullCamO?: THREE.OrthographicCamera;
+  private fullImg?: HTMLCanvasElement;
+  private fullDirty = false;
 
   constructor(
     private readonly parent: HTMLElement,
@@ -131,7 +144,17 @@ export class IslandMap {
    * showing the 3D view underneath. All renderer state is restored.
    */
   renderLive(renderer: THREE.WebGLRenderer): void {
-    if (!this.world || this.full) return; // full-screen map open → HUD hidden anyway
+    if (!this.world) return;
+    if (this.full) {
+      // Full map open: render the whole island once into fullImg, then let the
+      // 2D compositor (drawFull) pan/zoom it. The minimap HUD is hidden anyway.
+      if (this.fullDirty) {
+        this.renderFullSnapshot(renderer);
+        this.fullDirty = false;
+        this.drawFull();
+      }
+      return;
+    }
     if (!this.rt) this.initLive();
     const rt = this.rt!;
     const now = performance.now();
@@ -189,6 +212,71 @@ export class IslandMap {
       new THREE.MeshBasicMaterial({ map: this.rt.texture, toneMapped: false }),
     );
     this.compScene.add(this.liveMesh);
+  }
+
+  /**
+   * Render the whole island top-down into fullImg — the live equivalent of the
+   * baked satellite photo, framed to EXACTLY the heightmap span so worldToIslandUV
+   * (used for the fog + player marker) lines up pixel-for-pixel. Read back once
+   * per map-open (terrain is static); GL rows come bottom-up so we flip into the
+   * canvas to match the image-top = north convention.
+   */
+  private renderFullSnapshot(renderer: THREE.WebGLRenderer): void {
+    const N = FULL_RT_SIZE;
+    const half = ISLAND_SPAN / 2;
+    if (!this.fullRT) {
+      // sRGB target: readRenderTargetPixels then returns display-ready bytes, so
+      // blitting them to the 2D map canvas keeps the terrain's real brightness
+      // (a linear target would read back dark once shown as sRGB).
+      this.fullRT = new THREE.WebGLRenderTarget(N, N, {
+        depthBuffer: true,
+        colorSpace: THREE.SRGBColorSpace,
+      });
+      this.fullCamO = new THREE.OrthographicCamera(-half, half, half, -half, 1, FULL_CAM_Y + 1000);
+    }
+    const cam = this.fullCamO!;
+    cam.position.set(ISLAND_CENTER.x, FULL_CAM_Y, ISLAND_CENTER.z);
+    cam.up.set(0, 0, -1); // world −Z (north) at the top
+    cam.lookAt(ISLAND_CENTER.x, 0, ISLAND_CENTER.z);
+    cam.updateProjectionMatrix();
+
+    const hidden: THREE.Object3D[] = [];
+    this.world!.traverse((o) => {
+      if (LIVE_HIDE.has(o.name) && o.visible) {
+        o.visible = false;
+        hidden.push(o);
+      }
+    });
+    const prev = renderer.getRenderTarget();
+    renderer.setRenderTarget(this.fullRT);
+    renderer.render(this.world!, cam);
+    const buf = new Uint8Array(N * N * 4);
+    renderer.readRenderTargetPixels(this.fullRT, 0, 0, N, N, buf);
+    renderer.setRenderTarget(prev);
+    for (const o of hidden) o.visible = true;
+
+    if (!this.fullImg) {
+      this.fullImg = document.createElement("canvas");
+      this.fullImg.width = this.fullImg.height = N;
+    }
+    const ctx = this.fullImg.getContext("2d")!;
+    const id = ctx.createImageData(N, N);
+    const row = N * 4;
+    for (let y = 0; y < N; y++) {
+      id.data.set(buf.subarray((N - 1 - y) * row, (N - y) * row), y * row);
+    }
+    ctx.putImageData(id, 0, 0);
+  }
+
+  /** The full map's image source: the live island snapshot when available,
+   *  else the baked satellite photo. */
+  private fullSource(): HTMLCanvasElement | HTMLImageElement {
+    return this.world ? (this.fullImg ??= this.blankFull()) : this.img;
+  }
+  private blankFull(): HTMLCanvasElement {
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = FULL_RT_SIZE;
+    return cv;
   }
 
   /** Clear all exploration (fog back to nothing). */
@@ -332,7 +420,9 @@ export class IslandMap {
 
   // ── full-screen map ────────────────────────────────────────────────────────
   private openFull(): void {
-    if (this.full || !this.ready) return;
+    if (this.full || (!this.ready && !this.world)) return;
+    // Live mode: re-render the whole island on open (renderLive picks this up).
+    this.fullDirty = !!this.world;
     const full = document.createElement("div");
     full.className = "be-imap__full";
     const cv = document.createElement("canvas");
@@ -359,13 +449,14 @@ export class IslandMap {
     this.full = full;
     this.fullCanvas = cv;
 
-    // Fit the image to the viewport (contain), centred.
+    // Fit the map image to the viewport (contain), centred.
+    const src = this.fullSource();
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    this.view.base = Math.min(vw / this.img.width, vh / this.img.height);
+    this.view.base = Math.min(vw / src.width, vh / src.height);
     this.view.scale = 1;
-    this.view.tx = (vw - this.img.width * this.view.base) / 2;
-    this.view.ty = (vh - this.img.height * this.view.base) / 2;
+    this.view.tx = (vw - src.width * this.view.base) / 2;
+    this.view.ty = (vh - src.height * this.view.base) / 2;
     this.bindFullGestures(cv);
     this.drawFull();
   }
@@ -394,10 +485,11 @@ export class IslandMap {
     c.clearRect(0, 0, vw, vh);
     c.fillStyle = "#0a1420";
     c.fillRect(0, 0, vw, vh);
+    const src = this.fullSource();
     const s = this.view.base * this.view.scale;
-    const iw = this.img.width * s;
-    const ih = this.img.height * s;
-    c.drawImage(this.img, this.view.tx, this.view.ty, iw, ih);
+    const iw = src.width * s;
+    const ih = src.height * s;
+    c.drawImage(src, this.view.tx, this.view.ty, iw, ih);
     c.drawImage(this.fog, this.view.tx, this.view.ty, iw, ih);
     // Player marker.
     const { u, v } = worldToIslandUV(this.px, this.pz);
@@ -453,6 +545,7 @@ export class IslandMap {
     this.closeFull();
     this.root.remove();
     this.rt?.dispose();
+    this.fullRT?.dispose();
     if (this.liveMesh) {
       this.liveMesh.geometry.dispose();
       (this.liveMesh.material as THREE.Material).dispose();
