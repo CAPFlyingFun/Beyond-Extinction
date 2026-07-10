@@ -197,6 +197,19 @@ export function beachHeight(x: number, z: number): number {
   return h;
 }
 
+/**
+ * Terrain steepness at a world XZ, in degrees (0 = flat). Central finite
+ * difference of {@link beachHeight} over ~1.7 m, so it reflects the apron +
+ * landing-flatten shaping the player actually walks. Used to gate movement by
+ * posture: crawl needs ≤5°, crouch ≤15°, walk/run ≤45°.
+ */
+export function beachSlopeDeg(x: number, z: number): number {
+  const e = 6; // ~1.7 m sampling span (below the ~8 m heightmap texel)
+  const gx = (beachHeight(x + e, z) - beachHeight(x - e, z)) / (2 * e);
+  const gz = (beachHeight(x, z + e) - beachHeight(x, z - e)) / (2 * e);
+  return (Math.atan(Math.hypot(gx, gz)) * 180) / Math.PI;
+}
+
 function smoothstep(a: number, b: number, x: number): number {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);

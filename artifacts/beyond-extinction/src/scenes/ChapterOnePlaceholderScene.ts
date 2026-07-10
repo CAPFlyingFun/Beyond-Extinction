@@ -28,6 +28,7 @@ import {
   loadIslandHeightmap,
   loadIslandGround,
   beachHeight,
+  beachSlopeDeg,
   MAP_SCALE,
   HEIGHT_SCALE,
   type OceanWater,
@@ -1074,9 +1075,21 @@ class ChapterOnePlaceholderScene implements IScene {
     if (this.firstPerson && this.player) {
       // Drive first-person movement, clamped to the play area, then ride the
       // beach surface so the camera walks the terrain instead of a flat plane.
-      const res = this.player.update(dt, (_from, to) => {
+      const res = this.player.update(dt, (from, to) => {
+        // Slope gate: a stance can only traverse ground up to its steepness
+        // limit — crawl ≤5°, crouch ≤15°, walk/run ≤45°; steeper than 45° needs
+        // gear we don't have yet. If the destination is too steep, try sliding
+        // along one axis (walk the contour) before blocking outright.
+        const input = this.ctx.input;
+        const limit = input.isCrawling() ? 5 : input.isCrouching() ? 15 : 45;
+        const ok = (x: number, z: number) => beachSlopeDeg(x, z) <= limit;
         const c = this.clampToPlay(to.x, to.z);
-        return { x: c.x, y: to.y, z: c.z };
+        if (ok(c.x, c.z)) return { x: c.x, y: to.y, z: c.z };
+        const cx = this.clampToPlay(to.x, from.z); // slide in X only
+        if (ok(cx.x, cx.z)) return { x: cx.x, y: to.y, z: from.z };
+        const cz = this.clampToPlay(from.x, to.z); // slide in Z only
+        if (ok(cz.x, cz.z)) return { x: from.x, y: to.y, z: cz.z };
+        return { x: from.x, y: to.y, z: from.z }; // too steep for this stance
       });
       // Vertical physics: the eye rests EYE above the ground under it, but is not
       // locked there. Gravity pulls it down; a jump launches it up; walking off a
