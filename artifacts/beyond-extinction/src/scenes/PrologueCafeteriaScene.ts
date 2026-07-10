@@ -379,6 +379,14 @@ class PrologueCafeteriaScene implements IScene {
   // closing cutscene (see suspend/resumeFirstPerson).
   private readonly ownership = new CameraOwnership("cinematic");
   private player!: PlayerController;
+  // First-person hop physics (jump button / Space). This scene runs at 4u = 1m,
+  // so gravity ≈ 9.8 m/s² × 4 and the jump speed gives a modest ~0.45 m hop.
+  private static readonly FP_EYE = 6.3;
+  private static readonly FP_GRAVITY = 39;
+  private static readonly FP_JUMP_SPEED = 12;
+  private fpVy = 0;
+  private fpCamY = PrologueCafeteriaScene.FP_EYE;
+  private fpOnGround = true;
   // The current phase's objective when it's under the crosshair AND in range —
   // the first-person interact target (a coffee cup, Sarah, or the console).
   private currentFpTarget: THREE.Object3D | null = null;
@@ -622,7 +630,7 @@ class PrologueCafeteriaScene implements IScene {
     // walk speed are sized to this scene's large unit scale (CHARACTER_HEIGHT
     // 7.2, nav speed 16), not real-world meters.
     this.player = new PlayerController(this.camera, this.ctx.input, {
-      eyeHeight: 6.3,
+      eyeHeight: PrologueCafeteriaScene.FP_EYE,
       moveSpeed: 14,
       lookSensitivity: this.lookSensitivity(),
     });
@@ -3081,6 +3089,12 @@ class PrologueCafeteriaScene implements IScene {
     this.player.setActive(true);
     actor.visible = false;
     this.currentFpTarget = null;
+    // Fresh hop state: land any in-flight jump and drop a stale jump request
+    // queued while control was suspended.
+    this.fpVy = 0;
+    this.fpCamY = PrologueCafeteriaScene.FP_EYE;
+    this.fpOnGround = true;
+    this.ctx.input.consumeJump();
     this.ctx.input.setEnabled(true);
     this.camera.fov = 75;
     this.camera.updateProjectionMatrix();
@@ -3230,6 +3244,25 @@ class PrologueCafeteriaScene implements IScene {
    */
   private updateFirstPerson(dt: number): void {
     const { moving } = this.player.update(dt, this.fpResolveMove);
+    // Vertical hop physics (jump button / Space). PlayerController pins
+    // camera.y to eyeHeight every frame, so integrate our own eye height and
+    // overwrite it after update() — same pattern as the island scene. The lab
+    // floor is flat (y=0), so "ground" is simply the eye height.
+    const EYE = PrologueCafeteriaScene.FP_EYE;
+    if (this.ctx.input.consumeJump() && this.fpOnGround) {
+      this.fpVy = PrologueCafeteriaScene.FP_JUMP_SPEED;
+      this.fpOnGround = false;
+    }
+    if (!this.fpOnGround) {
+      this.fpVy -= PrologueCafeteriaScene.FP_GRAVITY * dt;
+      this.fpCamY += this.fpVy * dt;
+      if (this.fpVy <= 0 && this.fpCamY <= EYE) {
+        this.fpCamY = EYE; // land
+        this.fpVy = 0;
+        this.fpOnGround = true;
+      }
+      this.camera.position.y = this.fpCamY;
+    }
     const actor = this.controlledActor;
     actor.position.x = this.player.position.x;
     actor.position.z = this.player.position.z;
@@ -3705,7 +3738,10 @@ class PrologueCafeteriaScene implements IScene {
     await this.ctx.overlays.fadeToBlack(700);
     if (this.disposed) return;
     this.faceTowards(this.jack, this.coreWorld); // Jack stays, facing the ring
-    this.switchControlTo(this.sarah, this.powerUnitWorld);
+    // Fade in as Sarah looking at JACK — not pre-aimed at the flashlight/power
+    // unit — so the swap reads as "I'm standing across from him" and the player
+    // turns to search for the flashlight themselves.
+    this.switchControlTo(this.sarah, this.jack.position);
     this.emergencyOn = true;
     await this.wait(2000); // hold full black ≥2 s (covers the swap)
     if (this.disposed) return;
