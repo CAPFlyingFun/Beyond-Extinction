@@ -186,7 +186,11 @@ class ChapterOnePlaceholderScene implements IScene {
     this.camera = new THREE.PerspectiveCamera(
       52,
       window.innerWidth / window.innerHeight,
-      2, // near ~0.56 m — the island is ~3 km, so push far out for the horizon
+      // Near ~0.11 m: small enough that the near-clip plane never reaches the
+      // ground while crawling (eye ~0.4 m), so the beach stops slicing away to
+      // reveal the ocean beneath it. Far stays huge for the 8 km horizon; the
+      // near/far ratio is fine since distant terrain is fogged well before it.
+      0.4,
       60000,
     );
   }
