@@ -20,7 +20,7 @@ pnpm --filter @workspace/beyond-extinction dev
 
 pnpm --filter @workspace/beyond-extinction build:github
 
-The GitHub Pages build uses /Beyond-Extinction/ as its base path so Vite assets load correctly from a project page.
+The GitHub Pages build derives its base path from GITHUB_REPOSITORY (set automatically by Actions), so Vite assets always resolve to /<repo-name>/ and survive repo renames without a code edit. Set BASE_PATH explicitly to override.
 
 ## Model uploads
 

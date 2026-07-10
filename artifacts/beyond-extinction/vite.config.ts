@@ -7,10 +7,13 @@ const pkg = JSON.parse(
 ) as { version: string };
 
 // Replit provides PORT/BASE_PATH, while GitHub Pages serves this repo from
-// /Beyond-Extinction/.  Local development should work without either env var.
+// /<repo-name>/. GITHUB_REPOSITORY ("owner/repo") is set automatically by
+// GitHub Actions, so the base path tracks repo renames without a code edit.
 const port = Number(process.env.PORT ?? 5173);
 const isGitHubPages = process.env.GITHUB_PAGES === "true";
-const basePath = process.env.BASE_PATH ?? (isGitHubPages ? "/Beyond-Extinction/" : "/");
+const githubRepoName = process.env.GITHUB_REPOSITORY?.split("/")[1];
+const basePath =
+  process.env.BASE_PATH ?? (isGitHubPages ? `/${githubRepoName ?? "Beyond-Extinction-TS"}/` : "/");
 const enableReplitPlugins =
   process.env.NODE_ENV !== "production" && process.env.REPL_ID !== undefined;
 
