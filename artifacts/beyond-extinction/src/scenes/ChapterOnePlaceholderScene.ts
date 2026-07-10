@@ -31,6 +31,7 @@ import {
   beachSlopeDeg,
   MAP_SCALE,
   HEIGHT_SCALE,
+  METERS_PER_UNIT,
   type OceanWater,
 } from "../engine/beachTerrain";
 import { SaveManager } from "../engine/SaveManager";
@@ -114,9 +115,15 @@ class ChapterOnePlaceholderScene implements IScene {
   private player?: PlayerController;
   private inventory?: InventoryOverlay;
   private islandMap?: IslandMap;
-  private static readonly EYE = 6.4; // standing eye ≈ 1.8 m above terrain
-  private static readonly CROUCH_EYE = 4.1; // ≈ 1.15 m — a crouch-walk stance
-  private static readonly CRAWL_EYE = 1.5; // ≈ 0.4 m — prone, near the ground
+  // Eye heights in world units, keyed off Godot's real-metre stances so the two
+  // builds match exactly (model is 1.8 m tall = 6.4 u; METERS_PER_UNIT converts).
+  // Godot base_character.gd: stand 1.62 m, crouch 1.05 m, crawl 0.52 m.
+  private static readonly EYE = 1.62 / METERS_PER_UNIT; // ≈ 5.76 u (1.62 m)
+  private static readonly CROUCH_EYE = 1.05 / METERS_PER_UNIT; // ≈ 3.73 u (1.05 m)
+  private static readonly CRAWL_EYE = 0.52 / METERS_PER_UNIT; // ≈ 1.85 u (0.52 m)
+  // Camera forward nudge (Godot cam_fwd_offset 0.32 m): pushes the eye ahead of
+  // the head bone so the body renders behind it — no head clipping in view.
+  private static readonly CAM_FWD = 0.32 / METERS_PER_UNIT; // ≈ 1.14 u (0.32 m)
   private eyeOffset = ChapterOnePlaceholderScene.EYE; // lerps toward the posture target
   // Dev-only on-screen readout of movement state (WALK/RUN/CROUCH/CRAWL + eye
   // height + flags). Off in shipped builds; flip to true to diagnose input.
@@ -191,11 +198,11 @@ class ChapterOnePlaceholderScene implements IScene {
     this.camera = new THREE.PerspectiveCamera(
       52,
       window.innerWidth / window.innerHeight,
-      // Near ~0.11 m: small enough that the near-clip plane never reaches the
-      // ground while crawling (eye ~0.4 m), so the beach stops slicing away to
-      // reveal the ocean beneath it. Far stays huge for the 8 km horizon; the
-      // near/far ratio is fine since distant terrain is fogged well before it.
-      0.4,
+      // Near 0.03 m (Godot base_character parity): the camera rides at the head
+      // and sits just ahead of the face, so a tiny near plane keeps the beach
+      // from slicing away underfoot even when crawling. Far stays huge for the
+      // 8 km horizon; distant terrain is fogged well before precision matters.
+      0.107,
       60000,
     );
   }
@@ -385,7 +392,12 @@ class ChapterOnePlaceholderScene implements IScene {
       this.player.placeAt(this.jack.position.x, this.jack.position.z, this.jackFacingDeg);
       this.camY = beachHeight(this.jack.position.x, this.jack.position.z) + ChapterOnePlaceholderScene.EYE;
       this.player.setActive(true);
-      this.jack.visible = false;
+      // First-person BODY (Godot parity): Jack stays visible so looking down you
+      // see his torso and legs, but his HEAD is shrunk away — the camera sits at
+      // head height, so an intact head would fill the view with skull interior
+      // (Godot's _apply_head_visibility does the same on the active character).
+      this.jack.visible = true;
+      this.hideHeadBones(this.jack);
       this.applyFov();
       if (ChapterOnePlaceholderScene.DEBUG_MOVE) {
         const dbg = document.createElement("div");
@@ -825,6 +837,27 @@ class ChapterOnePlaceholderScene implements IScene {
     return group;
   }
 
+  /**
+   * Shrink the head chain (camera bone + skull/jaw/hair skinned to it) to nearly
+   * nothing on the first-person body, so the head-height camera doesn't render
+   * the inside of the skull. The baked clips only write rotation tracks, so the
+   * scale sticks across animation (Godot's first-person head trick).
+   */
+  private hideHeadBones(group: THREE.Group): void {
+    const model = (group.userData.model as THREE.Object3D) ?? group;
+    const headBones = RIGS.Jack?.bones.head ?? ["Bone_017", "Bone_016"];
+    const names = Array.isArray(headBones) ? headBones : [headBones];
+    let head: THREE.Object3D | undefined;
+    for (const n of names) {
+      head = model.getObjectByName(n);
+      if (head) break;
+    }
+    if (!head) return;
+    head.traverse((o) => {
+      if ((o as THREE.Bone).isBone) o.scale.setScalar(0.001);
+    });
+  }
+
   /** Scale a model to `targetHeight` world units and sit its feet at y=0. */
   private groundAndScale(model: THREE.Object3D, targetHeight: number): void {
     const size = new THREE.Vector3();
@@ -1136,17 +1169,22 @@ class ChapterOnePlaceholderScene implements IScene {
       this.updateSun();
       this.islandMap?.setPlayer(cx, cz, yaw);
       this.islandMap?.update(dt);
-      // Keep hidden Jack under the camera and walking, so a later third-person
-      // reveal reads correctly; Sarah idles where she woke.
+      // First-person body: Jack stands at the player's feet (NOT under the
+      // nudged camera — that would drift him forward each frame), faces the look
+      // yaw, and walks. He crouches/lies with the eye via a body drop so the
+      // visible body matches the camera height.
       if (this.jack) {
-        this.jack.position.set(
-          this.camera.position.x,
-          beachHeight(this.camera.position.x, this.camera.position.z),
-          this.camera.position.z,
-        );
+        const bodyDrop = ChapterOnePlaceholderScene.EYE - this.eyeOffset; // 0 stand, + when low
+        this.jack.position.set(cx, beachHeight(cx, cz) - bodyDrop, cz);
         this.jack.rotation.y = this.player.yaw;
         this.applyLocomotion(this.jack, res.moving, dt);
       }
+      // Godot cam_fwd_offset: nudge the eye forward of the head bone along the
+      // look direction. The head bones are shrunk to nothing (hideHeadBones), so
+      // there's no skull to clip; the nudge keeps the torso/shoulders out of the
+      // forward view while looking down still reveals your own body.
+      this.camera.position.x -= Math.sin(yaw) * ChapterOnePlaceholderScene.CAM_FWD;
+      this.camera.position.z -= Math.cos(yaw) * ChapterOnePlaceholderScene.CAM_FWD;
       this.applyLocomotion(this.sarah, false, dt);
       for (const m of this.mixers) m.update(dt);
       this.treesUpdate?.(dt, this.camera.position);
