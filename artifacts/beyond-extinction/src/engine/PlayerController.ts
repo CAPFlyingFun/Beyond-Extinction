@@ -9,6 +9,9 @@ export interface PlayerControllerOptions {
   eyeHeight?: number;
   /** Walk speed in meters/second. */
   moveSpeed?: number;
+  /** Speed multiplier applied while running (InputManager.isRunning(): hold-Shift
+   *  on desktop / the mobile Run toggle). 1 = no run boost. */
+  runMultiplier?: number;
   /** Drag-look sensitivity, radians per pixel. */
   lookSensitivity?: number;
 }
@@ -43,6 +46,7 @@ export class PlayerController {
   private readonly input: InputManager;
   private readonly eyeHeight: number;
   private readonly moveSpeed: number;
+  private readonly runMultiplier: number;
   private lookSensitivity: number;
   private active = false;
 
@@ -61,6 +65,7 @@ export class PlayerController {
     this.input = input;
     this.eyeHeight = opts.eyeHeight ?? DEFAULT_EYE_HEIGHT;
     this.moveSpeed = opts.moveSpeed ?? 3.2;
+    this.runMultiplier = opts.runMultiplier ?? 1;
     this.lookSensitivity = opts.lookSensitivity ?? 0.0032;
     this.position.y = this.eyeHeight;
   }
@@ -143,7 +148,9 @@ export class PlayerController {
         .set(Math.sin(this.yaw), 0, Math.cos(this.yaw))
         .multiplyScalar(-1);
       this.right.set(-this.forward.z, 0, this.forward.x);
-      const step = this.moveSpeed * dt;
+      const speed =
+        this.moveSpeed * (this.input.isRunning() ? this.runMultiplier : 1);
+      const step = speed * dt;
       this.attempt
         .copy(this.position)
         .addScaledVector(this.forward, mv.y * step)

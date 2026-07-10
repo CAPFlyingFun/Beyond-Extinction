@@ -1376,6 +1376,37 @@ body {
   filter: brightness(1.1);
 }
 
+/* Run toggle — sits just left of Jump; latches on (mobile). Desktop uses Shift. */
+.be-fp-run {
+  position: absolute;
+  right: 104px;
+  bottom: 116px;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 0.82rem/1 ui-monospace, monospace;
+  letter-spacing: 0.5px;
+  color: #0c1422;
+  background: linear-gradient(180deg, #dff1ff, #93c8ee);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+}
+.be-fp-run:active {
+  transform: translateY(1px);
+}
+.be-fp-run.is-active {
+  color: #06210f;
+  background: linear-gradient(180deg, #bff6c8, #46d16a);
+  box-shadow: 0 0 0 3px rgba(80, 255, 120, 0.5), 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
 /* ── Blueprint minimap (top-right; tap or M to expand) ───────────────────── */
 .be-minimap {
   position: fixed;

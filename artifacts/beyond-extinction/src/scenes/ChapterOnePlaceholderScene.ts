@@ -361,9 +361,11 @@ class ChapterOnePlaceholderScene implements IScene {
       // the camera rides the terrain surface each frame (see update()).
       this.player = new PlayerController(this.camera, this.ctx.input, {
         eyeHeight: ChapterOnePlaceholderScene.EYE,
-        // The island is now ~3 km across; a walking pace would take ~12 min to
-        // cross, so run at a brisk sprint. (Tunable; mounts/vehicles come later.)
-        moveSpeed: 55,
+        // Realistic human pace. Full joystick = WALK at 3 mph (1.34 m/s ≈ 4.76
+        // u/s); hold-Shift / the Run toggle sprints at 10 mph (4.47 m/s). The
+        // 8 km island is a long walk on foot by design — mounts/vehicles later.
+        moveSpeed: 4.76,
+        runMultiplier: 3.34,
         lookSensitivity: this.settings.lookSensitivity,
       });
       this.player.placeAt(this.jack.position.x, this.jack.position.z, this.jackFacingDeg);

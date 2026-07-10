@@ -52,6 +52,8 @@ export class InputManager {
   private fpJoyStick: HTMLDivElement | null = null;
   private fpPromptEl: HTMLDivElement | null = null;
   private fpInteractBtn: HTMLButtonElement | null = null;
+  private fpRunBtn: HTMLButtonElement | null = null;
+  private runToggled = false; // mobile Run toggle (desktop uses hold-Shift)
   private readonly fpPointers = new Map<number, FpPointerState>();
   private readonly fpJoy = { x: 0, y: 0 }; // joystick vector, forward = +y
   private readonly fpLook = { x: 0, y: 0 }; // accumulated raw drag delta (px)
@@ -201,6 +203,15 @@ export class InputManager {
     return { x, y };
   }
 
+  /**
+   * True while the player should RUN rather than walk: hold-Shift on desktop,
+   * or the latched mobile Run toggle. The controller multiplies its walk speed
+   * by the run factor while this holds (see PlayerController.update).
+   */
+  isRunning(): boolean {
+    return this.runToggled || this.isDown("ShiftLeft", "ShiftRight");
+  }
+
   /** Drag-look delta (raw px) accumulated since the last call; resets on read. */
   consumeLook(): { x: number; y: number } {
     const out = { x: this.fpLook.x, y: this.fpLook.y };
@@ -252,6 +263,8 @@ export class InputManager {
     this.fpJoy.y = 0;
     this.fpLook.x = 0;
     this.fpLook.y = 0;
+    this.runToggled = false; // don't leave run latched across FP sessions
+    this.fpRunBtn?.classList.remove("is-active");
     if (this.fpJoyBase) this.fpJoyBase.style.display = "none";
     if (this.fpJoyStick) {
       this.fpJoyStick.style.transform = "translate(-50%, -50%)";
@@ -306,6 +319,23 @@ export class InputManager {
       this.jumpRequested = true;
     });
     layer.appendChild(jumpBtn);
+
+    // Run button (mobile) — a TOGGLE (holding a button while thumbing the
+    // joystick + look is awkward on touch), so tap to latch run on/off. PC uses
+    // hold-Shift instead (see isRunning). Button shows its state via .is-active.
+    const runBtn = document.createElement("button");
+    runBtn.className = "be-fp-run";
+    runBtn.type = "button";
+    runBtn.setAttribute("aria-label", "Run");
+    runBtn.textContent = "RUN";
+    runBtn.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.runToggled = !this.runToggled;
+      runBtn.classList.toggle("is-active", this.runToggled);
+    });
+    layer.appendChild(runBtn);
+    this.fpRunBtn = runBtn;
 
     layer.addEventListener("pointerdown", this.onFpPointerDown);
     layer.addEventListener("pointermove", this.onFpPointerMove);

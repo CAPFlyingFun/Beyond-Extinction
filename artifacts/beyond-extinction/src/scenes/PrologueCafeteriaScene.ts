@@ -632,6 +632,7 @@ class PrologueCafeteriaScene implements IScene {
     this.player = new PlayerController(this.camera, this.ctx.input, {
       eyeHeight: PrologueCafeteriaScene.FP_EYE,
       moveSpeed: 14,
+      runMultiplier: 1.5, // Shift / Run toggle jogs across the lab
       lookSensitivity: this.lookSensitivity(),
     });
     this.player.onInteract(() => this.fpTryInteract());
