@@ -382,10 +382,13 @@ class PrologueCafeteriaScene implements IScene {
   // First-person hop physics (jump button / Space). This scene runs at 4u = 1m,
   // Godot parity at 4 u/m: gravity 9.8 m/s² ×4, jump 4.8 m/s ×4 (~1.17 m apex).
   private static readonly FP_EYE = 6.3;
+  private static readonly FP_CROUCH_EYE = 4.6; // ≈ 1.15 m at 4 u/m — crouch-walk
+  private static readonly FP_CRAWL_EYE = 1.6; // ≈ 0.4 m — prone
   private static readonly FP_GRAVITY = 39.2;
   private static readonly FP_JUMP_SPEED = 19.2;
   private fpVy = 0;
   private fpCamY = PrologueCafeteriaScene.FP_EYE;
+  private fpEyeOffset = PrologueCafeteriaScene.FP_EYE; // eases toward the posture eye
   private fpOnGround = true;
   // The current phase's objective when it's under the crosshair AND in range —
   // the first-person interact target (a coffee cup, Sarah, or the console).
@@ -3098,6 +3101,7 @@ class PrologueCafeteriaScene implements IScene {
     // queued while control was suspended.
     this.fpVy = 0;
     this.fpCamY = PrologueCafeteriaScene.FP_EYE;
+    this.fpEyeOffset = PrologueCafeteriaScene.FP_EYE;
     this.fpOnGround = true;
     this.ctx.input.consumeJump();
     this.ctx.input.setEnabled(true);
@@ -3249,25 +3253,32 @@ class PrologueCafeteriaScene implements IScene {
    */
   private updateFirstPerson(dt: number): void {
     const { moving } = this.player.update(dt, this.fpResolveMove);
-    // Vertical hop physics (jump button / Space). PlayerController pins
-    // camera.y to eyeHeight every frame, so integrate our own eye height and
-    // overwrite it after update() — same pattern as the island scene. The lab
-    // floor is flat (y=0), so "ground" is simply the eye height.
-    const EYE = PrologueCafeteriaScene.FP_EYE;
+    // Vertical hop + posture. PlayerController pins camera.y to eyeHeight every
+    // frame, so we integrate our own eye height and overwrite it after update()
+    // (same pattern as the island). The lab floor is flat (y=0), so "ground" is
+    // the current eye height, which eases toward the crouch/crawl stance.
+    const targetEye = this.ctx.input.isCrawling()
+      ? PrologueCafeteriaScene.FP_CRAWL_EYE
+      : this.ctx.input.isCrouching()
+        ? PrologueCafeteriaScene.FP_CROUCH_EYE
+        : PrologueCafeteriaScene.FP_EYE;
+    this.fpEyeOffset += (targetEye - this.fpEyeOffset) * Math.min(1, dt * 9);
     if (this.ctx.input.consumeJump() && this.fpOnGround) {
       this.fpVy = PrologueCafeteriaScene.FP_JUMP_SPEED;
       this.fpOnGround = false;
     }
-    if (!this.fpOnGround) {
+    if (this.fpOnGround) {
+      this.fpCamY = this.fpEyeOffset; // grounded: sit at the posture height
+    } else {
       this.fpVy -= PrologueCafeteriaScene.FP_GRAVITY * dt;
       this.fpCamY += this.fpVy * dt;
-      if (this.fpVy <= 0 && this.fpCamY <= EYE) {
-        this.fpCamY = EYE; // land
+      if (this.fpVy <= 0 && this.fpCamY <= this.fpEyeOffset) {
+        this.fpCamY = this.fpEyeOffset; // land
         this.fpVy = 0;
         this.fpOnGround = true;
       }
-      this.camera.position.y = this.fpCamY;
     }
+    this.camera.position.y = this.fpCamY;
     const actor = this.controlledActor;
     actor.position.x = this.player.position.x;
     actor.position.z = this.player.position.z;

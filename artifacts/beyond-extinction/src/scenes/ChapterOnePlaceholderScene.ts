@@ -113,7 +113,10 @@ class ChapterOnePlaceholderScene implements IScene {
   private player?: PlayerController;
   private inventory?: InventoryOverlay;
   private islandMap?: IslandMap;
-  private static readonly EYE = 6.4; // eye height above terrain ≈ 1.8 m (a standing stance)
+  private static readonly EYE = 6.4; // standing eye ≈ 1.8 m above terrain
+  private static readonly CROUCH_EYE = 4.1; // ≈ 1.15 m — a crouch-walk stance
+  private static readonly CRAWL_EYE = 1.5; // ≈ 0.4 m — prone, near the ground
+  private eyeOffset = ChapterOnePlaceholderScene.EYE; // lerps toward the posture target
   // Default island start points (SSW arrival beach), in the scaled world. Jack.rot
   // = facing degrees; Sarah.rot = mesh rotation.y (radians). Overridable + savable
   // via the Dev menu. (Base coords were tuned on the small island, so ×MAP_SCALE.)
@@ -1061,11 +1064,18 @@ class ChapterOnePlaceholderScene implements IScene {
       // locked there. Gravity pulls it down; a jump launches it up; walking off a
       // ledge lets it fall. Gentle slopes (drop < STEP per frame) stay grounded so
       // you don't float downhill.
-      const EYE = ChapterOnePlaceholderScene.EYE;
+      // Posture: ease the eye height toward stand / crouch / crawl so the camera
+      // visibly drops when you crouch (C) or crawl (X).
+      const targetEye = this.ctx.input.isCrawling()
+        ? ChapterOnePlaceholderScene.CRAWL_EYE
+        : this.ctx.input.isCrouching()
+          ? ChapterOnePlaceholderScene.CROUCH_EYE
+          : ChapterOnePlaceholderScene.EYE;
+      this.eyeOffset += (targetEye - this.eyeOffset) * Math.min(1, dt * 9);
       const cx = this.camera.position.x;
       const cz = this.camera.position.z;
       const yaw = this.player.yaw;
-      const groundEye = beachHeight(cx, cz) + EYE;
+      const groundEye = beachHeight(cx, cz) + this.eyeOffset;
       if (this.ctx.input.consumeJump() && this.onGround) {
         this.vy = ChapterOnePlaceholderScene.JUMP_SPEED;
         this.onGround = false;
