@@ -631,10 +631,11 @@ class PrologueCafeteriaScene implements IScene {
     // 7.2, nav speed 16), not real-world meters.
     this.player = new PlayerController(this.camera, this.ctx.input, {
       eyeHeight: PrologueCafeteriaScene.FP_EYE,
-      // Godot base_character.gd parity at this scene's 4 u/m: walk 3.2 m/s,
-      // run ×1.9375 (6.2 m/s), crawl ×0.4375 (1.4 m/s).
+      // Movement stats at this scene's 4 u/m: walk 3.2 m/s, run ×1.9375 (6.2),
+      // crouch ×0.6875 (2.2), crawl ×0.4375 (1.4).
       moveSpeed: 12.8,
       runMultiplier: 1.9375,
+      crouchMultiplier: 0.6875,
       crawlMultiplier: 0.4375,
       lookSensitivity: this.lookSensitivity(),
     });

@@ -53,9 +53,11 @@ export class InputManager {
   private fpPromptEl: HTMLDivElement | null = null;
   private fpInteractBtn: HTMLButtonElement | null = null;
   private fpRunBtn: HTMLButtonElement | null = null;
-  private fpCrawlBtn: HTMLButtonElement | null = null;
+  private fpCrouchBtn: HTMLButtonElement | null = null;
   private runToggled = false; // mobile Run toggle (desktop uses hold-Shift)
-  private crawlToggled = false; // mobile Crawl toggle (desktop uses hold-Ctrl)
+  private crouchToggled = false; // mobile Crouch toggle (desktop uses the "C" key)
+  private crawlHeld = false; // mobile Crawl: the Crouch button held (desktop: "X")
+  private static readonly CROUCH_HOLD_MS = 300; // hold this long → Crawl
   private readonly fpPointers = new Map<number, FpPointerState>();
   private readonly fpJoy = { x: 0, y: 0 }; // joystick vector, forward = +y
   private readonly fpLook = { x: 0, y: 0 }; // accumulated raw drag delta (px)
@@ -215,12 +217,21 @@ export class InputManager {
   }
 
   /**
-   * True while the player should CRAWL (slow, real-walking-pace state): hold-Ctrl
-   * on desktop, or the latched mobile Crawl toggle. Takes precedence over run
-   * (see PlayerController.update).
+   * True while the player should CROUCH (a slow crouch-walk): the "C" key on
+   * desktop, or a tap of the mobile Crouch toggle. Slower than walk; crawl and
+   * (see PlayerController.update) run take precedence over it.
+   */
+  isCrouching(): boolean {
+    return this.crouchToggled || this.isDown("KeyC");
+  }
+
+  /**
+   * True while the player should CRAWL — prone, slowest, silent (a stealth
+   * hook for when noise/detection lands): the "X" key on desktop, or holding
+   * the mobile Crouch button. Takes precedence over crouch/run/walk.
    */
   isCrawling(): boolean {
-    return this.crawlToggled || this.isDown("ControlLeft", "ControlRight");
+    return this.crawlHeld || this.isDown("KeyX");
   }
 
   /** Drag-look delta (raw px) accumulated since the last call; resets on read. */
@@ -274,10 +285,11 @@ export class InputManager {
     this.fpJoy.y = 0;
     this.fpLook.x = 0;
     this.fpLook.y = 0;
-    this.runToggled = false; // don't leave run/crawl latched across FP sessions
-    this.crawlToggled = false;
+    this.runToggled = false; // don't leave run/crouch/crawl latched across sessions
+    this.crouchToggled = false;
+    this.crawlHeld = false;
     this.fpRunBtn?.classList.remove("is-active");
-    this.fpCrawlBtn?.classList.remove("is-active");
+    this.fpCrouchBtn?.classList.remove("is-active", "is-crawl");
     if (this.fpJoyBase) this.fpJoyBase.style.display = "none";
     if (this.fpJoyStick) {
       this.fpJoyStick.style.transform = "translate(-50%, -50%)";
@@ -346,33 +358,68 @@ export class InputManager {
       e.stopPropagation();
       this.runToggled = !this.runToggled;
       if (this.runToggled) {
-        this.crawlToggled = false;
-        this.fpCrawlBtn?.classList.remove("is-active");
+        this.crouchToggled = false;
+        this.fpCrouchBtn?.classList.remove("is-active");
       }
       runBtn.classList.toggle("is-active", this.runToggled);
     });
     layer.appendChild(runBtn);
     this.fpRunBtn = runBtn;
 
-    // Crawl button (mobile) — also a toggle, mutually exclusive with Run. PC
-    // uses hold-Ctrl. Crawl is the slow, real-walking-pace state (see isCrawling).
-    const crawlBtn = document.createElement("button");
-    crawlBtn.className = "be-fp-crawl";
-    crawlBtn.type = "button";
-    crawlBtn.setAttribute("aria-label", "Crawl");
-    crawlBtn.textContent = "CRWL";
-    crawlBtn.addEventListener("pointerdown", (e) => {
+    // Crouch / Crawl button (mobile). A short TAP toggles Crouch (mutually
+    // exclusive with Run); a press-and-HOLD drops to Crawl — prone, slowest,
+    // silent — for as long as it's held, then releases back to the prior
+    // crouch state. PC uses the "C" (crouch) and "X" (crawl) keys instead.
+    const crouchBtn = document.createElement("button");
+    crouchBtn.className = "be-fp-crouch";
+    crouchBtn.type = "button";
+    crouchBtn.setAttribute("aria-label", "Crouch — hold to Crawl");
+    crouchBtn.textContent = "CRCH";
+    let holdTimer: number | null = null;
+    let crawlingFromHold = false;
+    crouchBtn.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      this.crawlToggled = !this.crawlToggled;
-      if (this.crawlToggled) {
-        this.runToggled = false;
-        this.fpRunBtn?.classList.remove("is-active");
+      // Capture so the release still fires if the finger slides off; ignore if
+      // the browser refuses (never let it abort the press logic below).
+      try {
+        crouchBtn.setPointerCapture(e.pointerId);
+      } catch {
+        /* capture unavailable — the hold/tap still works via up/cancel */
       }
-      crawlBtn.classList.toggle("is-active", this.crawlToggled);
+      crawlingFromHold = false;
+      holdTimer = window.setTimeout(() => {
+        crawlingFromHold = true;
+        this.crawlHeld = true;
+        crouchBtn.classList.add("is-crawl");
+      }, InputManager.CROUCH_HOLD_MS);
     });
-    layer.appendChild(crawlBtn);
-    this.fpCrawlBtn = crawlBtn;
+    const endCrouchPress = () => {
+      if (holdTimer !== null) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+      }
+      if (crawlingFromHold) {
+        this.crawlHeld = false; // release crawl; keep the crouch toggle as it was
+        crouchBtn.classList.remove("is-crawl");
+      } else {
+        this.crouchToggled = !this.crouchToggled; // short tap toggles crouch
+        if (this.crouchToggled) {
+          this.runToggled = false;
+          this.fpRunBtn?.classList.remove("is-active");
+        }
+        crouchBtn.classList.toggle("is-active", this.crouchToggled);
+      }
+      crawlingFromHold = false;
+    };
+    crouchBtn.addEventListener("pointerup", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      endCrouchPress();
+    });
+    crouchBtn.addEventListener("pointercancel", () => endCrouchPress());
+    layer.appendChild(crouchBtn);
+    this.fpCrouchBtn = crouchBtn;
 
     layer.addEventListener("pointerdown", this.onFpPointerDown);
     layer.addEventListener("pointermove", this.onFpPointerMove);

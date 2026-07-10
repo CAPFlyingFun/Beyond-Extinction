@@ -1407,8 +1407,9 @@ body {
   box-shadow: 0 0 0 3px rgba(80, 255, 120, 0.5), 0 6px 18px rgba(0, 0, 0, 0.4);
 }
 
-/* Crawl toggle — left of Run (mutually exclusive). Desktop uses Ctrl. */
-.be-fp-crawl {
+/* Crouch button — left of Run. Tap toggles crouch (amber); press-and-hold
+   drops to crawl (deeper orange). Desktop uses "C" (crouch) / "X" (crawl). */
+.be-fp-crouch {
   position: absolute;
   right: 170px;
   bottom: 116px;
@@ -1429,13 +1430,19 @@ body {
   -webkit-tap-highlight-color: transparent;
   touch-action: none;
 }
-.be-fp-crawl:active {
+.be-fp-crouch:active {
   transform: translateY(1px);
 }
-.be-fp-crawl.is-active {
+.be-fp-crouch.is-active {
   color: #06210f;
   background: linear-gradient(180deg, #ffe6b0, #f0b64a);
   box-shadow: 0 0 0 3px rgba(255, 200, 90, 0.5), 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+/* Crawl (button held): deeper orange, distinct from the crouch toggle. */
+.be-fp-crouch.is-crawl {
+  color: #2a0e00;
+  background: linear-gradient(180deg, #ffbf7a, #e8791f);
+  box-shadow: 0 0 0 3px rgba(255, 140, 60, 0.6), 0 6px 18px rgba(0, 0, 0, 0.4);
 }
 
 /* ── Blueprint minimap (top-right; tap or M to expand) ───────────────────── */

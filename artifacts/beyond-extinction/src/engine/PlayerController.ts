@@ -12,9 +12,11 @@ export interface PlayerControllerOptions {
   /** Speed multiplier applied while running (InputManager.isRunning(): hold-Shift
    *  on desktop / the mobile Run toggle). 1 = no run boost. */
   runMultiplier?: number;
-  /** Speed multiplier applied while crawling (InputManager.isCrawling(): hold-Ctrl
-   *  / the mobile Crawl toggle). <1 slows to a real walking pace; takes
-   *  precedence over run. 1 = no crawl. */
+  /** Speed multiplier while crouching (InputManager.isCrouching(): "C" / a tap of
+   *  the mobile Crouch toggle) — a slow crouch-walk. 1 = no crouch. */
+  crouchMultiplier?: number;
+  /** Speed multiplier while crawling (InputManager.isCrawling(): "X" / holding the
+   *  mobile Crouch button) — prone + slowest. Beats crouch/run. 1 = no crawl. */
   crawlMultiplier?: number;
   /** Drag-look sensitivity, radians per pixel. */
   lookSensitivity?: number;
@@ -51,6 +53,7 @@ export class PlayerController {
   private readonly eyeHeight: number;
   private readonly moveSpeed: number;
   private readonly runMultiplier: number;
+  private readonly crouchMultiplier: number;
   private readonly crawlMultiplier: number;
   private lookSensitivity: number;
   private active = false;
@@ -71,6 +74,7 @@ export class PlayerController {
     this.eyeHeight = opts.eyeHeight ?? DEFAULT_EYE_HEIGHT;
     this.moveSpeed = opts.moveSpeed ?? 3.2;
     this.runMultiplier = opts.runMultiplier ?? 1;
+    this.crouchMultiplier = opts.crouchMultiplier ?? 1;
     this.crawlMultiplier = opts.crawlMultiplier ?? 1;
     this.lookSensitivity = opts.lookSensitivity ?? 0.0032;
     this.position.y = this.eyeHeight;
@@ -154,12 +158,14 @@ export class PlayerController {
         .set(Math.sin(this.yaw), 0, Math.cos(this.yaw))
         .multiplyScalar(-1);
       this.right.set(-this.forward.z, 0, this.forward.x);
-      // Crawl beats run beats walk.
+      // Priority: crawl > crouch > run > walk.
       const mult = this.input.isCrawling()
         ? this.crawlMultiplier
-        : this.input.isRunning()
-          ? this.runMultiplier
-          : 1;
+        : this.input.isCrouching()
+          ? this.crouchMultiplier
+          : this.input.isRunning()
+            ? this.runMultiplier
+            : 1;
       const step = this.moveSpeed * mult * dt;
       this.attempt
         .copy(this.position)

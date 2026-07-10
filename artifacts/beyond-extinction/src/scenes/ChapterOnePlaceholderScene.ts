@@ -361,10 +361,12 @@ class ChapterOnePlaceholderScene implements IScene {
       // the camera rides the terrain surface each frame (see update()).
       this.player = new PlayerController(this.camera, this.ctx.input, {
         eyeHeight: ChapterOnePlaceholderScene.EYE,
-        // Godot base_character.gd parity (m/s → u/s at 0.28125 m/u): walk 3.2,
-        // run (Shift/toggle) 6.2 = ×1.9375, crawl (Ctrl/toggle) 1.4 = ×0.4375.
+        // Movement stats (m/s → u/s at 0.28125 m/u): walk 3.2, run (Shift / Run
+        // toggle) 6.2 = ×1.9375, crouch (C / Crouch tap) 2.2 = ×0.6875, crawl
+        // (X / Crouch-hold) 1.4 = ×0.4375 — prone, slowest, silent.
         moveSpeed: 11.38, // 3.2 m/s
         runMultiplier: 1.9375, // 6.2 m/s
+        crouchMultiplier: 0.6875, // 2.2 m/s
         crawlMultiplier: 0.4375, // 1.4 m/s
         lookSensitivity: this.settings.lookSensitivity,
       });
