@@ -270,6 +270,9 @@ interface Creature {
   baskCd: number;
   feedWindow: number;
   agitated: number;
+  // debug
+  label?: THREE.Sprite;
+  labelText?: string;
 }
 
 /** The player as a target for the fauna (undefined = nobody to chase/bite). */
@@ -298,6 +301,8 @@ export interface SeaCreaturesOptions {
   onBitePlayer?: (damage: number, species: SeaSpeciesId) => void;
   /** Called when a croc's passive tame completes. */
   onTamed?: (name: string) => void;
+  /** Float a state label over each creature (testing aid until animations land). */
+  debug?: boolean;
 }
 
 export class SeaCreatures {
@@ -313,6 +318,7 @@ export class SeaCreatures {
   private readonly minDepthU: number;
   private readonly onBitePlayer?: (d: number, s: SeaSpeciesId) => void;
   private readonly onTamed?: (name: string) => void;
+  private readonly debug: boolean;
   private ready = false;
   private elapsed = 0;
 
@@ -323,6 +329,7 @@ export class SeaCreatures {
     this.minDepthU = (opts.minDepthM ?? 4) * U;
     this.onBitePlayer = opts.onBitePlayer;
     this.onTamed = opts.onTamed;
+    this.debug = opts.debug ?? false;
     this.root.name = "SeaCreatures";
     scene.add(this.root);
   }
@@ -378,7 +385,82 @@ export class SeaCreatures {
       }
       if (c.species.habitat === "sea") this.updateSea(c, dt, player);
       else this.updateLand(c, dt, player);
+      if (this.debug) this.updateLabel(c);
     }
+  }
+
+  // ── debug state labels ─────────────────────────────────────────────────────
+
+  private updateLabel(c: Creature): void {
+    // Created lazily (never in build(), which would leak a stray label on
+    // recycle) so it persists on the reused creature object.
+    if (!c.label) {
+      c.label = this.makeLabel();
+      this.root.add(c.label);
+    }
+    const s = c.label;
+    if (c.parked) {
+      s.visible = false;
+      return;
+    }
+    s.visible = true;
+    const top = (this.halfH.get(c.species.id) ?? 1) * 2 + 3 * U;
+    s.position.set(c.group.position.x, c.group.position.y + top, c.group.position.z);
+    const { text, color } = this.labelFor(c);
+    this.setLabel(c, text, color);
+  }
+
+  private labelFor(c: Creature): { text: string; color: string } {
+    if (c.species.habitat === "sea") {
+      const name = ["CRUISE", "INVESTIGATE", "LUNGE"][c.state] ?? "?";
+      const color =
+        c.state === SEA_LUNGE ? "#ff8b6b" : c.state === SEA_INVESTIGATE ? "#ffd98f" : "#9fe0ff";
+      return { text: `${c.species.id} · ${name}`, color };
+    }
+    if (c.tamed) return { text: `${c.species.id} · TAMED`, color: "#7dffb0" };
+    if (c.feedWindow > 0)
+      return { text: `${c.species.id} · EATING ${Math.round(c.tamePct)}%`, color: "#ffd98f" };
+    if (c.agitated > 0)
+      return { text: `${c.species.id} · AGITATED ${Math.round(c.tamePct)}%`, color: "#ff6b6b" };
+    const name = ["IDLE", "WANDER", "CHASE", "ATTACK", "FLEE", "BASK"][c.state] ?? "?";
+    const color =
+      c.state === LAND_ATTACK || c.state === LAND_CHASE
+        ? "#ff8b6b"
+        : c.state === LAND_BASK
+          ? "#7dffb0"
+          : "#cfe8ff";
+    return { text: `${c.species.id} · ${name} ${Math.round(c.tamePct)}%`, color };
+  }
+
+  private makeLabel(): THREE.Sprite {
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 72;
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.minFilter = THREE.LinearFilter;
+    const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true });
+    const s = new THREE.Sprite(mat);
+    s.scale.set(11, 2.5, 1);
+    s.renderOrder = 999;
+    s.userData.canvas = canvas;
+    return s;
+  }
+
+  private setLabel(c: Creature, text: string, color: string): void {
+    if (c.labelText === text) return;
+    c.labelText = text;
+    const s = c.label!;
+    const canvas = s.userData.canvas as HTMLCanvasElement;
+    const ctx = canvas.getContext("2d")!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "rgba(8,14,22,0.72)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.font = "bold 34px Inter, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = color;
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+    (s.material.map as THREE.CanvasTexture).needsUpdate = true;
   }
 
   dispose(): void {
@@ -388,6 +470,8 @@ export class SeaCreatures {
         const mesh = o as THREE.Mesh;
         if (mesh.isMesh) mesh.geometry?.dispose();
       });
+      c.label?.material.map?.dispose();
+      c.label?.material.dispose();
     }
     this.root.removeFromParent();
     this.creatures.length = 0;

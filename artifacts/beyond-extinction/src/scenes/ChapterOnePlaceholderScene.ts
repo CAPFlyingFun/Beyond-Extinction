@@ -348,6 +348,9 @@ class ChapterOnePlaceholderScene implements IScene {
       count: 6,
       onBitePlayer: (dmg, species) => this.onCreatureBite(dmg, species),
       onTamed: (name) => this.onCreatureTamed(name),
+      // Float a state label over each creature until we have rest/walk/attack
+      // animations to read the behaviour off — a testing aid (remove later).
+      debug: true,
     });
     void this.seaCreatures.preload();
 
