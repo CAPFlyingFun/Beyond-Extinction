@@ -124,6 +124,11 @@ class ChapterOnePlaceholderScene implements IScene {
   private inventory?: InventoryOverlay;
   private islandMap?: IslandMap;
   private seaCreatures?: SeaCreatures;
+  // Creature-combat: a full-screen red damage vignette, and a latch that makes
+  // the player non-targetable while a death/respawn is playing out.
+  private hurtEl?: HTMLDivElement;
+  private hurtT = 0;
+  private respawning = false;
   // Survival model + hybrid ARK×PoT HUD (first-person island only). Stats tick
   // only while player input is enabled, so cinematics/menus freeze the clock.
   private stats?: SurvivalStats;
@@ -330,7 +335,10 @@ class ChapterOnePlaceholderScene implements IScene {
     // during the arrival journal and the creatures are already roaming the ocean
     // by the time the flyover skims and dives over the water. update() seeds them
     // around a focus point (the flyover camera during the cinematic, then Jack).
-    this.seaCreatures = new SeaCreatures(this.scene, { count: 6 });
+    this.seaCreatures = new SeaCreatures(this.scene, {
+      count: 6,
+      onBitePlayer: (dmg, species) => this.onCreatureBite(dmg, species),
+    });
     void this.seaCreatures.preload();
 
     await this.buildJungle();
@@ -529,6 +537,7 @@ class ChapterOnePlaceholderScene implements IScene {
     // ARK-style survival model — feeds the HUD with live stamina/food/water/
     // temperature/day values. One instance per scene entry; stats reset fresh.
     this.stats = new SurvivalStats();
+    this.stats.onDeath = () => void this.onPlayerDeath();
 
     // Jack's inventory (badge + coffee) + the DEV tab, same ARK overlay as the
     // prologue. Opening it freezes movement; closing restores it.
@@ -1515,14 +1524,85 @@ class ChapterOnePlaceholderScene implements IScene {
     this.ctx.scenes.goTo(createMainMenuScene);
   }
 
+  // ---------- Creature combat ----------
+
+  /** A creature bite connected: damage the survival model, cue pain, flash red. */
+  private onCreatureBite(dmg: number, _species: string): void {
+    if (!this.stats || this.respawning || this.disposed) return;
+    this.stats.takeDamage(dmg); // fires stats.onDeath → onPlayerDeath() at 0
+    this.ctx.audio.playSfx("gasp");
+    this.hurtFlash();
+  }
+
+  /** Flash a red damage vignette (fades out over the next ~0.35 s in update). */
+  private hurtFlash(): void {
+    if (!this.hurtEl) {
+      const el = document.createElement("div");
+      el.className = "be-hurt";
+      el.style.cssText =
+        "position:fixed;inset:0;z-index:40;pointer-events:none;opacity:0;" +
+        "transition:opacity 0.1s ease;background:radial-gradient(ellipse at" +
+        " center, transparent 42%, rgba(150,0,8,0.62) 100%);";
+      this.ctx.uiLayer.appendChild(el);
+      this.hurtEl = el;
+    }
+    this.hurtEl.style.opacity = "1";
+    this.hurtT = 0.35;
+  }
+
+  /** Health hit 0: fade out, respawn Jack at the arrival beach, restore stats. */
+  private async onPlayerDeath(): Promise<void> {
+    if (this.respawning || this.disposed) return;
+    this.respawning = true;
+    this.player?.setActive(false);
+    this.ctx.input.setEnabled(false);
+    if (this.hurtEl) this.hurtEl.style.opacity = "0";
+    this.ctx.dialogue.showSubtitle({ speaker: "", text: "You were killed." });
+    await this.ctx.overlays.fadeToBlack(700);
+    if (this.disposed) return;
+    const sp = SpawnStore.get().jack ?? ChapterOnePlaceholderScene.JACK_SPAWN;
+    const groundY = beachHeight(sp.x, sp.z);
+    this.stats?.revive();
+    this.jack.position.set(sp.x, groundY, sp.z);
+    this.jackFacingDeg = sp.rot;
+    if (this.player) {
+      this.player.placeAt(sp.x, sp.z, sp.rot);
+      this.camY = groundY + this.eyeOffset;
+    }
+    await this.ctx.overlays.fadeFromBlack(700);
+    if (this.disposed) return;
+    this.ctx.dialogue.hideSubtitle();
+    this.player?.setActive(true);
+    this.ctx.input.setEnabled(true);
+    this.respawning = false;
+  }
+
   // ---------- Loop ----------
 
   update(dt: number, elapsed: number): void {
     // Ambient sea life — roams whether or not gameplay control is active. During
     // the arrival flyover, seed/stream them around the CAMERA (which skims and
     // dives over the water) so they're visible in the dip; otherwise around Jack.
+    // In live first-person play the player is a bite target: sea creatures chase
+    // a swimmer, the amphibious crocs ambush on land/shallows.
     const seaFocus = this.flyoverState ? this.camera.position : this.jack?.position;
-    if (seaFocus) this.seaCreatures?.update(dt, seaFocus);
+    if (seaFocus) {
+      const cp = this.camera.position;
+      const player =
+        !this.flyoverState && this.firstPerson && this.player && !this.respawning
+          ? {
+              pos: cp,
+              inWater: beachHeight(cp.x, cp.z) < 0,
+              vulnerable: this.ctx.input.inputEnabled,
+            }
+          : undefined;
+      this.seaCreatures?.update(dt, seaFocus, player);
+    }
+    // Damage vignette fade.
+    if (this.hurtEl && this.hurtT > 0) {
+      this.hurtT -= dt;
+      if (this.hurtT <= 0) this.hurtEl.style.opacity = "0";
+    }
     this.elapsed = elapsed;
     this.oceanUniforms.uTime.value = elapsed;
 
@@ -1749,6 +1829,7 @@ class ChapterOnePlaceholderScene implements IScene {
     closeHudEditor();
     setHudEditorContext("lab"); // island HUD leaves with the scene
     this.seaCreatures?.dispose();
+    this.hurtEl?.remove();
     if (SpawnTools.current) SpawnTools.current = undefined; // Dev spawn tools leave with the scene
     this.survivalHud?.dispose();
     this.stats?.dispose();

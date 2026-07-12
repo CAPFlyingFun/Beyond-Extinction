@@ -76,12 +76,44 @@ export class SurvivalStats {
   private day = 1;
   private timeMin = DAY_START_MIN;
   private paused = false;
+  private dead = false;
   private listeners = new Set<Listener>();
   private notifyAcc = 0;
+
+  /** Fired once when health first reaches 0 (the scene handles death/respawn). */
+  onDeath?: () => void;
 
   /** Freeze all drains/clock (cinematics, menus). */
   setPaused(paused: boolean): void {
     this.paused = paused;
+  }
+
+  /**
+   * Take combat damage (e.g. a creature bite). Clamps health at 0 and fires
+   * {@link onDeath} exactly once. No-op while paused or already dead.
+   */
+  takeDamage(amount: number): void {
+    if (this.paused || this.dead || amount <= 0) return;
+    this.health = clamp(this.health - amount);
+    this.notify();
+    if (this.health <= 0 && !this.dead) {
+      this.dead = true;
+      this.onDeath?.();
+    }
+  }
+
+  /** Restore to full and clear the death latch (used by respawn). */
+  revive(): void {
+    this.dead = false;
+    this.health = 100;
+    this.stamina = 100;
+    this.food = Math.max(this.food, 40);
+    this.water = Math.max(this.water, 40);
+    this.notify();
+  }
+
+  isDead(): boolean {
+    return this.dead;
   }
 
   /** Quick-use: eat (hotbar). Returns false if already full. */
