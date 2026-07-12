@@ -167,7 +167,8 @@ const SPECIES: Species[] = [
     girthM: 1.3,
     spawnWeight: 2,
     land: {
-      temperament: "neutral", maxHealth: 300, sight: 30, aggro: 9,
+      // aggro bumped 9→13 so the ambush actually triggers as you approach.
+      temperament: "neutral", maxHealth: 300, sight: 30, aggro: 13,
       attackRange: 4.5, fovDeg: 210, damage: 28, cooldown: 2.2, strikeAt: 0.4,
       wanderSpeed: 1.2, chaseSpeed: 6.0, turnSpeed: 4.0, leash: 70, giveUp: 40,
       fleeHealth: 0, standM: 1.3, maxWadeM: 3,
@@ -183,7 +184,9 @@ const SPECIES: Species[] = [
     girthM: 1.5,
     spawnWeight: 2,
     land: {
-      temperament: "aggressive", maxHealth: 420, sight: 32, aggro: 10,
+      // aggro bumped 10→18 — Deino is the aggressive croc, it should charge from
+      // a clear distance (still gated by the 210° FOV so you can flank it).
+      temperament: "aggressive", maxHealth: 420, sight: 32, aggro: 18,
       attackRange: 5.0, fovDeg: 210, damage: 38, cooldown: 2.4, strikeAt: 0.4,
       wanderSpeed: 1.1, chaseSpeed: 5.6, turnSpeed: 3.6, leash: 70, giveUp: 40,
       fleeHealth: 0, standM: 1.6, maxWadeM: 3,
@@ -437,6 +440,16 @@ export class SeaCreatures {
     desired.normalize();
 
     rotateTowards(c.heading, desired, cfg.turn * dt);
+
+    // Cap the pitch: a deep-band creature stuck in shallow shore water would
+    // otherwise keep steering straight down (heading.y → -1) and stand on its
+    // nose (the "megalodon facing up"). Real fish never swim near-vertical — hold
+    // the body within ~28° of level and let the y-clamp handle the rest.
+    const maxPitchSin = 0.47; // sin(~28°)
+    if (Math.abs(c.heading.y) > maxPitchSin) {
+      c.heading.y = Math.sign(c.heading.y) * maxPitchSin;
+      c.heading.normalize();
+    }
 
     // Advance — but never step the body into water too shallow to swim in. The
     // player wades at the shoreline, so a chasing shark would otherwise beach
@@ -803,12 +816,32 @@ export class SeaCreatures {
 
   private pickWanderLand(c: Creature): void {
     const cfg = c.species.land!;
-    for (let tries = 0; tries < 8; tries++) {
+    // Shoreline decisiveness: a croc sitting at the water's edge should COMMIT
+    // to a real trek rather than dither in place — pick a target that's clearly
+    // inland OR clearly into the shallows (50/50 when it's on the waterline;
+    // otherwise continue whichever side it's already on), a good stride away.
+    const here = beachHeight(c.group.position.x, c.group.position.z);
+    const onShore = Math.abs(here) < 2.5 * U;
+    const goLand = onShore ? this.rng() < 0.5 : here > 0;
+    for (let tries = 0; tries < 12; tries++) {
+      const ang = this.rng() * Math.PI * 2;
+      const r = (8 + this.rng() * (cfg.leash - 8)) * U; // commit to a distance
+      const x = c.home.x + Math.sin(ang) * r;
+      const z = c.home.z + Math.cos(ang) * r;
+      const h = beachHeight(x, z);
+      const onLand = h > 0.3 * U;
+      const inWade = h < 0 && -h <= cfg.maxWadeM * U;
+      if (goLand ? onLand : inWade) {
+        c.wanderPt.set(x, 0, z);
+        return;
+      }
+    }
+    // Fallback: any land-or-wadeable point nearby (don't get stuck).
+    for (let tries = 0; tries < 12; tries++) {
       const ang = this.rng() * Math.PI * 2;
       const r = (4 + this.rng() * (cfg.leash - 4)) * U;
       const x = c.home.x + Math.sin(ang) * r;
       const z = c.home.z + Math.cos(ang) * r;
-      // Shallow ambusher: stay on land / in wadeable water, not the deep.
       if (-beachHeight(x, z) <= cfg.maxWadeM * U) {
         c.wanderPt.set(x, 0, z);
         return;
