@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { registerHudElement } from "./HudEditor";
+import { getSettings } from "./Settings";
 
 type ClickHandler = (pointer: THREE.Vector2, event: PointerEvent) => void;
 
@@ -51,10 +52,13 @@ export class InputManager {
   private fpLayer: HTMLDivElement | null = null;
   private fpJoyBase: HTMLDivElement | null = null;
   private fpJoyStick: HTMLDivElement | null = null;
+  private fpJoyRest: HTMLDivElement | null = null;
   private fpPromptEl: HTMLDivElement | null = null;
   private fpInteractBtn: HTMLButtonElement | null = null;
+  private fpJumpBtn: HTMLButtonElement | null = null;
   private fpRunBtn: HTMLButtonElement | null = null;
   private fpCrouchBtn: HTMLButtonElement | null = null;
+  private nativeButtonsVisible = true;
   // HUD-layout registry unhooks for the FP buttons (see HudEditor).
   private hudUnregs: Array<() => void> = [];
   private runToggled = false; // mobile Run toggle (desktop uses hold-Shift)
@@ -64,7 +68,13 @@ export class InputManager {
   private readonly fpPointers = new Map<number, FpPointerState>();
   private readonly fpJoy = { x: 0, y: 0 }; // joystick vector, forward = +y
   private readonly fpLook = { x: 0, y: 0 }; // accumulated raw drag delta (px)
-  private readonly fpJoyRadius = 56;
+  // Joystick throw radius in px. The HUD editor's "joystick" scale multiplies
+  // the BASE at gesture start: CSS transform scale only shrinks the visuals,
+  // so the input math must scale too or a small joystick would need the same
+  // finger travel as a big one.
+  private static readonly FP_JOY_BASE_RADIUS = 56;
+  private fpJoyRadius = InputManager.FP_JOY_BASE_RADIUS;
+  private fpJoyScale = 1;
   private readonly interactHandlers = new Set<() => void>();
   private jumpRequested = false;
   // Long-press-to-interact: a stationary hold fires these with the touch point
@@ -310,6 +320,15 @@ export class InputManager {
     crosshair.className = "be-fp-crosshair";
     layer.appendChild(crosshair);
 
+    // Resting joystick base: a faint, always-visible anchor at the bottom-left
+    // showing where movement lives. Touches pass through it (pointer-events:
+    // none) — the ACTIVE joystick still spawns wherever the thumb lands on the
+    // left half. It doubles as the HUD editor's "joystick" node: moving it
+    // relocates the visual anchor, scaling it resizes the live joystick too.
+    const joyRest = document.createElement("div");
+    joyRest.className = "be-fp-joyrest";
+    layer.appendChild(joyRest);
+
     const joyBase = document.createElement("div");
     joyBase.className = "be-fp-joybase";
     joyBase.style.display = "none";
@@ -433,17 +452,88 @@ export class InputManager {
     this.fpLayer = layer;
     this.fpJoyBase = joyBase;
     this.fpJoyStick = joyStick;
+    this.fpJoyRest = joyRest;
     this.fpPromptEl = prompt;
     this.fpInteractBtn = interactBtn;
+    this.fpJumpBtn = jumpBtn;
+
+    this.applyNativeButtonVisibility();
 
     // Join the HUD-layout registry so custom placements from the HUD editor
-    // (settings.hudLayout) apply to the touch buttons.
+    // (settings.hudLayout) apply to the touch buttons. NOTE: the "joystick"
+    // node is the static RESTING base, never the dynamic touch-anchored base —
+    // onFpPointerDown writes px positions to the dynamic one per gesture, which
+    // would fight the registry's % placement.
     this.hudUnregs.push(
       registerHudElement("interact", interactBtn),
       registerHudElement("jump", jumpBtn),
       registerHudElement("run", runBtn),
       registerHudElement("crouch", crouchBtn),
+      registerHudElement("joystick", joyRest),
     );
+  }
+
+  // ---------- Island HUD hooks (SurvivalHud action ring) ----------
+
+  /**
+   * Hide/show the built-in jump/run/crouch touch buttons. The island hides
+   * them — its action ring drives the same latches through the public methods
+   * below — while the prologue lab keeps them untouched. The interact prompt
+   * and joystick are unaffected.
+   */
+  setNativeButtonsVisible(visible: boolean): void {
+    this.nativeButtonsVisible = visible;
+    this.applyNativeButtonVisibility();
+  }
+
+  private applyNativeButtonVisibility(): void {
+    const d = this.nativeButtonsVisible ? "" : "none";
+    if (this.fpJumpBtn) this.fpJumpBtn.style.display = d;
+    if (this.fpRunBtn) this.fpRunBtn.style.display = d;
+    if (this.fpCrouchBtn) this.fpCrouchBtn.style.display = d;
+  }
+
+  /** Queue a jump (same path as Space / the native jump button). */
+  requestJump(): void {
+    if (!this.fpMode || !this.enabled) return;
+    this.jumpRequested = true;
+  }
+
+  /** Flip the run latch (mutually exclusive with crouch); returns new state. */
+  toggleRun(): boolean {
+    this.setRunToggled(!this.runToggled);
+    return this.runToggled;
+  }
+
+  /** Set the run latch directly — e.g. auto-cancel when stamina empties. */
+  setRunToggled(on: boolean): void {
+    this.runToggled = on;
+    if (on) {
+      this.crouchToggled = false;
+      this.fpCrouchBtn?.classList.remove("is-active");
+    }
+    this.fpRunBtn?.classList.toggle("is-active", this.runToggled);
+  }
+
+  /** Flip the crouch latch (mutually exclusive with run); returns new state. */
+  toggleCrouch(): boolean {
+    this.crouchToggled = !this.crouchToggled;
+    if (this.crouchToggled) {
+      this.runToggled = false;
+      this.fpRunBtn?.classList.remove("is-active");
+    }
+    this.fpCrouchBtn?.classList.toggle("is-active", this.crouchToggled);
+    return this.crouchToggled;
+  }
+
+  /** Current mobile run latch (excludes hold-Shift). */
+  get runLatched(): boolean {
+    return this.runToggled;
+  }
+
+  /** Current mobile crouch latch (excludes the "C" key). */
+  get crouchLatched(): boolean {
+    return this.crouchToggled;
   }
 
   // Left half drives the virtual joystick (move); right half drags to look.
@@ -479,8 +569,14 @@ export class InputManager {
       moved: false,
     });
     if (role === "move" && this.fpJoyBase && this.fpJoyStick) {
+      // The HUD editor's joystick scale resizes the live joystick: visuals via
+      // a CSS scale on the base, input math via the effective throw radius.
+      const s = getSettings().hudLayout.joystick?.scale ?? 1;
+      this.fpJoyScale = s;
+      this.fpJoyRadius = InputManager.FP_JOY_BASE_RADIUS * s;
       this.fpJoyBase.style.left = `${e.clientX}px`;
       this.fpJoyBase.style.top = `${e.clientY}px`;
+      this.fpJoyBase.style.transform = s === 1 ? "" : `scale(${s})`;
       this.fpJoyBase.style.display = "block";
       this.fpJoyStick.style.transform = "translate(-50%, -50%)";
     }
@@ -507,7 +603,11 @@ export class InputManager {
         dy = (dy / len) * this.fpJoyRadius;
       }
       if (this.fpJoyStick) {
-        this.fpJoyStick.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+        // The base is CSS-scaled by fpJoyScale, so child px offsets get scaled
+        // too — divide so the knob tracks the finger 1:1 on screen.
+        const kx = dx / this.fpJoyScale;
+        const ky = dy / this.fpJoyScale;
+        this.fpJoyStick.style.transform = `translate(calc(-50% + ${kx}px), calc(-50% + ${ky}px))`;
       }
       this.fpJoy.x = dx / this.fpJoyRadius;
       this.fpJoy.y = -dy / this.fpJoyRadius; // screen-up = forward

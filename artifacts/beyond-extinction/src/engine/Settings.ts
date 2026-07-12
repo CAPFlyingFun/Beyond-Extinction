@@ -47,7 +47,9 @@ export interface GameplaySettings {
 export type MinimapCorner = "tl" | "tr";
 export const MINIMAP_CORNERS: readonly MinimapCorner[] = ["tl", "tr"];
 
-/** HUD elements the layout editor can move/scale. */
+/** HUD elements the layout editor can move/scale. Each id is one draggable
+ *  CLUSTER (whole vitals column, whole action ring…), not every tiny piece —
+ *  cluster nodes keep the editor usable on a phone. */
 export const HUD_ELEMENT_IDS = [
   "minimap",
   "jump",
@@ -55,6 +57,17 @@ export const HUD_ELEMENT_IDS = [
   "crouch",
   "interact",
   "quest",
+  // Hybrid island HUD (ARK × Path of Titans) clusters:
+  "menu", // top-left round menu buttons (menu/chat/map/codex)
+  "status", // temperature / status readout under the menu buttons
+  "tracker", // PoT quest tracker (objectives + progress bars)
+  "ring", // PoT action ring (rest/dodge/jump)
+  "abilities", // big bite/claw ability circles
+  "vitals", // ARK vitals column (HP/Stam/Food/Water/Weight)
+  "bars", // bottom-center stamina + water bars
+  "hotbar", // ARK item hotbar
+  "daytime", // ARK day/time counter
+  "joystick", // movement joystick resting base (touch still re-anchors it)
 ] as const;
 export type HudElementId = (typeof HUD_ELEMENT_IDS)[number];
 

@@ -21,7 +21,8 @@ import {
   type GameplaySettings,
 } from "../engine/Settings";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
-import { closeHudEditor } from "../engine/HudEditor";
+import { closeHudEditor, setHudEditorContext } from "../engine/HudEditor";
+import { ISLAND_LOCATIONS, MAP_METRES, locationWorld } from "../engine/islandLocations";
 import { SeaCreatures } from "../engine/SeaCreatures";
 import { beachStory } from "../data/beachSequences";
 import { VOICE_CLIPS } from "../data/voiceClips";
@@ -36,12 +37,15 @@ import {
   HEIGHT_SCALE,
   METERS_PER_UNIT,
   ISLAND_CENTER,
+  ISLAND_SPAN,
   type OceanWater,
 } from "../engine/beachTerrain";
 import { SaveManager } from "../engine/SaveManager";
 import { SpawnStore } from "../engine/SpawnStore";
 import { SpawnTools } from "../engine/SpawnTools";
 import { IslandMap } from "../engine/IslandMap";
+import { SurvivalStats } from "../engine/SurvivalStats";
+import { SurvivalHud } from "../engine/SurvivalHud";
 import { PlayerInventory } from "../engine/PlayerInventory";
 import { MarkerStore } from "../engine/MarkerStore";
 import { spawnSceneMarkers } from "../engine/MarkerEditor";
@@ -120,6 +124,14 @@ class ChapterOnePlaceholderScene implements IScene {
   private inventory?: InventoryOverlay;
   private islandMap?: IslandMap;
   private seaCreatures?: SeaCreatures;
+  // Survival model + hybrid ARK×PoT HUD (first-person island only). Stats tick
+  // only while player input is enabled, so cinematics/menus freeze the clock.
+  private stats?: SurvivalStats;
+  private survivalHud?: SurvivalHud;
+  private locNameAcc = 0; // throttle for the minimap location label
+  // Named-zone lookup table (world coords + squared radii), built lazily on
+  // first poll — locationWorld() needs the heightmap, which loads with init().
+  private locZones?: Array<{ name: string; x: number; z: number; r2: number }>;
   // Eye heights in world units, keyed off Godot's real-metre stances so the two
   // builds match exactly (model is 1.8 m tall = 6.4 u; METERS_PER_UNIT converts).
   // Godot base_character.gd: stand 1.62 m, crouch 1.05 m, crawl 0.52 m.
@@ -417,6 +429,9 @@ class ChapterOnePlaceholderScene implements IScene {
         crouchMultiplier: 0.6875, // 2.2 m/s
         crawlMultiplier: 0.4375, // 1.4 m/s
         lookSensitivity: this.settings.lookSensitivity,
+        // Stamina gate: at zero, sprint drops to a walk until it recovers.
+        // Drives both the Shift key (desktop) and the Run ring button.
+        canRun: () => (this.stats?.stamina ?? 100) > 0,
       });
       this.player.placeAt(this.jack.position.x, this.jack.position.z, this.jackFacingDeg);
       this.camY = beachHeight(this.jack.position.x, this.jack.position.z) + ChapterOnePlaceholderScene.EYE;
@@ -464,10 +479,50 @@ class ChapterOnePlaceholderScene implements IScene {
     if (!this.firstPerson) void this.runStory();
   }
 
-  /** First-person HUD chrome: inventory overlay + satellite minimap. Built
-   *  immediately on a resume, or after the arrival cinematic on day one. */
+  /**
+   * Name of the HANIFAT story zone the player is standing in, or null in
+   * unnamed wilderness (hides the minimap pill). Zones are authored on the
+   * 2500 m map grid; radii scale through the same grid→world conversion as
+   * the positions so a "20 m" circle drawn on the map brief stays the same
+   * *fraction of the island* in-game.
+   */
+  private nearestLocationName(cx: number, cz: number): string | null {
+    if (!this.locZones) {
+      const worldPerGridMetre = ISLAND_SPAN / MAP_METRES;
+      this.locZones = ISLAND_LOCATIONS.map((loc) => {
+        const w = locationWorld(loc);
+        const r = loc.radius * worldPerGridMetre;
+        return { name: loc.name, x: w.x, z: w.z, r2: r * r };
+      });
+    }
+    let best: string | null = null;
+    let bestD = Infinity;
+    for (const zone of this.locZones) {
+      const dx = cx - zone.x;
+      const dz = cz - zone.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 <= zone.r2 && d2 < bestD) {
+        bestD = d2;
+        best = zone.name;
+      }
+    }
+    return best;
+  }
+
+  /** First-person HUD chrome: inventory overlay + satellite minimap + survival
+   *  HUD. Built immediately on a resume, or after the arrival cinematic on day
+   *  one. Guard against double-build with the inventory presence check. */
   private buildFpHud(): void {
     if (this.disposed || this.inventory) return;
+
+    // HUD layout editor shows the island element set while this scene is live
+    // (survival clusters instead of the lab objective card). Reset in dispose().
+    setHudEditorContext("island");
+
+    // ARK-style survival model — feeds the HUD with live stamina/food/water/
+    // temperature/day values. One instance per scene entry; stats reset fresh.
+    this.stats = new SurvivalStats();
+
     // Jack's inventory (badge + coffee) + the DEV tab, same ARK overlay as the
     // prologue. Opening it freezes movement; closing restores it.
     this.inventory = new InventoryOverlay(this.ctx.uiLayer, {
@@ -478,10 +533,37 @@ class ChapterOnePlaceholderScene implements IScene {
       playSfx: (n) => this.ctx.audio.playSfx(n),
       onSave: () => this.manualSaveIsland(),
     });
+
     // Satellite minimap (tap to open the full map with pinch-zoom/pan).
     // Passing the world scene switches the minimap to a LIVE top-down render
     // (what's really there — no baked image, immune to world rescales).
     this.islandMap = new IslandMap(this.ctx.uiLayer, this.scene);
+
+    // Hybrid ARK × Path of Titans survival HUD. Two exclusive modes:
+    //   On-foot  → menu / status / tracker / hotbar / stamina-water bars
+    //   Mounted  → menu / status / tracker / ring / abilities / creature vitals
+    // Toggle via survivalHud.setMounted(creatureStats | null).
+    this.survivalHud = new SurvivalHud({
+      parent: this.ctx.uiLayer,
+      input: this.ctx.input,
+      stats: this.stats,
+      quest: this.ctx.quest,
+      audio: this.ctx.audio,
+      onOpenMenu: () => {
+        this.ctx.audio.playSfx("ui-select");
+        const wasEnabled = this.ctx.input.inputEnabled;
+        this.ctx.input.setEnabled(false);
+        openSettingsPanel({
+          parent: this.ctx.uiLayer,
+          audio: this.ctx.audio,
+          onClose: () => {
+            if (!this.disposed) this.ctx.input.setEnabled(wasEnabled);
+          },
+        });
+      },
+      onOpenMap: () => this.islandMap?.openFull(),
+      onOpenCodex: () => this.inventory?.toggle(),
+    });
 
     // Ambient sea life roaming the ocean (ARK-style spawn around the player).
     // preload() streams the 5 GLBs in the background; they pop in once ready,
@@ -1487,9 +1569,27 @@ class ChapterOnePlaceholderScene implements IScene {
           `run=${run ? 1 : 0}  crouch=${crouch ? 1 : 0}  crawl=${crawl ? 1 : 0}  ` +
           `ground=${this.onGround ? 1 : 0}`;
       }
-      if (this.ctx.input.consumeJump() && this.onGround) {
+      const jumped = this.ctx.input.consumeJump() && this.onGround;
+      if (jumped) {
         this.vy = ChapterOnePlaceholderScene.JUMP_SPEED;
         this.onGround = false;
+      }
+      // Tick the survival model while input is enabled (pauses during
+      // cinematics / menus because setEnabled(false) is called there).
+      if (this.ctx.input.inputEnabled && this.stats) {
+        this.stats.update(dt, {
+          moving: res.moving,
+          running: this.ctx.input.isRunning() && res.moving,
+          crouching: this.ctx.input.isCrouching(),
+          crawling: this.ctx.input.isCrawling(),
+          jumped,
+        });
+      }
+      // Throttled nearest-location poll (~0.5 s) → minimap location pill.
+      this.locNameAcc += dt;
+      if (this.locNameAcc >= 0.5) {
+        this.locNameAcc = 0;
+        this.islandMap?.setLocationName(this.nearestLocationName(cx, cz));
       }
       this.vy -= ChapterOnePlaceholderScene.GRAVITY * dt;
       // Integrate our OWN eye height — PlayerController.applyToCamera() overwrites
@@ -1632,8 +1732,11 @@ class ChapterOnePlaceholderScene implements IScene {
     this.ctx.overlays.cancelChoice();
     closeSettingsPanel();
     closeHudEditor();
+    setHudEditorContext("lab"); // island HUD leaves with the scene
     this.seaCreatures?.dispose();
     if (SpawnTools.current) SpawnTools.current = undefined; // Dev spawn tools leave with the scene
+    this.survivalHud?.dispose();
+    this.stats?.dispose();
     this.islandMap?.dispose();
     this.player?.dispose();
     this.inventory?.dispose();

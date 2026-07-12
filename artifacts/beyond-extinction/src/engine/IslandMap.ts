@@ -60,6 +60,7 @@ export class IslandMap {
   private fog: HTMLCanvasElement;
   private cellFrac: number; // one 500 m cell as a fraction of the image
 
+  private locEl!: HTMLDivElement;
   private full?: HTMLDivElement;
   private fullCanvas?: HTMLCanvasElement;
   private view = { scale: 1, tx: 0, ty: 0, base: 1 };
@@ -111,6 +112,12 @@ export class IslandMap {
     this.unregHud = registerHudElement("minimap", this.root);
     this.mmc = this.mm.getContext("2d")!;
     this.root.addEventListener("click", () => this.openFull());
+    // Current-location name above the minimap circle (survival HUD). Lives
+    // inside the minimap node so it moves/scales with the minimap placement.
+    this.locEl = document.createElement("div");
+    this.locEl.className = "be-imap__loc";
+    this.locEl.style.display = "none";
+    this.root.appendChild(this.locEl);
 
     this.img.onload = () => {
       this.ready = true;
@@ -425,7 +432,8 @@ export class IslandMap {
   }
 
   // ── full-screen map ────────────────────────────────────────────────────────
-  private openFull(): void {
+  /** Open the full-screen island map (also triggered by tapping the minimap). */
+  openFull(): void {
     if (this.full || (!this.ready && !this.world)) return;
     // Live mode: re-render the whole island on open (renderLive picks this up).
     this.fullDirty = !!this.world;
@@ -544,6 +552,19 @@ export class IslandMap {
     cv.addEventListener("pointermove", move);
     cv.addEventListener("pointerup", up);
     cv.addEventListener("pointercancel", up);
+  }
+
+  /**
+   * Show the current named location above the minimap circle (survival HUD).
+   * Pass null/"" while in unnamed wilderness to hide the pill.
+   */
+  setLocationName(name: string | null): void {
+    if (!name) {
+      this.locEl.style.display = "none";
+      return;
+    }
+    if (this.locEl.textContent !== name) this.locEl.textContent = name;
+    this.locEl.style.display = "";
   }
 
   dispose(): void {

@@ -2003,3 +2003,465 @@ body {
   .be-ae__kfs { display: none; }
   .be-ae__hint { font-size: 10px; }
 }
+
+/* ══ Island survival HUD (ARK × Path of Titans hybrid) ═══════════════════════
+   Every .be-sh-* cluster is one draggable/resizable node in the HUD editor
+   (Settings → HUD Layout). Defaults below are authored to stay overlap-free
+   at 844×390 (iPhone landscape) down to 640×360; the editor overrides them
+   with viewport-% placements, and Reset All falls back to these rules. */
+
+/* Lab FP buttons: keep clear of the top-right minimap on short phones (the
+   old defaults collided with the 150px minimap circle below ~500px height). */
+@media (max-height: 500px) {
+  .be-fp-jump { bottom: 26px; }
+  .be-fp-run { bottom: 32px; }
+  .be-fp-crouch { bottom: 32px; }
+}
+
+/* Resting joystick base — the faint bottom-left anchor. The ACTIVE joystick
+   still spawns where the thumb lands (left half); this marks its home and is
+   the editor's "Joystick" node (scale resizes the live stick too). */
+.be-fp-joyrest {
+  position: fixed;
+  left: calc(24px + env(safe-area-inset-left, 0px));
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  border: 2px dashed rgba(243, 200, 127, 0.26);
+  background: rgba(10, 18, 30, 0.16);
+  pointer-events: none;
+}
+.be-fp-joyrest::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(243, 200, 127, 0.22);
+}
+.be-fp-joyrest--mock { border-style: solid; }
+
+/* Shared cluster chrome */
+.be-sh { display: contents; }
+.be-sh-menu, .be-sh-status, .be-sh-tracker, .be-sh-ring, .be-sh-abil,
+.be-sh-vitals, .be-sh-bars, .be-sh-hotbar, .be-sh-daytime {
+  position: fixed;
+  z-index: 34;
+  pointer-events: none;
+  font-family: "Inter", sans-serif;
+}
+
+/* ── Top-left: round menu buttons (menu / chat / map / codex) ── */
+.be-sh-menu {
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  left: calc(12px + env(safe-area-inset-left, 0px));
+  display: flex;
+  gap: 8px;
+}
+.be-sh-menu__btn {
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid rgba(105, 210, 231, 0.45);
+  background: radial-gradient(circle at 50% 35%, rgba(20, 40, 56, 0.85), rgba(8, 18, 28, 0.85));
+  color: #bfeaf5;
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45), inset 0 0 10px rgba(105, 210, 231, 0.12);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+.be-sh-menu__btn:active { transform: translateY(1px); filter: brightness(1.25); }
+
+/* ── Temperature / status readout under the menu buttons ── */
+.be-sh-status {
+  top: calc(62px + env(safe-area-inset-top, 0px));
+  left: calc(14px + env(safe-area-inset-left, 0px));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(8, 16, 26, 0.55);
+  border: 1px solid rgba(120, 200, 255, 0.22);
+}
+.be-sh-status__temp {
+  font: 700 0.78rem/1 ui-monospace, monospace;
+  color: #ffd98f;
+  letter-spacing: 0.03em;
+}
+.be-sh-status__word {
+  font: 600 0.7rem/1 "Inter", sans-serif;
+  color: #9fc2e0;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.be-sh-status.is-warmlight .be-sh-status__word { color: #ff9d6b; }
+.be-sh-status.is-night .be-sh-status__word { color: #8fd0ff; }
+
+/* ── Location name above the minimap (lives inside the .be-imap node so it
+      moves and scales with the minimap placement) ── */
+.be-imap__loc {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 200px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: rgba(8, 16, 26, 0.62);
+  border: 1px solid rgba(105, 210, 231, 0.35);
+  color: #d9f4fb;
+  font: 600 0.72rem/1.3 "Inter", sans-serif;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* ── Quest tracker (PoT): left of the top-right minimap ── */
+.be-sh-tracker {
+  top: 74px;
+  right: 178px;
+  width: 195px;
+  padding: 7px 10px 8px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(10, 22, 32, 0.66), rgba(8, 16, 26, 0.55));
+  border: 1px solid rgba(105, 210, 231, 0.3);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.be-sh-tracker__title {
+  font: 700 0.62rem/1 "Inter", sans-serif;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #69d2e7;
+  margin-bottom: 6px;
+}
+.be-sh-quest { margin-top: 5px; }
+.be-sh-quest:first-of-type { margin-top: 0; }
+.be-sh-quest__text {
+  font: 600 0.74rem/1.25 "Inter", sans-serif;
+  color: #e8f3ff;
+  margin-bottom: 3px;
+}
+.be-sh-quest.is-done .be-sh-quest__text { color: #9fe0b2; }
+.be-sh-quest__bar {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(120, 200, 255, 0.14);
+  overflow: hidden;
+}
+.be-sh-quest__bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #3aa6c9, #69d2e7);
+  transition: width 0.35s ease;
+}
+.be-sh-quest.is-done .be-sh-quest__bar i { background: linear-gradient(90deg, #3fae63, #7dffb0); }
+.be-sh-quest__pct {
+  margin-top: 2px;
+  font: 600 0.62rem/1 ui-monospace, monospace;
+  color: #8fb8d4;
+  letter-spacing: 0.05em;
+}
+
+/* ── Bottom-right: PoT action ring (rest / dodge / jump) ── */
+.be-sh-ring {
+  right: 152px;
+  bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  gap: 10px;
+}
+.be-sh-ring__btn {
+  width: 46px;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid rgba(105, 210, 231, 0.45);
+  background: radial-gradient(circle at 50% 35%, rgba(20, 40, 56, 0.85), rgba(8, 18, 28, 0.85));
+  color: #bfeaf5;
+  font: 700 0.95rem/1 "Inter", sans-serif;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+.be-sh-ring__btn:active { transform: translateY(1px); filter: brightness(1.25); }
+.be-sh-ring__btn.is-active {
+  color: #06210f;
+  border-color: rgba(80, 255, 120, 0.7);
+  background: linear-gradient(180deg, #bff6c8, #46d16a);
+  box-shadow: 0 0 0 3px rgba(80, 255, 120, 0.4), 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+.be-sh-ring__btn.is-disabled { opacity: 0.45; }
+
+/* ── Bottom-right corner: big bite / claw ability circles ── */
+.be-sh-abil {
+  right: 14px;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+.be-sh-abil__btn {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid rgba(243, 200, 127, 0.5);
+  background: radial-gradient(circle at 50% 35%, rgba(46, 34, 18, 0.88), rgba(20, 14, 8, 0.88));
+  color: #ffd98f;
+  font: 800 0.66rem/1 "Inter", sans-serif;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.5), inset 0 0 12px rgba(243, 200, 127, 0.12);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  overflow: hidden;
+}
+.be-sh-abil__btn--big { width: 68px; height: 68px; font-size: 0.74rem; }
+.be-sh-abil__btn:active { transform: translateY(1px); filter: brightness(1.3); }
+.be-sh-abil__btn .cd {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgba(8, 14, 22, 0.72);
+  transform: translateY(0);
+  pointer-events: none;
+  opacity: 0;
+}
+.be-sh-abil__btn.is-cd .cd {
+  opacity: 1;
+  animation: be-sh-cd linear forwards;
+}
+@keyframes be-sh-cd {
+  from { transform: translateY(0); }
+  to { transform: translateY(100%); }
+}
+
+/* ── Right edge: ARK vitals column (mounted mode only) ── */
+.be-sh-vitals {
+  right: 14px;
+  top: 232px;
+  width: 132px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 9px;
+  border-radius: 10px;
+  background: rgba(8, 16, 26, 0.5);
+  border: 1px solid rgba(243, 200, 127, 0.24);
+}
+.be-sh-vitals__header {
+  font: 700 0.6rem/1.2 ui-monospace, monospace;
+  color: #f3c87f;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-align: center;
+  padding-bottom: 3px;
+  border-bottom: 1px solid rgba(243, 200, 127, 0.2);
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.be-sh-vital {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.be-sh-vital__icon { font-size: 0.72rem; width: 16px; text-align: center; flex: none; }
+.be-sh-vital__bar {
+  flex: 1;
+  height: 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.be-sh-vital__bar i {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+.be-sh-vital--health i { background: linear-gradient(90deg, #c9403f, #ff6b6b); }
+.be-sh-vital--stamina i { background: linear-gradient(90deg, #3fae63, #7dffb0); }
+.be-sh-vital--food i { background: linear-gradient(90deg, #c9812f, #f0a94a); }
+.be-sh-vital--water i { background: linear-gradient(90deg, #2f76c9, #4aa8f0); }
+.be-sh-vital--weight i { background: linear-gradient(90deg, #8f6fc9, #c9a7f0); }
+.be-sh-vital__val {
+  font: 700 0.6rem/1 ui-monospace, monospace;
+  color: #cfe8ff;
+  min-width: 2.6em;
+  text-align: right;
+  flex: none;
+}
+.be-sh-vital.is-low i { animation: be-sh-lowpulse 0.9s ease-in-out infinite; }
+@keyframes be-sh-lowpulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* ── Bottom-center: health + stamina + water quick bars ── */
+.be-sh-bars {
+  left: 50%;
+  bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  width: min(250px, 30vw);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.be-sh-bars__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.be-sh-bars__icon {
+  width: 14px;
+  flex: none;
+  font-size: 0.62rem;
+  line-height: 1;
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+.be-sh-bars__bar {
+  flex: 1;
+  height: 9px;
+  border-radius: 5px;
+  background: rgba(8, 16, 26, 0.6);
+  border: 1px solid rgba(120, 200, 255, 0.2);
+  overflow: hidden;
+}
+.be-sh-bars__bar i {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.3s ease;
+}
+.be-sh-bars__bar--health i { background: linear-gradient(90deg, #c9403f, #ff6b6b); }
+.be-sh-bars__bar--stam i { background: linear-gradient(90deg, #3fae63, #7dffb0); }
+.be-sh-bars__bar--water i { background: linear-gradient(90deg, #2f76c9, #4aa8f0); }
+.be-sh-bars__bar.is-low i { animation: be-sh-lowpulse 0.9s ease-in-out infinite; }
+
+/* ── Bottom-center: ARK hotbar ── */
+.be-sh-hotbar {
+  left: 50%;
+  bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+}
+.be-sh-hotbar__slot {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid rgba(243, 200, 127, 0.3);
+  background: linear-gradient(180deg, rgba(20, 30, 42, 0.72), rgba(10, 16, 26, 0.72));
+  color: #6d8296;
+  font: 600 0.66rem/1 ui-monospace, monospace;
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+.be-sh-hotbar__slot.has-item { color: #f3e7cf; font-size: 1rem; border-color: rgba(243, 200, 127, 0.55); }
+.be-sh-hotbar__slot:active { transform: translateY(1px); }
+.be-sh-hotbar__qty {
+  position: absolute;
+  right: 2px;
+  bottom: 1px;
+  font: 700 0.56rem/1 ui-monospace, monospace;
+  color: #ffd98f;
+}
+
+/* ── ARK day / time counter ── */
+.be-sh-daytime {
+  left: 50%;
+  bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgba(8, 16, 26, 0.55);
+  border: 1px solid rgba(243, 200, 127, 0.25);
+  color: #ffd98f;
+  font: 700 0.66rem/1.4 ui-monospace, monospace;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+
+/* ── Toast (chat "coming soon", quick-use feedback) ── */
+.be-sh-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 130px;
+  transform: translateX(-50%) translateY(6px);
+  z-index: 60;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(8, 16, 26, 0.82);
+  border: 1px solid rgba(120, 200, 255, 0.3);
+  color: #d9ecff;
+  font: 600 0.74rem/1.4 "Inter", sans-serif;
+  opacity: 0;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.be-sh-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ── Narrow-phone adjustments (≤700px wide landscape) ── */
+@media (max-width: 700px) {
+  .be-sh-vitals { top: 196px; width: 118px; }
+  .be-sh-ring { bottom: calc(120px + env(safe-area-inset-bottom, 0px)); right: 130px; }
+  .be-sh-abil__btn { width: 50px; height: 50px; }
+  .be-sh-abil__btn--big { width: 60px; height: 60px; }
+  .be-sh-hotbar__slot { width: 35px; height: 35px; }
+  .be-sh-bars { width: 210px; }
+  .be-fp-joyrest { width: 96px; height: 96px; }
+}
+
+/* Tracker hugs the minimap, so it must tighten at the SAME breakpoint the
+   minimap shrinks (640px → 112px circle), not at 700px — otherwise there is
+   a 641–700px window where the tracker slides under the still-150px minimap. */
+@media (max-width: 640px) {
+  .be-sh-tracker { right: 142px; width: 170px; }
+}
+
+/* Short landscape phones: the mounted vitals column (top: 232px, ~150px tall)
+   runs into the bottom-right ability circles below ~430px height — lift it. */
+@media (max-height: 430px) {
+  .be-sh-vitals { top: 150px; }
+}

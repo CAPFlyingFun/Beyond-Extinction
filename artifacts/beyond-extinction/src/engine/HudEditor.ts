@@ -3,7 +3,6 @@ import {
   getSettings,
   setSettings,
   subscribeSettings,
-  HUD_ELEMENT_IDS,
   HUD_PLACEMENT_RANGES,
   type HudElementId,
   type HudLayout,
@@ -88,12 +87,49 @@ const LABELS: Record<HudElementId, string> = {
   crouch: "Crouch",
   interact: "Interact",
   quest: "Objective",
+  menu: "Menu Buttons",
+  status: "Status Readout",
+  tracker: "Quest Tracker",
+  ring: "Action Ring",
+  abilities: "Abilities",
+  vitals: "Creature Vitals",
+  bars: "Health/Stamina/Water",
+  hotbar: "Hotbar",
+  daytime: "Day & Time",
+  joystick: "Joystick",
 };
+
+/**
+ * Which HUD elements the editor shows depends on where the player is:
+ *  - lab (prologue): FP buttons + minimap + the single-line objective card.
+ *  - island: FP buttons + minimap + every survival cluster; the objective
+ *    card is excluded because the quest TRACKER replaces it on the island.
+ * Scenes declare their context on entry (see setHudEditorContext).
+ */
+export type HudEditorContext = "lab" | "island";
+
+const CONTEXT_IDS: Record<HudEditorContext, readonly HudElementId[]> = {
+  lab: ["minimap", "jump", "run", "crouch", "interact", "quest", "joystick"],
+  island: [
+    "minimap", "jump", "run", "crouch", "interact", "joystick",
+    "menu", "status", "tracker", "bars", "hotbar", "daytime",
+    "ring", "abilities", "vitals",
+  ],
+};
+
+let hudContext: HudEditorContext = "lab";
+
+/** Scenes call this on entry so the HUD editor shows the right element set. */
+export function setHudEditorContext(mode: HudEditorContext): void {
+  hudContext = mode;
+}
 
 interface OpenOptions {
   parent: HTMLElement;
   audio?: AudioManager;
   onClose?: () => void;
+  /** Override the current scene context (defaults to the last setHudEditorContext). */
+  mode?: HudEditorContext;
 }
 
 let openEl: HTMLDivElement | null = null;
@@ -108,9 +144,12 @@ export function isHudEditorOpen(): boolean {
  * scene — it edits mock proxies (styled with the real HUD CSS classes), so
  * the real elements don't need to be on screen.
  */
-export function openHudEditor({ parent, audio, onClose }: OpenOptions): void {
+export function openHudEditor({ parent, audio, onClose, mode }: OpenOptions): void {
   if (openEl) return;
   injectEditorStyles();
+
+  // Only the elements that exist in the current scene context are editable.
+  const editableIds = CONTEXT_IDS[mode ?? hudContext];
 
   // Working copy — nothing is persisted until Save.
   const layout: HudLayout = structuredClone(getSettings().hudLayout);
@@ -193,6 +232,101 @@ export function openHudEditor({ parent, audio, onClose }: OpenOptions): void {
           </div>`;
         break;
       }
+      // ── Island survival HUD clusters (classes live in styles.css, which is
+      //    always loaded, so the mocks look exactly like the real thing even
+      //    when editing from the lab where SurvivalHud was never built). ──────
+      case "menu": {
+        p = document.createElement("div");
+        p.className = "be-sh-menu";
+        p.innerHTML = ["☰", "🗨", "🗺", "📖"]
+          .map((g) => `<span class="be-sh-menu__btn">${g}</span>`)
+          .join("");
+        break;
+      }
+      case "status": {
+        p = document.createElement("div");
+        p.className = "be-sh-status";
+        p.innerHTML = `<span class="be-sh-status__temp">☀</span><span class="be-sh-status__word">Morning</span>`;
+        break;
+      }
+      case "tracker": {
+        p = document.createElement("div");
+        p.className = "be-sh-tracker";
+        p.innerHTML = `
+          <div class="be-sh-tracker__title">Quests</div>
+          <div class="be-sh-quest">
+            <div class="be-sh-quest__text">Find Sarah</div>
+            <div class="be-sh-quest__bar"><i style="width:72%"></i></div>
+            <div class="be-sh-quest__pct">72% Complete</div>
+          </div>`;
+        break;
+      }
+      case "ring": {
+        p = document.createElement("div");
+        p.className = "be-sh-ring";
+        p.innerHTML = `
+          <span class="be-sh-ring__btn">Zz</span>
+          <span class="be-sh-ring__btn">⇉</span>
+          <span class="be-sh-ring__btn">⤒</span>`;
+        break;
+      }
+      case "abilities": {
+        p = document.createElement("div");
+        p.className = "be-sh-abil";
+        p.innerHTML = `
+          <span class="be-sh-abil__btn">BITE</span>
+          <span class="be-sh-abil__btn be-sh-abil__btn--big">CLAW</span>`;
+        break;
+      }
+      case "vitals": {
+        p = document.createElement("div");
+        p.className = "be-sh-vitals";
+        p.innerHTML =
+          `<div class="be-sh-vitals__header">Triceratops</div>` +
+          [
+            ["❤", 100],
+            ["⚡", 80],
+            ["🍖", 65],
+            ["💧", 50],
+            ["⚖", 12],
+          ]
+            .map(
+              ([icon, v]) => `
+          <div class="be-sh-vital"><span class="be-sh-vital__icon">${icon}</span>
+            <div class="be-sh-vital__bar"><i style="width:${v}%"></i></div></div>`,
+            )
+            .join("");
+        break;
+      }
+      case "bars": {
+        p = document.createElement("div");
+        p.className = "be-sh-bars";
+        p.innerHTML = `
+          <div class="be-sh-bars__row"><span class="be-sh-bars__icon">❤</span><div class="be-sh-bars__bar be-sh-bars__bar--health"><i style="width:92%"></i></div></div>
+          <div class="be-sh-bars__row"><span class="be-sh-bars__icon">⚡</span><div class="be-sh-bars__bar be-sh-bars__bar--stam"><i style="width:76%"></i></div></div>
+          <div class="be-sh-bars__row"><span class="be-sh-bars__icon">💧</span><div class="be-sh-bars__bar be-sh-bars__bar--water"><i style="width:58%"></i></div></div>`;
+        break;
+      }
+      case "hotbar": {
+        p = document.createElement("div");
+        p.className = "be-sh-hotbar";
+        p.innerHTML = Array.from(
+          { length: 6 },
+          (_, i) => `<span class="be-sh-hotbar__slot">${i + 1}</span>`,
+        ).join("");
+        break;
+      }
+      case "daytime": {
+        p = document.createElement("div");
+        p.className = "be-sh-daytime";
+        p.textContent = "DAY 1 · 06:12";
+        break;
+      }
+      case "joystick": {
+        p = document.createElement("div");
+        p.className = "be-fp-joyrest be-fp-joyrest--mock";
+        break;
+      }
     }
     p.classList.add("be-hudedit__item");
     p.dataset.hudId = id;
@@ -200,7 +334,7 @@ export function openHudEditor({ parent, audio, onClose }: OpenOptions): void {
     return p;
   }
 
-  for (const id of HUD_ELEMENT_IDS) {
+  for (const id of editableIds) {
     const p = makeProxy(id);
     stage.appendChild(p);
     proxies.set(id, p);
@@ -310,7 +444,9 @@ export function openHudEditor({ parent, audio, onClose }: OpenOptions): void {
   });
   el.querySelector('[data-action="resetall"]')?.addEventListener("click", () => {
     audio?.playSfx("ui-select");
-    for (const id of HUD_ELEMENT_IDS) {
+    // Reset only the elements shown in this context — the other scene's saved
+    // layout should survive a Reset All performed from here.
+    for (const id of editableIds) {
       delete layout[id];
       applyPlacement(proxies.get(id)!, undefined);
     }

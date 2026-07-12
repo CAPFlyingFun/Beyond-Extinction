@@ -20,6 +20,14 @@ export interface PlayerControllerOptions {
   crawlMultiplier?: number;
   /** Drag-look sensitivity, radians per pixel. */
   lookSensitivity?: number;
+  /**
+   * Optional run gate consulted every frame: return false to force walking
+   * even while run input is held/latched (e.g. the island passes
+   * `() => stats.stamina > 0`). Omitted = always allowed (prologue behavior).
+   * Gates desktop hold-Shift too, which clearing the mobile latch alone
+   * would miss.
+   */
+  canRun?: () => boolean;
 }
 
 /**
@@ -56,6 +64,7 @@ export class PlayerController {
   private readonly crouchMultiplier: number;
   private readonly crawlMultiplier: number;
   private lookSensitivity: number;
+  private readonly canRun?: () => boolean;
   private active = false;
 
   private readonly forward = new THREE.Vector3();
@@ -77,6 +86,7 @@ export class PlayerController {
     this.crouchMultiplier = opts.crouchMultiplier ?? 1;
     this.crawlMultiplier = opts.crawlMultiplier ?? 1;
     this.lookSensitivity = opts.lookSensitivity ?? 0.0032;
+    this.canRun = opts.canRun;
     this.position.y = this.eyeHeight;
   }
 
@@ -159,11 +169,12 @@ export class PlayerController {
         .multiplyScalar(-1);
       this.right.set(-this.forward.z, 0, this.forward.x);
       // Priority: crawl > crouch > run > walk.
+      const runAllowed = this.canRun ? this.canRun() : true;
       const mult = this.input.isCrawling()
         ? this.crawlMultiplier
         : this.input.isCrouching()
           ? this.crouchMultiplier
-          : this.input.isRunning()
+          : this.input.isRunning() && runAllowed
             ? this.runMultiplier
             : 1;
       const step = this.moveSpeed * mult * dt;
