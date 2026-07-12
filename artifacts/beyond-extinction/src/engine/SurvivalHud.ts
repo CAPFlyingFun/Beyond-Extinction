@@ -232,11 +232,12 @@ export class SurvivalHud {
   private buildMenu(): void {
     const el = document.createElement("div");
     el.className = "be-sh-menu";
+    // Codex (📖) intentionally omitted here — it lives under the inventory (🎒),
+    // which now sits in this row where the Codex button used to be.
     const defs: Array<[string, string, () => void]> = [
       ["☰", "Menu", () => this.opts.onOpenMenu()],
       ["🗨", "Chat", () => this.toast("Radio channel — coming soon")],
       ["🗺", "Map", () => this.opts.onOpenMap()],
-      ["📖", "Codex", () => this.opts.onOpenCodex()],
     ];
     for (const [glyph, label, fn] of defs) {
       const b = document.createElement("button");

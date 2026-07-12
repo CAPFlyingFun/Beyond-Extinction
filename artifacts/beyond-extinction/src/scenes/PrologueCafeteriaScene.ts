@@ -1910,9 +1910,15 @@ class PrologueCafeteriaScene implements IScene {
     // past the centre and bury their outer edges in the solid wall — so no two
     // faces are ever coplanar as the camera moves (which is what fought before).
     // Opaque doors keep their original meet-in-the-middle leaves.
-    const leafW = glass ? half * 1.25 : half; // glass leaves overlap; opaque meet
-    const bury = glass ? 0.3 : 0; // glass outer edge buries into the wall
-    const dn = glass ? 0.36 : 0; // wall-normal separation between the two leaves
+    // Both leaf types overlap past the centre and bury their outer edges in the
+    // wall, on two DIFFERENT wall-normal planes (±dn), so no two faces are ever
+    // coplanar as the camera moves. The opaque server/cafeteria doors used to
+    // meet exactly at the centre (dn=0, bury=0) — coplanar inner faces at the
+    // seam and outer edges flush with the wall gap, which z-fought. Subtler
+    // values than the glass door keep the closed look tight.
+    const leafW = glass ? half * 1.25 : half * 1.08; // leaves overlap past centre
+    const bury = glass ? 0.3 : 0.12; // outer edge buries into the wall
+    const dn = glass ? 0.36 : 0.14; // wall-normal separation between the two leaves
     const alongOff = (s: number) => s * (half + bury - leafW / 2); // centre along gap axis
     for (const s of [-1, 1] as const) {
       let leaf: THREE.Object3D;

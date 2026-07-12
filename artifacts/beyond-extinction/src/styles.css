@@ -1501,23 +1501,27 @@ body {
 /* ── Inventory: floating pack button ─────────────────────────────────────── */
 .be-inv-btn {
   position: fixed;
-  /* Sit in the far-right control column, stacked ABOVE the ability/jump button
-     (.be-sh-abil, right:14px bottom:10px, up to 68px tall) so the two no longer
-     overlap in the bottom-right corner. */
-  right: calc(14px + env(safe-area-inset-right, 0px));
-  bottom: calc(86px + env(safe-area-inset-bottom, 0px));
+  /* 4th slot in the top-left menu row, where the Codex (📖) button used to be.
+     After Menu/Chat/Map (each 42px + 8px gap): 12 + 3*(42+8) = 162px. Styled to
+     match the round menu buttons so it reads as part of that row. */
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  left: calc(162px + env(safe-area-inset-left, 0px));
   z-index: 35;
-  width: 46px;
-  height: 46px;
-  border-radius: 10px;
-  border: 1px solid rgba(41, 122, 158, 0.7);
-  background: rgba(6, 20, 30, 0.82);
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid rgba(105, 210, 231, 0.45);
+  background: radial-gradient(circle at 50% 35%, rgba(20, 40, 56, 0.85), rgba(8, 18, 28, 0.85));
   color: #d9f2ff;
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1;
   cursor: pointer;
   pointer-events: auto;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45), inset 0 0 10px rgba(105, 210, 231, 0.12);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
 }
 .be-inv-btn:active {
   transform: translateY(1px);
@@ -2139,14 +2143,22 @@ body {
 
 /* ── Quest tracker (PoT): left of the top-right minimap ── */
 .be-sh-tracker {
-  top: 74px;
-  right: 178px;
-  width: 195px;
+  /* Top-left, below the menu row (10+42) and the time-of-day status pill
+     (~62→86), instead of hugging the minimap on the right where the full quest
+     log ran off the bottom of the screen. Bounded height + scroll so a long log
+     stays inside its box. */
+  top: calc(92px + env(safe-area-inset-top, 0px));
+  left: calc(12px + env(safe-area-inset-left, 0px));
+  width: 210px;
+  max-height: 38vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 7px 10px 8px;
   border-radius: 10px;
   background: linear-gradient(180deg, rgba(10, 22, 32, 0.66), rgba(8, 16, 26, 0.55));
   border: 1px solid rgba(105, 210, 231, 0.3);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
 }
 .be-sh-tracker__title {
   font: 700 0.62rem/1 "Inter", sans-serif;
@@ -2457,11 +2469,11 @@ body {
   .be-fp-joyrest { width: 96px; height: 96px; }
 }
 
-/* Tracker hugs the minimap, so it must tighten at the SAME breakpoint the
-   minimap shrinks (640px → 112px circle), not at 700px — otherwise there is
-   a 641–700px window where the tracker slides under the still-150px minimap. */
+/* Small-screen tracker tweak. */
 @media (max-width: 640px) {
-  .be-sh-tracker { right: 142px; width: 170px; }
+  /* Tracker now lives top-left (see .be-sh-tracker); keep it left-anchored and
+     just narrow it a touch on small screens. */
+  .be-sh-tracker { right: auto; width: 178px; }
 }
 
 /* Short landscape phones: the mounted vitals column (top: 232px, ~150px tall)
