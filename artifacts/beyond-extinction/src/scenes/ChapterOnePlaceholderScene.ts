@@ -1594,6 +1594,14 @@ class ChapterOnePlaceholderScene implements IScene {
               pos: cp,
               inWater: beachHeight(cp.x, cp.z) < 0,
               vulnerable: this.ctx.input.inputEnabled,
+              // Stealth: how far creatures notice you, by stance (metres).
+              noticeRange: this.ctx.input.isCrawling()
+                ? 10
+                : this.ctx.input.isCrouching()
+                  ? 30
+                  : this.ctx.input.isRunning()
+                    ? 100
+                    : 50,
             }
           : undefined;
       this.seaCreatures?.update(dt, seaFocus, player);

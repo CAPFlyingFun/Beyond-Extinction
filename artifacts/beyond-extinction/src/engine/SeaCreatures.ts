@@ -73,8 +73,7 @@ interface SeaBrainCfg {
 interface LandBrainCfg {
   temperament: LandTemperament;
   maxHealth: number;
-  sight: number;
-  aggro: number; // notice range (crocs = point-blank ambush)
+  sight: number; // once locked, keeps tracking a target out to this (metres)
   attackRange: number;
   fovDeg: number;
   damage: number;
@@ -167,8 +166,9 @@ const SPECIES: Species[] = [
     girthM: 1.3,
     spawnWeight: 2,
     land: {
-      // aggro bumped 9→13 so the ambush actually triggers as you approach.
-      temperament: "neutral", maxHealth: 300, sight: 30, aggro: 13,
+      // Notice range is now stance-driven (FaunaPlayer.noticeRange); sight is the
+      // lock-tracking range once it's chasing you.
+      temperament: "neutral", maxHealth: 300, sight: 60,
       attackRange: 4.5, fovDeg: 210, damage: 28, cooldown: 2.2, strikeAt: 0.4,
       wanderSpeed: 1.2, chaseSpeed: 6.0, turnSpeed: 4.0, leash: 70, giveUp: 40,
       fleeHealth: 0, standM: 1.3, maxWadeM: 3,
@@ -184,9 +184,9 @@ const SPECIES: Species[] = [
     girthM: 1.5,
     spawnWeight: 2,
     land: {
-      // aggro bumped 10→18 — Deino is the aggressive croc, it should charge from
-      // a clear distance (still gated by the 210° FOV so you can flank it).
-      temperament: "aggressive", maxHealth: 420, sight: 32, aggro: 18,
+      // Notice range is stance-driven (FaunaPlayer.noticeRange); sight is the
+      // lock-tracking range once it's charging you.
+      temperament: "aggressive", maxHealth: 420, sight: 60,
       attackRange: 5.0, fovDeg: 210, damage: 38, cooldown: 2.4, strikeAt: 0.4,
       wanderSpeed: 1.1, chaseSpeed: 5.6, turnSpeed: 3.6, leash: 70, giveUp: 40,
       fleeHealth: 0, standM: 1.6, maxWadeM: 3,
@@ -253,6 +253,13 @@ export interface FaunaPlayer {
   inWater: boolean;
   /** May creatures target and bite the player right now? (false in cinematics) */
   vulnerable: boolean;
+  /**
+   * Metres at which creatures first notice the player — driven by stance so
+   * stealth matters: running ~100, walking ~50, crouching ~30, crawling ~10.
+   * Land crocs use it directly as their aggro range; sea creatures scale their
+   * sight by noticeRange/50.
+   */
+  noticeRange: number;
 }
 
 export interface SeaCreaturesOptions {
@@ -378,7 +385,7 @@ export class SeaCreatures {
       player.vulnerable &&
       player.inWater &&
       cfg.aggression !== "ambient" &&
-      c.group.position.distanceTo(player.pos) <= cfg.sight;
+      c.group.position.distanceTo(player.pos) <= cfg.sight * (player.noticeRange / 50);
     switch (c.state) {
       case SEA_CRUISE:
         if (canSee) {
@@ -410,7 +417,8 @@ export class SeaCreatures {
 
   private stillInterested(c: Creature, player?: FaunaPlayer): boolean {
     if (!player || !player.vulnerable || !player.inWater) return false;
-    return c.group.position.distanceTo(player.pos) <= c.species.sea!.sight * 1.3;
+    const sight = c.species.sea!.sight * (player.noticeRange / 50);
+    return c.group.position.distanceTo(player.pos) <= sight * 1.3;
   }
 
   private swimSea(c: Creature, dt: number, player?: FaunaPlayer): void {
@@ -600,7 +608,7 @@ export class SeaCreatures {
         return;
       }
     }
-    const seen = this.acquirePlayer(c, cfg.aggro, player);
+    const seen = this.acquirePlayer(c, player);
     const provoked = c.provokedT > 0 && player && player.vulnerable;
     if (cfg.temperament === "aggressive") {
       if (seen) {
@@ -617,15 +625,19 @@ export class SeaCreatures {
     this.loseAndRoam(c);
   }
 
-  /** Nearest player within range + field of view (locked target keeps sight). */
-  private acquirePlayer(c: Creature, range: number, player?: FaunaPlayer): boolean {
+  /** Notice the player within the stance-based range + FOV; a locked target is
+   *  tracked out to max(sight, noticeRange) so a spotted player isn't lost the
+   *  instant they crouch. */
+  private acquirePlayer(c: Creature, player?: FaunaPlayer): boolean {
     const cfg = c.species.land!;
     if (!player || !player.vulnerable) return false;
     const d = c.group.position.distanceTo(player.pos);
+    const notice = player.noticeRange * U;
+    const track = Math.max(cfg.sight * U, notice);
     const locked = c.hasTarget;
-    if (d > cfg.sight * (locked ? 1 : 1)) return false;
+    if (d > track) return false;
     if (!locked) {
-      if (d > range) return false;
+      if (d > notice) return false;
       if (!this.inFov(c, player.pos)) return false;
     }
     return true;
