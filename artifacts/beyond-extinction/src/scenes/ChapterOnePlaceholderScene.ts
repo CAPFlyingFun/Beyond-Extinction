@@ -326,6 +326,13 @@ class ChapterOnePlaceholderScene implements IScene {
     this.oceanUniforms = ocean.uniforms;
     scene.add(ocean.mesh);
 
+    // Ambient sea life — created here (not in buildFpHud) so the GLBs stream in
+    // during the arrival journal and the creatures are already roaming the ocean
+    // by the time the flyover skims and dives over the water. update() seeds them
+    // around a focus point (the flyover camera during the cinematic, then Jack).
+    this.seaCreatures = new SeaCreatures(this.scene, { count: 6 });
+    void this.seaCreatures.preload();
+
     await this.buildJungle();
     if (this.disposed) return;
 
@@ -565,11 +572,6 @@ class ChapterOnePlaceholderScene implements IScene {
       onOpenCodex: () => this.inventory?.toggle(),
     });
 
-    // Ambient sea life roaming the ocean (ARK-style spawn around the player).
-    // preload() streams the 5 GLBs in the background; they pop in once ready,
-    // so scene entry isn't blocked on the download.
-    this.seaCreatures = new SeaCreatures(this.scene, { count: 6 });
-    void this.seaCreatures.preload();
   }
 
   // ---------- Chapter Two: "Day One — Arrival" cinematic ----------
@@ -1516,8 +1518,11 @@ class ChapterOnePlaceholderScene implements IScene {
   // ---------- Loop ----------
 
   update(dt: number, elapsed: number): void {
-    // Ambient sea life — roams whether or not gameplay control is active.
-    if (this.jack) this.seaCreatures?.update(dt, this.jack.position);
+    // Ambient sea life — roams whether or not gameplay control is active. During
+    // the arrival flyover, seed/stream them around the CAMERA (which skims and
+    // dives over the water) so they're visible in the dip; otherwise around Jack.
+    const seaFocus = this.flyoverState ? this.camera.position : this.jack?.position;
+    if (seaFocus) this.seaCreatures?.update(dt, seaFocus);
     this.elapsed = elapsed;
     this.oceanUniforms.uTime.value = elapsed;
 

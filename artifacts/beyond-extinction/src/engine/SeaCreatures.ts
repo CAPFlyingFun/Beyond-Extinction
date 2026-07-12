@@ -258,12 +258,18 @@ export class SeaCreatures {
   }
 
   private placeInOcean(c: Creature, playerPos: THREE.Vector3, initial: boolean): void {
-    for (let tries = 0; tries < 24; tries++) {
+    for (let tries = 0; tries < 40; tries++) {
       const ang = this.rng() * Math.PI * 2;
-      const rMin = initial ? 0.35 : 0.7;
-      const r = (rMin + this.rng() * (1 - rMin)) * this.rangeU;
+      // Area-uniform random point in the water disc around the focus (r ∝ √u so
+      // they scatter evenly across the whole area, not bunched in a ring),
+      // keeping a small inner gap so nothing pops in right on the camera/player.
+      const rMin = initial ? 0.12 : 0.4;
+      const r =
+        Math.sqrt(rMin * rMin + this.rng() * (1 - rMin * rMin)) * this.rangeU;
       const x = playerPos.x + Math.sin(ang) * r;
       const z = playerPos.z + Math.cos(ang) * r;
+      // Water only — never on/over land: reject anything shallower than the
+      // minimum spawn depth and keep sampling.
       if (-beachHeight(x, z) < this.minDepthU) continue;
       c.group.position.set(x, -c.species.cruiseDepthM * U, z);
       c.heading = this.rng() * Math.PI * 2;
