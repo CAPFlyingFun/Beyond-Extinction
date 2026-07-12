@@ -40,6 +40,7 @@ import { CameraDirector, type CameraZone } from "../engine/CameraDirector";
 import { ObjectiveHighlight, type ObjectiveHighlightOptions } from "../engine/ObjectiveHighlight";
 import { Navigator } from "../engine/Navigator";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
+import { closeHudEditor } from "../engine/HudEditor";
 import {
   createEquipmentPanelTexture,
   createFloorTexture,
@@ -4497,6 +4498,7 @@ class PrologueCafeteriaScene implements IScene {
     this.unsubLongPress?.();
     this.unsubSettings?.();
     closeSettingsPanel();
+    closeHudEditor();
     this.gearEl?.remove();
     this.gripTunerEl?.remove();
     this.unbindTunerGesture?.();

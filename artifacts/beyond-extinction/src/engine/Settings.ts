@@ -30,11 +30,50 @@ export interface GameplaySettings {
   subtitles: boolean;
   /** Which screen corner the island minimap sits in. */
   minimapCorner: MinimapCorner;
+  /**
+   * Custom HUD layout (CODM-style): per-element placement overrides saved from
+   * the HUD editor. Key = HUD element id; value = the element's centre point as
+   * a percentage of the viewport plus a scale factor. Elements without an entry
+   * sit at their default CSS position.
+   */
+  hudLayout: HudLayout;
 }
 
-/** Minimap corner preset: top/bottom × left/right. */
-export type MinimapCorner = "tl" | "tr" | "bl" | "br";
-export const MINIMAP_CORNERS: readonly MinimapCorner[] = ["tl", "tr", "bl", "br"];
+/**
+ * Minimap corner preset — TOP corners only. Bottom corners are where thumbs
+ * live on touch (joystick left, jump/run/crouch right), which is why CODM,
+ * PUBG and Fortnite all anchor their minimaps at the top of the screen.
+ */
+export type MinimapCorner = "tl" | "tr";
+export const MINIMAP_CORNERS: readonly MinimapCorner[] = ["tl", "tr"];
+
+/** HUD elements the layout editor can move/scale. */
+export const HUD_ELEMENT_IDS = [
+  "minimap",
+  "jump",
+  "run",
+  "crouch",
+  "interact",
+  "quest",
+] as const;
+export type HudElementId = (typeof HUD_ELEMENT_IDS)[number];
+
+/** One element's saved placement: centre point in viewport % + scale. */
+export interface HudPlacement {
+  /** Element centre, % of viewport width (clamped so it can't be lost offscreen). */
+  x: number;
+  /** Element centre, % of viewport height. */
+  y: number;
+  /** Visual scale multiplier. */
+  scale: number;
+}
+export type HudLayout = Partial<Record<HudElementId, HudPlacement>>;
+
+export const HUD_PLACEMENT_RANGES = {
+  x: { min: 3, max: 97 },
+  y: { min: 3, max: 97 },
+  scale: { min: 0.6, max: 1.6 },
+} as const;
 
 export const SETTINGS_RANGES = {
   fov: { min: 40, max: 75, step: 1, default: 75 },
@@ -48,7 +87,9 @@ const DEFAULTS: GameplaySettings = {
   autoPlay: false,
   lookSensitivity: SETTINGS_RANGES.lookSensitivity.default,
   subtitles: false,
-  minimapCorner: "bl",
+  // Top-right by default: the quest/objective card owns the top-left.
+  minimapCorner: "tr",
+  hudLayout: {},
 };
 
 // v3: the default lab framing baseline moved to FOV 75 / zoom 1.3, so a reset
@@ -83,10 +124,40 @@ function sanitize(raw: Partial<GameplaySettings>): GameplaySettings {
     ),
     subtitles:
       typeof raw.subtitles === "boolean" ? raw.subtitles : DEFAULTS.subtitles,
+    // Legacy "bl"/"br" values (bottom corners were removed) fall through to
+    // the default here, migrating old saves automatically.
     minimapCorner: MINIMAP_CORNERS.includes(raw.minimapCorner as MinimapCorner)
       ? (raw.minimapCorner as MinimapCorner)
       : DEFAULTS.minimapCorner,
+    hudLayout: sanitizeHudLayout(raw.hudLayout),
   };
+}
+
+function sanitizeHudLayout(raw: unknown): HudLayout {
+  if (!raw || typeof raw !== "object") return {};
+  const out: HudLayout = {};
+  for (const id of HUD_ELEMENT_IDS) {
+    const p = (raw as Record<string, unknown>)[id];
+    if (!p || typeof p !== "object") continue;
+    const { x, y, scale } = p as Record<string, unknown>;
+    if (
+      typeof x !== "number" ||
+      typeof y !== "number" ||
+      typeof scale !== "number"
+    ) {
+      continue;
+    }
+    out[id] = {
+      x: clamp(x, HUD_PLACEMENT_RANGES.x.min, HUD_PLACEMENT_RANGES.x.max),
+      y: clamp(y, HUD_PLACEMENT_RANGES.y.min, HUD_PLACEMENT_RANGES.y.max),
+      scale: clamp(
+        scale,
+        HUD_PLACEMENT_RANGES.scale.min,
+        HUD_PLACEMENT_RANGES.scale.max,
+      ),
+    };
+  }
+  return out;
 }
 
 function load(): GameplaySettings {

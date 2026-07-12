@@ -7,6 +7,7 @@ import {
   METERS_PER_UNIT,
 } from "./beachTerrain";
 import { getSettings, subscribeSettings, type MinimapCorner } from "./Settings";
+import { registerHudElement } from "./HudEditor";
 
 /**
  * Island map HUD for Chapter 2, drawn over the real satellite image.
@@ -65,6 +66,7 @@ export class IslandMap {
   private pointers = new Map<number, { x: number; y: number }>();
   private pinchPrev = 0;
   private unsubSettings: () => void;
+  private unregHud: () => void;
 
   // Live top-down minimap (see renderLive). Present only when a world scene
   // was passed; otherwise the minimap falls back to the baked map image.
@@ -104,6 +106,9 @@ export class IslandMap {
     range.textContent = `${MINIMAP_RANGE_M} m`;
     this.root.appendChild(range);
     parent.appendChild(this.root);
+    // Join the HUD-layout registry so a saved custom placement (from the HUD
+    // editor) overrides the corner preset.
+    this.unregHud = registerHudElement("minimap", this.root);
     this.mmc = this.mm.getContext("2d")!;
     this.root.addEventListener("click", () => this.openFull());
 
@@ -114,9 +119,10 @@ export class IslandMap {
     this.img.src = assetUrl("assets/textures/island_color.jpg");
   }
 
-  /** Move the minimap panel to one of the four screen corners. */
+  /** Move the minimap panel to one of the two TOP corners (bottom corners are
+   *  the touch thumb zones — joystick left, jump/run/crouch right). */
   private applyCorner(corner: MinimapCorner): void {
-    this.root.classList.remove("be-imap--tl", "be-imap--tr", "be-imap--bl", "be-imap--br");
+    this.root.classList.remove("be-imap--tl", "be-imap--tr");
     this.root.classList.add(`be-imap--${corner}`);
   }
 
@@ -542,6 +548,7 @@ export class IslandMap {
 
   dispose(): void {
     this.unsubSettings();
+    this.unregHud();
     this.closeFull();
     this.root.remove();
     this.rt?.dispose();
@@ -586,11 +593,10 @@ function injectStyles(): void {
   border-radius: 50%; cursor: pointer; z-index: 60; pointer-events: auto;
   box-shadow: 0 6px 22px rgba(0,0,0,0.5); -webkit-tap-highlight-color: transparent;
 }
-/* Corner presets. Top corners clear the gear / inventory buttons a little. */
+/* Corner presets (top only — bottom is the touch thumb zone). The top-right
+   preset clears the gear / inventory buttons a little. */
 .be-imap--tl { top: 14px; left: 14px; }
 .be-imap--tr { top: 74px; right: 14px; }
-.be-imap--bl { bottom: 14px; left: 14px; }
-.be-imap--br { bottom: 14px; right: 14px; }
 .be-imap__cv { width: 100%; height: 100%; display: block; border-radius: 50%; }
 .be-imap__range {
   position: absolute; right: 6px; bottom: 6px; padding: 1px 6px; border-radius: 8px;

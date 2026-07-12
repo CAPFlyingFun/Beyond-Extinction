@@ -10,6 +10,8 @@ const MUSIC_TRACKS: Record<string, string> = {
   "main-theme": "assets/audio/main-theme.mp3",
   "lab-calm": "assets/audio/lab-calm.mp3",
   "lab-suspense": "assets/audio/lab-suspense.mp3",
+  // Island ambience (Chapter Two) — the looping beach bed under free roam.
+  "beach-dawn": "assets/audio/ambient-beach.mp3",
 };
 
 const SFX_TRACKS: Record<string, string> = {
@@ -24,6 +26,11 @@ const SFX_TRACKS: Record<string, string> = {
   "buzz-deny": "assets/audio/badge-deny.mp3",
   "door-knock": "assets/audio/door-knock.mp3",
   "badge-pickup": "assets/audio/item-pickup.mp3",
+  // Chapter Two arrival nightmare cues (Godot island_story parity). The cue
+  // names match the Godot script; the files are the island audio pack's.
+  "jungle-crash": "assets/audio/footsteps-jungle.mp3",
+  "roar-distant": "assets/audio/dino-roar-far.mp3",
+  gasp: "assets/audio/breath-gasp.mp3",
 };
 
 // Base music level. Kept deliberately low so the score is atmosphere, not a

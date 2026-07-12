@@ -145,6 +145,13 @@ export const VOICE_CLIP_LIST: VoiceClip[] = [
     "lab_narr_06",
     "Her other hand wasn't reaching for the door. It had gone to her stomach. I almost had time to wonder why. Then the light swallowed everything.",
   ),
+
+  // --- Chapter Two: "Day One — Arrival" (the island) ---
+  narrate(
+    "ch2_jack_journal",
+    "Day one. I don't know where we are. I don't know how we got here. I know we're alive. For now, that's enough.",
+  ),
+  jack("ch2_jack_sarah_shout", "SARAH!"),
 ];
 
 /** Lookup by clip id, with measured durations folded in (see voiceDurations). */

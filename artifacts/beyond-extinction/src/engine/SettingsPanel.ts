@@ -1,4 +1,5 @@
 import type { AudioManager } from "./AudioManager";
+import { openHudEditor } from "./HudEditor";
 import {
   getSettings,
   resetSettings,
@@ -76,11 +77,13 @@ export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void
       <div class="be-field" data-key="minimapCorner">
         <span class="be-field__row"><span>Minimap position</span></span>
         <div class="be-seg" role="group" aria-label="Minimap position">
-          <button type="button" data-corner="tl">Top L</button>
-          <button type="button" data-corner="tr">Top R</button>
-          <button type="button" data-corner="bl">Bot L</button>
-          <button type="button" data-corner="br">Bot R</button>
+          <button type="button" data-corner="tl">Top Left</button>
+          <button type="button" data-corner="tr">Top Right</button>
         </div>
+      </div>
+      <div class="be-field" data-key="hudLayout">
+        <span class="be-field__row"><span>HUD layout</span></span>
+        <button type="button" class="be-btn be-btn--wide" data-action="hudedit">Edit HUD Layout</button>
       </div>
       <div class="be-settings__actions">
         <button class="be-btn" data-action="reset">Reset</button>
@@ -184,6 +187,14 @@ export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void
     else setTimeout(finish, 250);
   }
   activeTeardown = (immediate) => close(immediate, immediate);
+
+  // HUD layout editor — close the panel first so the full-screen editor has
+  // the stage to itself (CODM-style: drag to move, tap to resize, save).
+  el.querySelector('[data-action="hudedit"]')?.addEventListener("click", () => {
+    audio?.playSfx("ui-select");
+    close(true, true);
+    openHudEditor({ parent, audio });
+  });
 
   el.querySelector('[data-action="close"]')?.addEventListener("click", () => close());
   el.querySelector('[data-action="reset"]')?.addEventListener("click", () => {

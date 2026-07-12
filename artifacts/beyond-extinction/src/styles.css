@@ -1116,6 +1116,10 @@ body {
   flex: 1;
   text-align: center;
 }
+.be-btn--wide {
+  width: 100%;
+  text-align: center;
+}
 
 /* ---------- Settings toggle (Auto Play) ---------- */
 .be-toggle {

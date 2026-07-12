@@ -44,5 +44,7 @@ export const VOICE_DURATIONS: Record<string, number> = {
   "sarah_dont_know_yet": 1800,
   "jack_what_happened": 2000,
   "sarah_cascade_failing": 2800,
-  "sarah_find_flashlight": 2600
+  "sarah_find_flashlight": 2600,
+  "ch2_jack_journal": 5670,
+  "ch2_jack_sarah_shout": 680
 };

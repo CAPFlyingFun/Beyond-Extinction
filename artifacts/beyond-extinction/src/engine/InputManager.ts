@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { registerHudElement } from "./HudEditor";
 
 type ClickHandler = (pointer: THREE.Vector2, event: PointerEvent) => void;
 
@@ -54,6 +55,8 @@ export class InputManager {
   private fpInteractBtn: HTMLButtonElement | null = null;
   private fpRunBtn: HTMLButtonElement | null = null;
   private fpCrouchBtn: HTMLButtonElement | null = null;
+  // HUD-layout registry unhooks for the FP buttons (see HudEditor).
+  private hudUnregs: Array<() => void> = [];
   private runToggled = false; // mobile Run toggle (desktop uses hold-Shift)
   private crouchToggled = false; // mobile Crouch toggle (desktop uses the "C" key)
   private crawlHeld = false; // mobile Crawl: the Crouch button held (desktop: "X")
@@ -432,6 +435,15 @@ export class InputManager {
     this.fpJoyStick = joyStick;
     this.fpPromptEl = prompt;
     this.fpInteractBtn = interactBtn;
+
+    // Join the HUD-layout registry so custom placements from the HUD editor
+    // (settings.hudLayout) apply to the touch buttons.
+    this.hudUnregs.push(
+      registerHudElement("interact", interactBtn),
+      registerHudElement("jump", jumpBtn),
+      registerHudElement("run", runBtn),
+      registerHudElement("crouch", crouchBtn),
+    );
   }
 
   // Left half drives the virtual joystick (move); right half drags to look.
@@ -536,6 +548,8 @@ export class InputManager {
   }
 
   dispose(): void {
+    for (const unreg of this.hudUnregs) unreg();
+    this.hudUnregs = [];
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
     this.dom.removeEventListener("pointerdown", this.onPointerDown);

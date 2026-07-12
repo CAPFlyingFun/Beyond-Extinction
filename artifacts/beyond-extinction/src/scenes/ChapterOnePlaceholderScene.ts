@@ -21,7 +21,9 @@ import {
   type GameplaySettings,
 } from "../engine/Settings";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
+import { closeHudEditor } from "../engine/HudEditor";
 import { beachStory } from "../data/beachSequences";
+import { VOICE_CLIPS } from "../data/voiceClips";
 import {
   buildBeachTerrain,
   buildOceanWater,
@@ -32,6 +34,7 @@ import {
   MAP_SCALE,
   HEIGHT_SCALE,
   METERS_PER_UNIT,
+  ISLAND_CENTER,
   type OceanWater,
 } from "../engine/beachTerrain";
 import { SaveManager } from "../engine/SaveManager";
@@ -154,6 +157,25 @@ class ChapterOnePlaceholderScene implements IScene {
   private camY = 0; // integrated eye height (the controller resets camera.y each frame)
   private onGround = true;
 
+  // --- Chapter Two "Day One — Arrival" cinematic (Godot island_story parity):
+  // journal page typed over black → nightmare SFX → skippable establishing
+  // flyover → "SARAH!" → Find Sarah. Runs once per fresh arrival; resumes skip.
+  private arrivalJournal?: HTMLDivElement;
+  private journalTextEl?: HTMLDivElement;
+  private typeRaf: number | null = null;
+  private uwTint?: HTMLDivElement; // underwater blue wash during the dive
+  private flyoverState: {
+    wps: { p: THREE.Vector3; l: THREE.Vector3; d: number }[];
+    total: number;
+    elapsed: number;
+    resolve: () => void;
+  } | null = null;
+  private flyoverSkip = false;
+  private skipUnsub?: () => void;
+  private findSarahArmed = false;
+  private static readonly FLYOVER_FOV = 65; // Godot FlyoverCam fov
+  private static readonly SARAH_TRIGGER = 3.0 / METERS_PER_UNIT; // 3 m (Godot TRIGGER_RADIUS)
+
   private cameraDirector!: CameraDirector<CameraZoneState>;
   private highlights: ObjectiveHighlight[] = [];
   private interactions = new Map<string, BeachInteraction>();
@@ -212,6 +234,9 @@ class ChapterOnePlaceholderScene implements IScene {
     // "Continue" brings the player straight back to the beach. Restore inventory
     // if this was a resume, then (re)write the island autosave. (See SaveManager.)
     const resume = SaveManager.consumeResume();
+    // Day One — Arrival cinematic (journal + flyover) plays only the first time
+    // in: a resume drops straight into free roam.
+    const freshArrival = !(resume && resume.scene === "island");
     if (resume && resume.scene === "island") {
       // Loading an island save — keep exactly what was saved.
       PlayerInventory.hasBadge = resume.inventory.hasBadge;
@@ -241,7 +266,9 @@ class ChapterOnePlaceholderScene implements IScene {
     scene.background = new THREE.Color(0x2f8ff5);
     scene.fog = new THREE.Fog(0x9fd2ff, 140 * MAP_SCALE, 900 * MAP_SCALE);
 
-    this.ctx.audio.playMusic("beach-dawn");
+    // On a fresh arrival the beach ambience waits for the flyover (the arrival
+    // cinematic opens on black and silence); resumes start it immediately.
+    if (!(this.firstPerson && freshArrival)) this.ctx.audio.playMusic("beach-dawn");
 
     const hemi = new THREE.HemisphereLight(0xbfe4ff, 0xc8b78a, 1.0);
     scene.add(hemi);
@@ -409,33 +436,312 @@ class ChapterOnePlaceholderScene implements IScene {
         this.ctx.uiLayer.appendChild(dbg);
         this.dbgEl = dbg;
       }
-      // Jack's inventory (badge + coffee) + the DEV tab, same ARK overlay as the
-      // prologue. Opening it freezes movement; closing restores it.
-      this.inventory = new InventoryOverlay(this.ctx.uiLayer, {
-        getObjective: () => "",
-        setFrozen: (frozen) => this.ctx.input.setEnabled(!frozen),
-        canOpen: () => this.firstPerson && !this.disposed,
-        getRole: () => "JACK · Survivor",
-        playSfx: (n) => this.ctx.audio.playSfx(n),
-        onSave: () => this.manualSaveIsland(),
-      });
       // Expose spawn-editing to the Dev menu: walk to a spot, open Dev tools, and
       // save it as Jack's or Sarah's island start point (persists to localStorage).
       this.registerSpawnTools();
-      // Satellite minimap (tap to open the full map with pinch-zoom/pan).
-      // Passing the world scene switches the minimap to a LIVE top-down render
-      // (what's really there — no baked image, immune to world rescales).
-      this.islandMap = new IslandMap(this.ctx.uiLayer, this.scene);
+      // HUD chrome (inventory + minimap): immediately on a resume; a fresh
+      // arrival builds it after the cinematic so nothing floats over the journal.
+      if (!freshArrival) this.buildFpHud();
     } else {
       // Legacy directed-gameplay path (click-to-move + cinematic story).
       this.unsubClick = this.ctx.input.onClick(() => this.handleClick());
     }
 
+    if (this.firstPerson && freshArrival) {
+      // Day One — Arrival: the journal page (opaque, layered above the fade
+      // veil) owns the black screen; the flyover fades the world in itself.
+      // Not awaited — enter() must resolve so the render loop can drive the
+      // cinematic camera from update().
+      void this.runArrival();
+      return;
+    }
     // The prologue hands off with the screen blacked out (its closing cut); lift
     // it so the beach is actually visible.
     await this.ctx.overlays.fadeFromBlack(900);
     if (this.disposed) return;
     if (!this.firstPerson) void this.runStory();
+  }
+
+  /** First-person HUD chrome: inventory overlay + satellite minimap. Built
+   *  immediately on a resume, or after the arrival cinematic on day one. */
+  private buildFpHud(): void {
+    if (this.disposed || this.inventory) return;
+    // Jack's inventory (badge + coffee) + the DEV tab, same ARK overlay as the
+    // prologue. Opening it freezes movement; closing restores it.
+    this.inventory = new InventoryOverlay(this.ctx.uiLayer, {
+      getObjective: () => "",
+      setFrozen: (frozen) => this.ctx.input.setEnabled(!frozen),
+      canOpen: () => this.firstPerson && !this.disposed,
+      getRole: () => "JACK · Survivor",
+      playSfx: (n) => this.ctx.audio.playSfx(n),
+      onSave: () => this.manualSaveIsland(),
+    });
+    // Satellite minimap (tap to open the full map with pinch-zoom/pan).
+    // Passing the world scene switches the minimap to a LIVE top-down render
+    // (what's really there — no baked image, immune to world rescales).
+    this.islandMap = new IslandMap(this.ctx.uiLayer, this.scene);
+  }
+
+  // ---------- Chapter Two: "Day One — Arrival" cinematic ----------
+
+  /** Godot island_story.gd parity: the journal entry typed over black in sync
+   *  with the VO → nightmare SFX (still black) → a skippable establishing
+   *  flyover that fades the island in and settles behind Jack → "SARAH!" →
+   *  the Find Sarah objective. */
+  private async runArrival(): Promise<void> {
+    const audio = this.ctx.audio;
+    this.ctx.input.setEnabled(false);
+    this.player?.setActive(false);
+
+    // ── 1. Journal page over black (opaque; sits above the scene fade veil,
+    // so it owns the black screen no matter when SceneManager lifts the fade).
+    const root = document.createElement("div");
+    root.className = "be-journal";
+    root.style.transition = "none"; // opaque from the first frame
+    root.classList.add("show");
+    const text = document.createElement("div");
+    text.className = "be-journal__text";
+    root.appendChild(text);
+    this.ctx.uiLayer.appendChild(root);
+    this.arrivalJournal = root;
+    this.journalTextEl = text;
+
+    await this.waitMs(1100);
+    if (this.disposed) return;
+    this.typewrite(VOICE_CLIPS["ch2_jack_journal"]?.text ?? "", "ch2_jack_journal");
+    await audio.playVoice("ch2_jack_journal");
+    if (this.disposed) return;
+    await this.waitMs(600);
+    if (this.disposed) return;
+
+    // ── 2. Nightmare — still black: crashing through jungle, a roar, a gasp.
+    text.style.transition = "opacity 0.8s ease";
+    text.style.opacity = "0";
+    audio.playSfx("jungle-crash");
+    await this.waitMs(2200);
+    if (this.disposed) return;
+    audio.playSfx("roar-distant");
+    await this.waitMs(2400);
+    if (this.disposed) return;
+    audio.playSfx("gasp");
+    await this.waitMs(600);
+    if (this.disposed) return;
+
+    // ── 3. Establishing flyover — the beach ambience rises as the black lifts.
+    audio.playMusic("beach-dawn");
+    await this.runFlyover(root);
+    if (this.disposed) return;
+    this.arrivalJournal = undefined;
+    this.journalTextEl = undefined;
+
+    // Hand the beach to the player, then Jack calls for her.
+    this.buildFpHud();
+    this.ctx.input.setEnabled(true);
+    this.player?.setActive(true);
+    await this.waitMs(400);
+    if (this.disposed) return;
+    this.ctx.dialogue.showSubtitle({ speaker: "Jack", text: "SARAH!" });
+    await audio.playVoice("ch2_jack_sarah_shout");
+    this.ctx.dialogue.hideSubtitle();
+    if (this.disposed) return;
+
+    // ── 4. Objective: find her (the proximity trigger lives in update()).
+    this.ctx.quest.setObjective("Find Sarah");
+    this.interactions.get("find-sarah")?.highlight.setVisible(true);
+    this.findSarahArmed = true;
+  }
+
+  /** Reveal `text` in sync with voice clip `id` — JournalIntroScene's playback
+   *  tracker: type against the real audio clock, fall back to the manifest
+   *  duration when playback isn't available (muted/blocked autoplay). */
+  private typewrite(text: string, id: string): void {
+    if (this.typeRaf !== null) cancelAnimationFrame(this.typeRaf);
+    const el = this.journalTextEl;
+    if (!el) return;
+    el.textContent = "";
+    const len = Math.max(text.length, 1);
+    const LEAD = 0.92; // finish typing slightly before the VO ends
+    const fallbackMs = Math.max(this.ctx.audio.getVoiceDuration(id), 1);
+    const startPerf = performance.now();
+    let revealed = 0;
+    const tick = () => {
+      if (this.disposed) return;
+      const pb = this.ctx.audio.getVoicePlayback();
+      const frac =
+        pb.active && pb.duration > 0
+          ? pb.currentTime / (pb.duration * LEAD)
+          : (performance.now() - startPerf) / (fallbackMs * LEAD);
+      const shown = Math.max(revealed, Math.min(1, frac));
+      revealed = shown;
+      el.textContent = text.slice(0, Math.round(shown * len));
+      if (shown < 1) this.typeRaf = requestAnimationFrame(tick);
+      else {
+        el.textContent = text;
+        this.typeRaf = null;
+      }
+    };
+    tick();
+  }
+
+  private waitMs(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  /** Drone flight: high offshore reveal → descend → skim the water → dive
+   *  under → surface → race in → settle just off Jack at eye height. The
+   *  waypoints are the Godot script's, metres relative to Jack along the true
+   *  seaward axis (island centre → Jack, pointing offshore). Any key or tap
+   *  skips to the end. Resolves when the flight (or skip) completes. */
+  private runFlyover(page: HTMLDivElement): Promise<void> {
+    const j = this.jack.position.clone();
+    const s2 = new THREE.Vector2(j.x - ISLAND_CENTER.x, j.z - ISLAND_CENTER.z);
+    if (s2.lengthSq() < 1e-6) s2.set(0, 1);
+    s2.normalize();
+    const S = new THREE.Vector3(s2.x, 0, s2.y);
+    const m = (metres: number) => metres / METERS_PER_UNIT;
+    // Waypoint builder: `sea` metres seaward of Jack, `up` metres above him.
+    // The underwater leg clamps to the seabed so the dive never clips terrain.
+    const P = (sea: number, up: number) => {
+      const v = j.clone().addScaledVector(S, m(sea));
+      v.y += m(up);
+      if (up < 0) v.y = Math.max(v.y, beachHeight(v.x, v.z) + m(2));
+      return v;
+    };
+    // {p: camera, l: look target, d: seconds from the previous waypoint}.
+    const wps = [
+      { p: P(640, 190), l: P(120, 4), d: 0 },
+      { p: P(560, 80), l: P(100, 3), d: 4.5 },
+      { p: P(510, 10), l: P(430, 1), d: 4.0 },
+      { p: P(495, -9), l: P(440, -6), d: 2.5 }, // DIVE
+      { p: P(470, -11), l: P(410, -8), d: 3.0 },
+      { p: P(435, -9), l: P(360, -5), d: 3.0 }, // surfacing
+      { p: P(380, 12), l: P(120, 3), d: 3.5 },
+      { p: P(150, 40), l: P(0, 3), d: 5.0 }, // race in toward the beach
+      { p: P(8, 2.4), l: P(0, 1.6), d: 4.5 }, // settle just off Jack, cut to FP
+    ];
+    const total = wps.reduce((sum, w) => sum + w.d, 0);
+
+    // The flyover's own wider lens; finishFlyover() restores the player FOV.
+    this.camera.fov =
+      ChapterOnePlaceholderScene.FLYOVER_FOV + portraitFovBoost(this.camera.aspect);
+    this.camera.updateProjectionMatrix();
+
+    // Jack's head is shrunk for first person — restore it: the flight looks AT him.
+    this.setHeadBonesHidden(this.jack, false);
+
+    // Underwater blue wash while the camera is below the surface.
+    const tint = document.createElement("div");
+    tint.style.cssText =
+      "position:fixed;inset:0;z-index:54;pointer-events:none;" +
+      "background:rgb(13,56,97);opacity:0;";
+    this.ctx.uiLayer.appendChild(tint);
+    this.uwTint = tint;
+
+    // Fade out of black across the first seconds of the flight.
+    page.style.transition = "opacity 2.2s ease";
+    page.classList.remove("show");
+
+    // Any key or tap skips.
+    this.flyoverSkip = false;
+    const skip = () => {
+      this.flyoverSkip = true;
+    };
+    window.addEventListener("keydown", skip);
+    window.addEventListener("pointerdown", skip);
+    this.skipUnsub = () => {
+      window.removeEventListener("keydown", skip);
+      window.removeEventListener("pointerdown", skip);
+    };
+
+    return new Promise<void>((resolve) => {
+      this.flyoverState = { wps, total, elapsed: 0, resolve };
+    });
+  }
+
+  /** Per-frame flyover camera: Catmull-Rom through the waypoints (C1-smooth,
+   *  no per-segment stop-start — Godot's _fly_sample), plus the underwater
+   *  wash cross-fade. Called from update() while flyoverState is set. */
+  private updateFlyover(dt: number): void {
+    const f = this.flyoverState;
+    if (!f) return;
+    f.elapsed = this.flyoverSkip ? f.total : f.elapsed + dt;
+    const t = Math.min(f.elapsed, f.total);
+    const s = this.flySample(f.wps, t);
+    this.camera.position.copy(s.p);
+    this.camera.lookAt(s.l);
+    if (this.uwTint) {
+      const target = this.camera.position.y < 0 ? 0.65 : 0;
+      const a = parseFloat(this.uwTint.style.opacity || "0");
+      const step = Math.min(Math.abs(target - a), dt * 2.5);
+      this.uwTint.style.opacity = (a + Math.sign(target - a) * step).toFixed(3);
+    }
+    if (f.elapsed >= f.total) this.finishFlyover();
+  }
+
+  private finishFlyover(): void {
+    const f = this.flyoverState;
+    if (!f) return;
+    this.flyoverState = null;
+    this.skipUnsub?.();
+    this.skipUnsub = undefined;
+    // Snap to the settle pose so the FP handoff starts from the final shot.
+    const last = f.wps[f.wps.length - 1];
+    this.camera.position.copy(last.p);
+    this.camera.lookAt(last.l);
+    // Clear the underwater wash and the journal page.
+    const tint = this.uwTint;
+    if (tint) {
+      tint.style.transition = "opacity 0.3s ease";
+      tint.style.opacity = "0";
+      setTimeout(() => tint.remove(), 400);
+      this.uwTint = undefined;
+    }
+    this.arrivalJournal?.remove();
+    // Back to first person: hide the head again (the camera moves back inside
+    // it), restore the gameplay FOV, and re-seat the eye on the terrain.
+    this.setHeadBonesHidden(this.jack, true);
+    this.applyFov();
+    if (this.player) {
+      this.player.placeAt(this.jack.position.x, this.jack.position.z, this.jackFacingDeg);
+      this.camY =
+        beachHeight(this.jack.position.x, this.jack.position.z) + this.eyeOffset;
+      this.vy = 0;
+      this.onGround = true;
+    }
+    f.resolve();
+  }
+
+  /** Sample the flight path at time `t`: find the active segment, then run a
+   *  uniform Catmull-Rom through the surrounding four waypoints (both the
+   *  camera position and the look target get the same treatment). */
+  private flySample(
+    wps: { p: THREE.Vector3; l: THREE.Vector3; d: number }[],
+    t: number,
+  ): { p: THREE.Vector3; l: THREE.Vector3 } {
+    let acc = 0;
+    let i = 1;
+    while (i < wps.length - 1 && t > acc + wps[i].d) {
+      acc += wps[i].d;
+      i++;
+    }
+    const seg = Math.max(wps[i].d, 0.0001);
+    const u = THREE.MathUtils.clamp((t - acc) / seg, 0, 1);
+    const i0 = Math.max(i - 2, 0);
+    const i3 = Math.min(i + 1, wps.length - 1);
+    return {
+      p: catmull(wps[i0].p, wps[i - 1].p, wps[i].p, wps[i3].p, u),
+      l: catmull(wps[i0].l, wps[i - 1].l, wps[i].l, wps[i3].l, u),
+    };
+  }
+
+  /** Jack reaches Sarah: she wakes and stands. (The full shot/reverse-shot
+   *  reunion dialogue is the next port milestone; free roam continues.) */
+  private async sarahFound(): Promise<void> {
+    this.interactions.get("find-sarah")?.highlight.setVisible(false);
+    this.faceTowards(this.sarah, this.jack.position);
+    await this.wake(this.sarah, 1100);
+    if (this.disposed) return;
+    this.ctx.quest.setObjective("Assess the situation");
   }
 
   // ---------- Story ----------
@@ -844,6 +1150,13 @@ class ChapterOnePlaceholderScene implements IScene {
    * scale sticks across animation (Godot's first-person head trick).
    */
   private hideHeadBones(group: THREE.Group): void {
+    this.setHeadBonesHidden(group, true);
+  }
+
+  /** Shrink (or restore) the head bones. Hidden in first person so the camera
+   *  can sit inside the skull; restored during the arrival flyover, which looks
+   *  AT Jack from outside. */
+  private setHeadBonesHidden(group: THREE.Group, hidden: boolean): void {
     const model = (group.userData.model as THREE.Object3D) ?? group;
     const headBones = RIGS.Jack?.bones.head ?? ["Bone_017", "Bone_016"];
     const names = Array.isArray(headBones) ? headBones : [headBones];
@@ -853,8 +1166,9 @@ class ChapterOnePlaceholderScene implements IScene {
       if (head) break;
     }
     if (!head) return;
+    const s = hidden ? 0.001 : 1;
     head.traverse((o) => {
-      if ((o as THREE.Bone).isBone) o.scale.setScalar(0.001);
+      if ((o as THREE.Bone).isBone) o.scale.setScalar(s);
     });
   }
 
@@ -1105,6 +1419,20 @@ class ChapterOnePlaceholderScene implements IScene {
     this.elapsed = elapsed;
     this.oceanUniforms.uTime.value = elapsed;
 
+    if (this.flyoverState) {
+      // Arrival flyover: the cinematic owns the camera, but the world still
+      // breathes — ocean, sun shadow box, character anims, trees, billboards.
+      this.updateFlyover(dt);
+      this.oceanUniforms.uCamPos.value.copy(this.camera.position);
+      this.updateSun();
+      this.applyLocomotion(this.jack, false, dt);
+      this.applyLocomotion(this.sarah, false, dt);
+      for (const m of this.mixers) m.update(dt);
+      this.treesUpdate?.(dt, this.camera.position);
+      updateBillboardsYAxis(this.billboards, this.camera.position);
+      return;
+    }
+
     if (this.firstPerson && this.player) {
       // Drive first-person movement, clamped to the play area, then ride the
       // beach surface so the camera walks the terrain instead of a flat plane.
@@ -1169,6 +1497,17 @@ class ChapterOnePlaceholderScene implements IScene {
       this.updateSun();
       this.islandMap?.setPlayer(cx, cz, yaw);
       this.islandMap?.update(dt);
+      // Day One: reaching Sarah wakes her (Godot's reunion trigger; the full
+      // shot/reverse-shot reunion dialogue is a later port milestone).
+      if (this.findSarahArmed) {
+        const ddx = cx - this.sarah.position.x;
+        const ddz = cz - this.sarah.position.z;
+        const r = ChapterOnePlaceholderScene.SARAH_TRIGGER;
+        if (ddx * ddx + ddz * ddz <= r * r) {
+          this.findSarahArmed = false;
+          void this.sarahFound();
+        }
+      }
       // First-person body: Jack stands at the player's feet (NOT under the
       // nudged camera — that would drift him forward each frame), faces the look
       // yaw, and walks. He crouches/lies with the eye via a body drop so the
@@ -1282,6 +1621,7 @@ class ChapterOnePlaceholderScene implements IScene {
     // into the next scene.
     this.ctx.overlays.cancelChoice();
     closeSettingsPanel();
+    closeHudEditor();
     if (SpawnTools.current) SpawnTools.current = undefined; // Dev spawn tools leave with the scene
     this.islandMap?.dispose();
     this.player?.dispose();
@@ -1291,6 +1631,18 @@ class ChapterOnePlaceholderScene implements IScene {
     this.gearEl?.remove();
     this.endCardEl?.remove();
     this.dbgEl?.remove();
+    // Arrival cinematic leftovers: typing loop, skip listeners, an in-flight
+    // flyover promise, the journal page, the underwater wash, and any VO.
+    if (this.typeRaf !== null) cancelAnimationFrame(this.typeRaf);
+    this.typeRaf = null;
+    this.skipUnsub?.();
+    this.skipUnsub = undefined;
+    this.flyoverState?.resolve();
+    this.flyoverState = null;
+    this.arrivalJournal?.remove();
+    this.uwTint?.remove();
+    this.ctx.audio.stopVoice();
+    this.ctx.dialogue.hideSubtitle();
     this.ctx.overlays.hideHint();
     this.ctx.overlays.setBlackInstant(false);
     for (const h of this.highlights) h.dispose();
@@ -1304,6 +1656,30 @@ class ChapterOnePlaceholderScene implements IScene {
     });
     this.scene.clear();
   }
+}
+
+/** Uniform Catmull-Rom — C1-continuous through the control points (the flight
+ *  path glides through each waypoint without per-segment stop-start). */
+function catmull(
+  p0: THREE.Vector3,
+  p1: THREE.Vector3,
+  p2: THREE.Vector3,
+  p3: THREE.Vector3,
+  u: number,
+): THREE.Vector3 {
+  const u2 = u * u;
+  const u3 = u2 * u;
+  const c = (a: number, b: number, cc: number, d: number) =>
+    0.5 *
+    (2 * b +
+      (-a + cc) * u +
+      (2 * a - 5 * b + 4 * cc - d) * u2 +
+      (-a + 3 * b - 3 * cc + d) * u3);
+  return new THREE.Vector3(
+    c(p0.x, p1.x, p2.x, p3.x),
+    c(p0.y, p1.y, p2.y, p3.y),
+    c(p0.z, p1.z, p2.z, p3.z),
+  );
 }
 
 export const createChapterOneScene: SceneFactory = (ctx) =>

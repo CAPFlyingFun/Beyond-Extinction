@@ -1,3 +1,5 @@
+import { registerHudElement } from "./HudEditor";
+
 export type ObjectiveState = "inactive" | "active" | "completed";
 
 export interface ObjectiveDef {
@@ -21,6 +23,7 @@ export class QuestManager {
   private states = new Map<string, ObjectiveState>();
   private activeId: string | null = null;
   private completionTimer: number | null = null;
+  private unregHud: () => void;
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement("div");
@@ -34,6 +37,7 @@ export class QuestManager {
     parent.appendChild(this.root);
     this.textEl = this.root.querySelector(".be-quest__text")!;
     this.statusEl = this.root.querySelector(".be-quest__status")!;
+    this.unregHud = registerHudElement("quest", this.root);
   }
 
   /** Register the ordered objective definitions for a scene. */
@@ -125,6 +129,7 @@ export class QuestManager {
 
   dispose(): void {
     this.cancelTimer();
+    this.unregHud();
     this.root.remove();
   }
 

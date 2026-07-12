@@ -6,6 +6,7 @@ import { createJournalIntroScene } from "./JournalIntroScene";
 import { createPrologueScene } from "./PrologueCafeteriaScene";
 import { createChapterOneScene } from "./ChapterOnePlaceholderScene";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
+import { closeHudEditor } from "../engine/HudEditor";
 import { SaveManager, type SaveSnapshot } from "../engine/SaveManager";
 import { DevAccess } from "../engine/DevAccess";
 
@@ -453,6 +454,7 @@ class MainMenuScene implements IScene {
     // resolves its promise so startNewGame() exits via its `disposed` guard.
     this.rotateCleanup?.();
     closeSettingsPanel();
+    closeHudEditor();
     this.menuEl?.remove();
     this.backdropEl?.remove();
     this.creditsEl?.remove();
