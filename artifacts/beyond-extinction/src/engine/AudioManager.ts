@@ -448,6 +448,20 @@ export class AudioManager {
           if (this.voiceDone === finish && this.voiceActive) {
             this.duckMusic(true);
           }
+          // Stall backstop: playback started, but if the element never fires
+          // 'ended' (iOS Safari can silently stall a decoded clip), nothing else
+          // here would resolve the promise \u2014 an awaiting cinematic (e.g. the
+          // island arrival journal) would freeze on a black screen forever. Arm
+          // a timer for the clip's real length plus slack so the sequence always
+          // advances; a normal 'ended' fires first and clears it via finish().
+          if (this.voiceDone === finish) {
+            const durMs =
+              Number.isFinite(el.duration) && el.duration > 0
+                ? el.duration * 1000
+                : fallbackMs;
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(finish, durMs + 3000);
+          }
         })
         .catch((err) => {
           console.warn(

@@ -1501,9 +1501,12 @@ body {
 /* ── Inventory: floating pack button ─────────────────────────────────────── */
 .be-inv-btn {
   position: fixed;
-  right: 0.75rem;
-  bottom: 0.75rem;
-  z-index: 31;
+  /* Sit in the far-right control column, stacked ABOVE the ability/jump button
+     (.be-sh-abil, right:14px bottom:10px, up to 68px tall) so the two no longer
+     overlap in the bottom-right corner. */
+  right: calc(14px + env(safe-area-inset-right, 0px));
+  bottom: calc(86px + env(safe-area-inset-bottom, 0px));
+  z-index: 35;
   width: 46px;
   height: 46px;
   border-radius: 10px;
@@ -2028,8 +2031,9 @@ body {
   width: 112px;
   height: 112px;
   border-radius: 50%;
-  border: 2px dashed rgba(243, 200, 127, 0.26);
-  background: rgba(10, 18, 30, 0.16);
+  border: 2px dashed rgba(243, 200, 127, 0.5);
+  background: rgba(10, 18, 30, 0.32);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
   pointer-events: none;
 }
 .be-fp-joyrest::after {
@@ -2041,7 +2045,7 @@ body {
   height: 44px;
   border-radius: 50%;
   transform: translate(-50%, -50%);
-  background: rgba(243, 200, 127, 0.22);
+  background: rgba(243, 200, 127, 0.42);
 }
 .be-fp-joyrest--mock { border-style: solid; }
 
@@ -2410,7 +2414,7 @@ body {
 /* ── ARK day / time counter ── */
 .be-sh-daytime {
   left: 50%;
-  bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(104px + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
   padding: 2px 10px;
   border-radius: 999px;
