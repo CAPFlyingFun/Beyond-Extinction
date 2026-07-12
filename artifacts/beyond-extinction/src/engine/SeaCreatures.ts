@@ -139,6 +139,12 @@ export class SeaCreatures {
         this.recycle(c, playerPos);
         continue;
       }
+      // Rescue: anything that has ended up on/over the waterline (beached) jumps
+      // straight back to deep water instead of sitting on the sand.
+      if (-beachHeight(c.group.position.x, c.group.position.z) < 1.0 * U) {
+        this.placeInOcean(c, playerPos, false);
+        continue;
+      }
       this.steer(c, dt);
       this.swim(c, dt);
       this.animate(c, dt);
@@ -180,14 +186,27 @@ export class SeaCreatures {
 
   private swim(c: Creature, dt: number): void {
     const p = c.group.position;
-    p.x += Math.sin(c.heading) * c.speedU * dt;
-    p.z += Math.cos(c.heading) * c.speedU * dt;
+    const nx = p.x + Math.sin(c.heading) * c.speedU * dt;
+    const nz = p.z + Math.cos(c.heading) * c.speedU * dt;
+
+    // Never swim into water too shallow to dive in (or onto the beach): if the
+    // step ahead is shallower than our minimum depth, hold position, sheer away
+    // from the shallows, and pick a fresh deep-water goal. Keeps them off land.
+    if (-beachHeight(nx, nz) < this.minDepthU) {
+      c.heading += Math.PI * 0.6;
+      c.turnRoll = 0;
+      this.retarget(c);
+    } else {
+      p.x = nx;
+      p.z = nz;
+    }
 
     const floor = beachHeight(p.x, p.z);
     const cruise = -c.species.cruiseDepthM * U;
     const clearance = c.species.girthM * U * 1.2;
-    const targetY = Math.max(cruise, floor + clearance);
+    const surface = -0.6 * U; // hard cap: the body always stays under the waterline
     const prevY = p.y;
+    const targetY = Math.min(surface, Math.max(cruise, floor + clearance));
     p.y += (targetY - p.y) * Math.min(1, dt * 2.5);
 
     c.group.rotation.y = c.heading;
