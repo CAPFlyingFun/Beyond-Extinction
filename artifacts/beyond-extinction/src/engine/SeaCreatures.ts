@@ -204,11 +204,30 @@ const LAND_WANDER = 1;
 const LAND_CHASE = 2;
 const LAND_ATTACK = 3;
 const LAND_FLEE = 4;
+const LAND_BASK = 5; // mouth-open rest — the passive-tame feed window
 
 const SEA_THINK_DT = 0.2;
 const LAND_THINK_DT = 0.15;
 const WANDER_TIMEOUT = 8.0;
 const REPROVOKE = 6.0;
+
+// Passive taming (ARK-Additions Deinosuchus style: bask → feed → snap hostile).
+const BASK_DUR = 13; // seconds a croc lies basking (feedable)
+const BASK_CD = 9; // cooldown after a bask before it can bask again
+const FEED_WINDOW = 4; // seconds of eating after a feed, then it turns hostile
+const AGITATED_DUR = 6; // seconds it's aggressive right after finishing a feed
+const FEED_STEP = 20; // tame % gained per feed (5 feeds = tamed)
+
+/** Display name for a species id. */
+function speciesName(id: SeaSpeciesId): string {
+  switch (id) {
+    case "megalodon": return "Megalodon";
+    case "mosasaurus": return "Mosasaurus";
+    case "ichthyosaurus": return "Ichthyosaurus";
+    case "sarcosuchus": return "Sarcosuchus";
+    case "deinosuchus": return "Deinosuchus";
+  }
+}
 
 interface Creature {
   species: Species;
@@ -243,6 +262,14 @@ interface Creature {
   idleHold: number;
   chaseBestD: number;
   chaseStall: number;
+  // passive taming
+  tamePct: number;
+  tamed: boolean;
+  basking: boolean;
+  baskTimer: number;
+  baskCd: number;
+  feedWindow: number;
+  agitated: number;
 }
 
 /** The player as a target for the fauna (undefined = nobody to chase/bite). */
@@ -269,6 +296,8 @@ export interface SeaCreaturesOptions {
   minDepthM?: number; // sea creatures only spawn where water is at least this deep
   /** Called when a creature's bite connects with the player. */
   onBitePlayer?: (damage: number, species: SeaSpeciesId) => void;
+  /** Called when a croc's passive tame completes. */
+  onTamed?: (name: string) => void;
 }
 
 export class SeaCreatures {
@@ -283,6 +312,7 @@ export class SeaCreatures {
   private readonly cullU: number;
   private readonly minDepthU: number;
   private readonly onBitePlayer?: (d: number, s: SeaSpeciesId) => void;
+  private readonly onTamed?: (name: string) => void;
   private ready = false;
   private elapsed = 0;
 
@@ -292,6 +322,7 @@ export class SeaCreatures {
     this.cullU = (opts.cullM ?? 240) * U;
     this.minDepthU = (opts.minDepthM ?? 4) * U;
     this.onBitePlayer = opts.onBitePlayer;
+    this.onTamed = opts.onTamed;
     this.root.name = "SeaCreatures";
     scene.add(this.root);
   }
@@ -334,7 +365,7 @@ export class SeaCreatures {
 
     for (const c of this.creatures) {
       // Stream: anything past the cull radius recycles to a fresh spawn ahead.
-      if (!c.parked && dist2(c.group.position, focus) > this.cullU * this.cullU) {
+      if (!c.parked && !c.tamed && dist2(c.group.position, focus) > this.cullU * this.cullU) {
         this.recycle(c, focus);
         continue;
       }
@@ -361,6 +392,42 @@ export class SeaCreatures {
     this.root.removeFromParent();
     this.creatures.length = 0;
     this.templates.clear();
+  }
+
+  // ── passive taming (public API for the scene's Feed action) ────────────────
+
+  private nearestFeedable(pos: THREE.Vector3, rangeM: number): Creature | null {
+    const r = rangeM * U;
+    let best: Creature | null = null;
+    let bestD = Infinity;
+    for (const c of this.creatures) {
+      if (c.species.habitat !== "amphibious") continue;
+      if (c.tamed || c.parked || !c.basking || c.feedWindow > 0 || c.agitated > 0) continue;
+      const d = c.group.position.distanceTo(pos);
+      if (d <= r && d < bestD) {
+        bestD = d;
+        best = c;
+      }
+    }
+    return best;
+  }
+
+  /** Nearest croc that's basking and feedable within `rangeM` of `pos`, or null.
+   *  Drives the on-screen Feed prompt. */
+  feedTarget(pos: THREE.Vector3, rangeM: number): { name: string; tamePct: number } | null {
+    const c = this.nearestFeedable(pos, rangeM);
+    return c ? { name: speciesName(c.species.id), tamePct: Math.round(c.tamePct) } : null;
+  }
+
+  /** Feed the nearest feedable croc: bumps its tame meter and opens the ~4 s
+   *  window before it snaps hostile (or friendly, if this completes the tame).
+   *  Returns the fed creature's new state, or null if nothing was feedable. */
+  feed(pos: THREE.Vector3, rangeM: number): { name: string; tamePct: number } | null {
+    const c = this.nearestFeedable(pos, rangeM);
+    if (!c) return null;
+    c.tamePct = Math.min(100, c.tamePct + FEED_STEP);
+    c.feedWindow = FEED_WINDOW;
+    return { name: speciesName(c.species.id), tamePct: Math.round(c.tamePct) };
   }
 
   // ── SEA brain (free-swimming) ──────────────────────────────────────────────
@@ -581,6 +648,29 @@ export class SeaCreatures {
     c.stateT += dt;
     c.attackCd = Math.max(0, c.attackCd - dt);
     if (c.provokedT > 0) c.provokedT -= dt;
+    if (c.baskCd > 0) c.baskCd -= dt;
+    if (c.agitated > 0) c.agitated -= dt;
+
+    // Feeding window: while eating after a passive feed the croc is occupied and
+    // harmless; when it finishes it either finalises the tame (turns friendly)
+    // or snaps its jaws shut and turns hostile — the cue to have backed away.
+    if (c.feedWindow > 0) {
+      c.feedWindow -= dt;
+      if (c.feedWindow <= 0) {
+        c.basking = false;
+        if (c.tamePct >= 100) {
+          c.tamed = true;
+          this.onTamed?.(speciesName(c.species.id));
+          this.enter(c, LAND_IDLE);
+        } else {
+          c.agitated = AGITATED_DUR; // now hostile — run!
+          this.enter(c, LAND_WANDER);
+        }
+      }
+      this.groundLand(c); // jaws working, body still
+      this.animateBody(c, dt);
+      return;
+    }
 
     c.thinkAcc += dt;
     if (c.thinkAcc >= LAND_THINK_DT) {
@@ -589,17 +679,34 @@ export class SeaCreatures {
     }
     this.moveLand(c, dt, player);
     this.updateBite(c, dt, player);
-    // Rest on the terrain (land or seabed) belly-down and face the yaw.
-    // Amphibious: no gravity/jump — snap to the surface every frame so slopes
-    // are followed; the half-height lifts the recentred body onto the ground.
+    this.groundLand(c);
+    this.animateBody(c, dt);
+  }
+
+  /** Snap the body belly-down onto the terrain and face the current yaw.
+   *  Amphibious: no gravity/jump — the half-height lifts the recentred body
+   *  onto the ground so it follows slopes and the seabed alike. */
+  private groundLand(c: Creature): void {
     const g = beachHeight(c.group.position.x, c.group.position.z);
     c.group.position.y = g + (this.halfH.get(c.species.id) ?? 0);
     c.group.rotation.set(0, c.yaw, 0);
-    this.animateBody(c, dt);
   }
 
   private thinkLand(c: Creature, player?: FaunaPlayer): void {
     const cfg = c.species.land!;
+    // Tamed: peaceful — never targets the player, just roams.
+    if (c.tamed) {
+      this.loseAndRoam(c);
+      return;
+    }
+    // Agitated right after a feed: aggressive regardless of temperament.
+    if (c.agitated > 0) {
+      if (player && player.vulnerable) this.engageLand(c, player);
+      else this.loseAndRoam(c);
+      return;
+    }
+    // Basking (mouth-open rest = the feed window): ignore the player, hold still.
+    if (c.basking) return;
     // Low-health flee (crocs have fleeHealth 0 → never).
     if (cfg.fleeHealth > 0 && c.health < cfg.fleeHealth * cfg.maxHealth) {
       if (player && player.vulnerable) {
@@ -688,8 +795,25 @@ export class SeaCreatures {
       case LAND_IDLE:
         c.idleHold -= dt;
         if (c.idleHold <= 0) {
-          this.pickWanderLand(c);
-          this.enter(c, LAND_WANDER);
+          // Sometimes drop into a mouth-open bask (the passive-tame window)
+          // instead of wandering — untamed, calm, and off cooldown only.
+          if (!c.tamed && c.baskCd <= 0 && c.agitated <= 0 && this.rng() < 0.5) {
+            c.basking = true;
+            c.baskTimer = BASK_DUR;
+            this.enter(c, LAND_BASK);
+          } else {
+            this.pickWanderLand(c);
+            this.enter(c, LAND_WANDER);
+          }
+        }
+        break;
+      case LAND_BASK:
+        c.baskTimer -= dt;
+        if (c.baskTimer <= 0) {
+          c.basking = false;
+          c.baskCd = BASK_CD;
+          c.idleHold = 1 + this.rng() * 2;
+          this.enter(c, LAND_IDLE);
         }
         break;
       case LAND_WANDER: {
@@ -992,6 +1116,13 @@ export class SeaCreatures {
     c.idleHold = 0.5 + this.rng() * 2.5;
     c.chaseBestD = Infinity;
     c.chaseStall = 0;
+    c.tamePct = 0;
+    c.tamed = false;
+    c.basking = false;
+    c.baskTimer = 0;
+    c.baskCd = 2 + this.rng() * 6;
+    c.feedWindow = 0;
+    c.agitated = 0;
     if (c.species.land) c.health = c.species.land.maxHealth;
   }
 
@@ -1059,6 +1190,13 @@ export class SeaCreatures {
       idleHold: 0.5 + this.rng() * 2.5,
       chaseBestD: Infinity,
       chaseStall: 0,
+      tamePct: 0,
+      tamed: false,
+      basking: false,
+      baskTimer: 0,
+      baskCd: 2 + this.rng() * 6,
+      feedWindow: 0,
+      agitated: 0,
     };
     return c;
   }

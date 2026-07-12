@@ -1498,6 +1498,69 @@ body {
   }
 }
 
+/* ── Passive taming: Feed button + post-feed "back off" bar ──────────────── */
+.be-feed-btn {
+  position: fixed;
+  left: 50%;
+  bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 42;
+  padding: 10px 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 240, 150, 0.6);
+  background: linear-gradient(180deg, rgba(24, 60, 34, 0.92), rgba(12, 30, 18, 0.92));
+  color: #daffe0;
+  font: 700 0.9rem/1 "Inter", sans-serif;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 3px rgba(120, 240, 150, 0.14);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  animation: be-feed-pulse 1.4s ease-in-out infinite;
+}
+.be-feed-btn:active { transform: translateX(-50%) translateY(1px); filter: brightness(1.2); }
+@keyframes be-feed-pulse {
+  0%, 100% { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 3px rgba(120, 240, 150, 0.14); }
+  50% { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 5px rgba(120, 240, 150, 0.32); }
+}
+.be-feed-bar {
+  position: fixed;
+  left: 50%;
+  bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 42;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  pointer-events: none;
+}
+.be-feed-bar__label {
+  font: 800 0.82rem/1 "Inter", sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ff8b6b;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+}
+.be-feed-bar__track {
+  width: 168px;
+  height: 8px;
+  border-radius: 5px;
+  background: rgba(8, 16, 26, 0.7);
+  border: 1px solid rgba(255, 139, 107, 0.4);
+  overflow: hidden;
+}
+.be-feed-bar__track i {
+  display: block;
+  height: 100%;
+  width: 100%;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #c9403f, #ff8b6b);
+}
+
 /* ── Inventory: floating pack button ─────────────────────────────────────── */
 .be-inv-btn {
   position: fixed;

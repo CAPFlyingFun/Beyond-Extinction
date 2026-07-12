@@ -129,6 +129,14 @@ class ChapterOnePlaceholderScene implements IScene {
   private hurtEl?: HTMLDivElement;
   private hurtT = 0;
   private respawning = false;
+  // Passive taming: a contextual Feed button near a basking croc + a "back off"
+  // countdown bar during the post-feed window.
+  private feedBtnEl?: HTMLButtonElement;
+  private feedBarEl?: HTMLDivElement;
+  private feedBarFillEl?: HTMLDivElement;
+  private feedWindowT = 0;
+  private unsubFeed?: () => void;
+  private static readonly FEED_RANGE_M = 5;
   // Survival model + hybrid ARK×PoT HUD (first-person island only). Stats tick
   // only while player input is enabled, so cinematics/menus freeze the clock.
   private stats?: SurvivalStats;
@@ -265,7 +273,8 @@ class ChapterOnePlaceholderScene implements IScene {
       // explicitly (the prologue's end-state inventory is unreliable). Jack keeps
       // a badge and one coffee.
       PlayerInventory.hasBadge = true;
-      PlayerInventory.heldItems = ["coffee"];
+      // Coffee + a few raw meat to test passive taming the basking crocs.
+      PlayerInventory.heldItems = ["coffee", "meat", "meat", "meat", "meat", "meat"];
     }
     // Sarah travels with the party on the island carrying her own badge +
     // flashlight (tracked separately from Jack's pack for future crafting).
@@ -338,6 +347,7 @@ class ChapterOnePlaceholderScene implements IScene {
     this.seaCreatures = new SeaCreatures(this.scene, {
       count: 6,
       onBitePlayer: (dmg, species) => this.onCreatureBite(dmg, species),
+      onTamed: (name) => this.onCreatureTamed(name),
     });
     void this.seaCreatures.preload();
 
@@ -581,6 +591,89 @@ class ChapterOnePlaceholderScene implements IScene {
       onOpenCodex: () => this.inventory?.toggle(),
     });
 
+    this.buildFeedUI();
+    // The E key / long-press interact also feeds when a croc is basking nearby.
+    this.unsubFeed = this.ctx.input.onInteract(() => this.tryFeed());
+  }
+
+  // ---------- Passive taming ----------
+
+  /** Contextual Feed button + the post-feed "back off" countdown bar. */
+  private buildFeedUI(): void {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "be-feed-btn";
+    btn.style.display = "none";
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      this.tryFeed();
+    });
+    this.ctx.uiLayer.appendChild(btn);
+    this.feedBtnEl = btn;
+
+    const bar = document.createElement("div");
+    bar.className = "be-feed-bar";
+    bar.style.display = "none";
+    bar.innerHTML = `<span class="be-feed-bar__label">Back off!</span><div class="be-feed-bar__track"><i></i></div>`;
+    this.feedBarFillEl = bar.querySelector(".be-feed-bar__track i")!;
+    this.ctx.uiLayer.appendChild(bar);
+    this.feedBarEl = bar;
+  }
+
+  /** Feed the nearest basking croc (Feed button / E key). */
+  private tryFeed(): void {
+    if (this.disposed || this.feedWindowT > 0 || this.respawning) return;
+    if (!this.seaCreatures || !this.stats) return;
+    if (PlayerInventory.count("meat") <= 0) return;
+    const res = this.seaCreatures.feed(
+      this.camera.position,
+      ChapterOnePlaceholderScene.FEED_RANGE_M,
+    );
+    if (!res) return;
+    PlayerInventory.drop("meat");
+    this.ctx.audio.playSfx("badge-pickup"); // a soft "gulp" cue for now
+    // Open the back-off window: the croc eats, then turns hostile.
+    this.feedWindowT = 4;
+    if (this.feedBtnEl) this.feedBtnEl.style.display = "none";
+    if (this.feedBarEl) this.feedBarEl.style.display = "flex";
+  }
+
+  private onCreatureTamed(name: string): void {
+    if (this.disposed) return;
+    this.ctx.dialogue.showSubtitle({ speaker: "", text: `${name} tamed!` });
+    this.ctx.audio.playSfx("ui-select");
+    window.setTimeout(() => {
+      if (!this.disposed) this.ctx.dialogue.hideSubtitle();
+    }, 2600);
+  }
+
+  /** Per-frame: drive the Feed prompt + the back-off countdown bar. */
+  private updateFeedUI(dt: number, active: boolean): void {
+    // Post-feed window: count the "back off" bar down.
+    if (this.feedWindowT > 0) {
+      this.feedWindowT -= dt;
+      if (this.feedBarFillEl) {
+        this.feedBarFillEl.style.width = `${Math.max(0, (this.feedWindowT / 4) * 100)}%`;
+      }
+      if (this.feedWindowT <= 0 && this.feedBarEl) this.feedBarEl.style.display = "none";
+      return;
+    }
+    // Show the Feed button when a basking croc is in reach and we have meat.
+    const btn = this.feedBtnEl;
+    if (!btn) return;
+    const target =
+      active && this.seaCreatures && PlayerInventory.count("meat") > 0
+        ? this.seaCreatures.feedTarget(
+            this.camera.position,
+            ChapterOnePlaceholderScene.FEED_RANGE_M,
+          )
+        : null;
+    if (target) {
+      btn.textContent = `🥩 Feed ${target.name} · ${target.tamePct}%`;
+      btn.style.display = "block";
+    } else if (btn.style.display !== "none") {
+      btn.style.display = "none";
+    }
   }
 
   // ---------- Chapter Two: "Day One — Arrival" cinematic ----------
@@ -1611,6 +1704,14 @@ class ChapterOnePlaceholderScene implements IScene {
       this.hurtT -= dt;
       if (this.hurtT <= 0) this.hurtEl.style.opacity = "0";
     }
+    // Passive-taming Feed prompt + post-feed back-off bar.
+    const feedActive =
+      !this.flyoverState &&
+      this.firstPerson &&
+      !!this.player &&
+      !this.respawning &&
+      this.ctx.input.inputEnabled;
+    this.updateFeedUI(dt, feedActive);
     this.elapsed = elapsed;
     this.oceanUniforms.uTime.value = elapsed;
 
@@ -1838,6 +1939,9 @@ class ChapterOnePlaceholderScene implements IScene {
     setHudEditorContext("lab"); // island HUD leaves with the scene
     this.seaCreatures?.dispose();
     this.hurtEl?.remove();
+    this.unsubFeed?.();
+    this.feedBtnEl?.remove();
+    this.feedBarEl?.remove();
     if (SpawnTools.current) SpawnTools.current = undefined; // Dev spawn tools leave with the scene
     this.survivalHud?.dispose();
     this.stats?.dispose();

@@ -78,6 +78,7 @@ const ITEM_GLYPHS: Record<string, string> = {
   coffee: "☕",
   keycard: "🪪",
   flashlight: "🔦",
+  meat: "🥩",
 };
 
 const HOTBAR_SLOTS = 6;
