@@ -22,6 +22,7 @@ import {
 } from "../engine/Settings";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 import { closeHudEditor } from "../engine/HudEditor";
+import { SeaCreatures } from "../engine/SeaCreatures";
 import { beachStory } from "../data/beachSequences";
 import { VOICE_CLIPS } from "../data/voiceClips";
 import {
@@ -118,6 +119,7 @@ class ChapterOnePlaceholderScene implements IScene {
   private player?: PlayerController;
   private inventory?: InventoryOverlay;
   private islandMap?: IslandMap;
+  private seaCreatures?: SeaCreatures;
   // Eye heights in world units, keyed off Godot's real-metre stances so the two
   // builds match exactly (model is 1.8 m tall = 6.4 u; METERS_PER_UNIT converts).
   // Godot base_character.gd: stand 1.62 m, crouch 1.05 m, crawl 0.52 m.
@@ -480,6 +482,12 @@ class ChapterOnePlaceholderScene implements IScene {
     // Passing the world scene switches the minimap to a LIVE top-down render
     // (what's really there — no baked image, immune to world rescales).
     this.islandMap = new IslandMap(this.ctx.uiLayer, this.scene);
+
+    // Ambient sea life roaming the ocean (ARK-style spawn around the player).
+    // preload() streams the 5 GLBs in the background; they pop in once ready,
+    // so scene entry isn't blocked on the download.
+    this.seaCreatures = new SeaCreatures(this.scene, { count: 6 });
+    void this.seaCreatures.preload();
   }
 
   // ---------- Chapter Two: "Day One — Arrival" cinematic ----------
@@ -1416,6 +1424,8 @@ class ChapterOnePlaceholderScene implements IScene {
   // ---------- Loop ----------
 
   update(dt: number, elapsed: number): void {
+    // Ambient sea life — roams whether or not gameplay control is active.
+    if (this.jack) this.seaCreatures?.update(dt, this.jack.position);
     this.elapsed = elapsed;
     this.oceanUniforms.uTime.value = elapsed;
 
@@ -1622,6 +1632,7 @@ class ChapterOnePlaceholderScene implements IScene {
     this.ctx.overlays.cancelChoice();
     closeSettingsPanel();
     closeHudEditor();
+    this.seaCreatures?.dispose();
     if (SpawnTools.current) SpawnTools.current = undefined; // Dev spawn tools leave with the scene
     this.islandMap?.dispose();
     this.player?.dispose();
