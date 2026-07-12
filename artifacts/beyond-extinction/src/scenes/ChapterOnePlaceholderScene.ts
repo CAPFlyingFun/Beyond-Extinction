@@ -596,29 +596,39 @@ class ChapterOnePlaceholderScene implements IScene {
     this.arrivalJournal = root;
     this.journalTextEl = text;
 
-    await this.waitMs(1100);
+    // The prologue handed off on a closing cut to black (the SceneManager veil)
+    // and we swapped scenes with fade=false, so nothing ever lifted that veil.
+    // The opaque journal now covers the screen, so clear the leftover veil
+    // underneath — otherwise it stays black through the entire flyover and the
+    // camera is never seen (only the HUD + underwater tint show above it), which
+    // is why lab→island was all black while a menu Skip (no closing cut) worked.
+    this.ctx.overlays.setBlackInstant(false);
+
+    await this.waitMs(700);
     if (this.disposed) return;
     this.typewrite(VOICE_CLIPS["ch2_jack_journal"]?.text ?? "", "ch2_jack_journal");
     await audio.playVoice("ch2_jack_journal");
     if (this.disposed) return;
-    await this.waitMs(600);
+    await this.waitMs(300);
     if (this.disposed) return;
 
-    // ── 2. Nightmare — still black: crashing through jungle, a roar, a gasp.
-    text.style.transition = "opacity 0.8s ease";
+    // ── 2. Straight into the establishing flyover — the camera does the rest.
+    // The journal clip (~5.7s) is the ONLY hold on black; from here the flyover
+    // fades the world in and flies to Jack. The nightmare stingers (crash →
+    // roar → gasp) fire NON-blocking so they ride over the opening reveal/dive
+    // instead of holding the screen black for another ~5s.
+    text.style.transition = "opacity 0.6s ease";
     text.style.opacity = "0";
-    audio.playSfx("jungle-crash");
-    await this.waitMs(2200);
-    if (this.disposed) return;
-    audio.playSfx("roar-distant");
-    await this.waitMs(2400);
-    if (this.disposed) return;
-    audio.playSfx("gasp");
-    await this.waitMs(600);
-    if (this.disposed) return;
-
-    // ── 3. Establishing flyover — the beach ambience rises as the black lifts.
     audio.playMusic("beach-dawn");
+    audio.playSfx("jungle-crash");
+    void (async () => {
+      await this.waitMs(1400);
+      if (this.disposed || !this.flyoverState) return;
+      audio.playSfx("roar-distant");
+      await this.waitMs(1600);
+      if (this.disposed || !this.flyoverState) return;
+      audio.playSfx("gasp");
+    })();
     await this.runFlyover(root);
     if (this.disposed) return;
     this.arrivalJournal = undefined;
