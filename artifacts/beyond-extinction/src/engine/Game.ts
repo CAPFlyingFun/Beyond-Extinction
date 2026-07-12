@@ -128,9 +128,13 @@ export class Game {
 
   async start(initial: SceneFactory): Promise<void> {
     // Dev shortcut: `?skip=island` boots straight to the beach, past the menu +
-    // lab prologue (handy for testing the island). Same jump the Dev menu's
-    // "Skip to Island" performs.
-    const skip = new URLSearchParams(location.search).get("skip") === "island";
+    // lab prologue (handy for testing the island). Gated to non-production so a
+    // player on the live site can't URL-skip the intro; on the deployed build
+    // the same jump is still reachable through the PIN-gated Dev menu's
+    // "Skip to Island".
+    const skip =
+      import.meta.env.DEV &&
+      new URLSearchParams(location.search).get("skip") === "island";
     await this.scenes.goTo(skip ? createChapterOneScene : initial, false);
     this.running = true;
     this.lastTime = performance.now();
