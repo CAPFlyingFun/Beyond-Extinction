@@ -946,8 +946,10 @@ export class SeaCreatures {
 
     const h = c.heading;
     const yaw = Math.atan2(h.x, h.z); // +Z forward
-    const pitch = Math.asin(clamp(h.y, -1, 1));
-    c.group.rotation.set(pitch, yaw, -c.bank);
+    // Pitch is disabled for now — the fish angled up/down too much (esp. in
+    // shallow shore water). Keep the body level; it still changes depth, just
+    // without tilting. Re-enable (pitch = asin(clamp(h.y,-1,1))) with the AI pass.
+    c.group.rotation.set(0, yaw, -c.bank);
   }
 
   // ── LAND brain (amphibious walker) ─────────────────────────────────────────

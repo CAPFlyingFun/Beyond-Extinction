@@ -391,9 +391,9 @@ class ChapterOnePlaceholderScene implements IScene {
       allowedSpecies: ["megalodon", "mosasaurus", "ichthyosaurus"],
       onBitePlayer: (dmg, species) => this.onCreatureBite(dmg, species),
       onTamed: (name) => this.onCreatureTamed(name),
-      // Float a state label over each creature until we have rest/walk/attack
-      // animations to read the behaviour off — a testing aid (remove later).
-      debug: true,
+      // State labels off for now — they cluttered the horizon. Tracked creatures
+      // (🎯 Track button) still show their label. Re-enable for AI debugging.
+      debug: false,
     });
     // Restore tracked / part-tamed creatures from the loaded save (if any).
     if (this.resumeFauna) this.seaCreatures.restore(this.resumeFauna);
