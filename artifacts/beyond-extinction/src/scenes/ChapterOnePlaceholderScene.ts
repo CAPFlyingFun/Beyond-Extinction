@@ -423,12 +423,18 @@ class ChapterOnePlaceholderScene implements IScene {
       if (u === "1") Progression.setUnlimited(true);
       else if (u === "0") Progression.setUnlimited(false);
     }
-    const halfU = ChapterOnePlaceholderScene.CHAPTER_GRID_M / 2 / METERS_PER_UNIT;
+    // Shift the box inland (toward the island centre) so only ~WATER_MARGIN_M of
+    // ocean is inside it — the arrival waterline stays reachable for a wade, but
+    // the play area is mostly shore + inland rather than half sea.
+    const spanU = ChapterOnePlaceholderScene.CHAPTER_GRID_M / METERS_PER_UNIT;
+    const waterU = 50 / METERS_PER_UNIT; // seaward margin
+    const inlandX = ISLAND_CENTER.x - jackSpawn.x;
+    const inlandZ = ISLAND_CENTER.z - jackSpawn.z;
     this.gridBounds = {
-      minX: jackSpawn.x - halfU,
-      maxX: jackSpawn.x + halfU,
-      minZ: jackSpawn.z - halfU,
-      maxZ: jackSpawn.z + halfU,
+      minX: inlandX >= 0 ? jackSpawn.x - waterU : jackSpawn.x - (spanU - waterU),
+      maxX: inlandX >= 0 ? jackSpawn.x + (spanU - waterU) : jackSpawn.x + waterU,
+      minZ: inlandZ >= 0 ? jackSpawn.z - waterU : jackSpawn.z - (spanU - waterU),
+      maxZ: inlandZ >= 0 ? jackSpawn.z + (spanU - waterU) : jackSpawn.z + waterU,
     };
     this.buildBoundary(scene);
 

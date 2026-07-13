@@ -46,12 +46,12 @@ const S = HEIGHT_SCALE;
 // carpet the low jungle, a few gold deciduous punctuate the mid slopes, conifers
 // crown the highland.
 const SPECIES: Species[] = [
-  { file: "palm", height: 13 * M, minH: 0.3 * S, maxH: 3 * S, density: 0.3, sway: 1.4 },
-  { file: "cycad", height: 6 * M, minH: 0.4 * S, maxH: 5 * S, density: 0.26, sway: 0.5 },
-  { file: "sago", height: 6.5 * M, minH: 0.6 * S, maxH: 5 * S, density: 0.22, sway: 0.5 },
-  { file: "fern", height: 4.5 * M, minH: 2 * S, maxH: 8 * S, density: 0.5, sway: 0.8 },
-  { file: "aspen", height: 12 * M, minH: 6 * S, maxH: 16 * S, density: 0.18, sway: 1.2 },
-  { file: "conifer", height: 14 * M, minH: 13 * S, maxH: VOLCANO_ROCK_H, density: 0.4, sway: 1.3 },
+  { file: "palm", height: 13 * M, minH: 0.3 * S, maxH: 3.5 * S, density: 0.62, sway: 1.4 },
+  { file: "cycad", height: 6 * M, minH: 0.4 * S, maxH: 6 * S, density: 0.58, sway: 0.5 },
+  { file: "sago", height: 6.5 * M, minH: 0.6 * S, maxH: 6 * S, density: 0.5, sway: 0.5 },
+  { file: "fern", height: 4.5 * M, minH: 1.5 * S, maxH: 9 * S, density: 0.72, sway: 0.8 },
+  { file: "aspen", height: 12 * M, minH: 5 * S, maxH: 17 * S, density: 0.42, sway: 1.2 },
+  { file: "conifer", height: 14 * M, minH: 12 * S, maxH: VOLCANO_ROCK_H, density: 0.66, sway: 1.3 },
 ];
 
 // Same stable hash as islandTrees/islandFoliage so stands stay reload-invariant.
@@ -170,12 +170,16 @@ export async function loadIslandBillboardTrees(): Promise<IslandTrees> {
   );
 
   // ── placement: deterministic grid, species picked by elevation band ─────────
+  // Tighter STEP + higher densities => a much fuller forest. Perf holds because
+  // each tree is a 2-tri billboard, a whole stand is one InstancedMesh (draw
+  // calls scale with CHUNK count, not tree count), and the 200 m LOD dither caps
+  // how many pixels the far field can cost.
   const PLANT = MAP_SCALE / 5.2;
-  const STEP = 13 * PLANT;
+  const STEP = 4.5 * PLANT; // ~13 -> 4.5: ~8x denser than the first pass
   const AX = 150 * MAP_SCALE;
   const CX = ISLAND_CENTER.x;
   const CZ = ISLAND_CENTER.z;
-  const CHUNK = 40 * MAP_SCALE;
+  const CHUNK = 18 * MAP_SCALE;
   const buckets: Map<string, THREE.Matrix4[]>[] = SPECIES.map(() => new Map());
 
   const dummy = new THREE.Object3D();
