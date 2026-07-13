@@ -1,8 +1,9 @@
 # Beyond Extinction
 
-A cinematic, story-driven prehistoric survival adventure game built with **vanilla
-JavaScript + Three.js**, served through **Vite**. The first vertical slice covers a
-3D animated Main Menu and an interactive Prologue that ends on the Chapter One beach.
+A cinematic, story-driven prehistoric survival adventure game built with
+**TypeScript + Three.js**, served through **Vite**. The first vertical slice
+covers a 3D animated Main Menu, an interactive lab Prologue, and the Chapter One
+island (arrival cinematic, survival HUD, ARK-style creature AI + passive taming).
 
 ## Architecture
 
@@ -27,7 +28,7 @@ src/
     InputManager.ts       # WASD/arrows + pointer raycast interaction
     DialogueManager.ts    # HTML portrait dialogue overlay (typewriter, click/space)
     QuestManager.ts       # HUD objective tracker
-    AudioManager.ts       # stub (logs cues; real audio TBD)
+    AudioManager.ts       # real audio: music beds, ducking, VO, procedural SFX synth
     Overlays.ts           # fade/flash/caption/clock/hint cinematic overlays
     IScene.ts             # scene interface + shared SceneContext
     assets.ts             # GLB/texture loaders with placeholder fallback

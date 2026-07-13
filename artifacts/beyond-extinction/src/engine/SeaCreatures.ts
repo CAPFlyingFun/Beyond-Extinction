@@ -2,6 +2,15 @@ import * as THREE from "three";
 import { clone as cloneSkinned } from "three/addons/utils/SkeletonUtils.js";
 import { beachHeight, METERS_PER_UNIT } from "./beachTerrain";
 import { loadModel } from "./assets";
+import {
+  populationDeficit,
+  neutralShouldEngage,
+  feedCooldownSecs,
+  validateFaunaEntry,
+} from "./faunaLogic";
+import type { TamedBehavior } from "./faunaLogic";
+
+export type { TamedBehavior } from "./faunaLogic";
 
 /**
  * Island fauna for the Chapter 2 ocean & shoreline — a port of the Godot
@@ -46,8 +55,6 @@ export type SeaSpeciesId =
 type Habitat = "sea" | "amphibious";
 type SeaAggression = "ambient" | "curious" | "aggressive";
 type LandTemperament = "neutral" | "aggressive" | "skittish" | "passive";
-/** Order given to a TAMED creature via the interaction menu (ARK Mobile-style). */
-export type TamedBehavior = "follow" | "stay" | "wander";
 
 /** Free-swimming water brain tuning (SeaConfig). Distances/speeds in metres. */
 interface SeaBrainCfg {
@@ -89,6 +96,7 @@ interface LandBrainCfg {
   fleeHealth: number; // flee below this fraction of maxHealth (0 = never)
   standM: number; // body height (metres) — water-probe reference
   maxWadeM: number; // wander no deeper than this (metres); chase ignores it
+  personalSpaceM: number; // neutral temperament: engage only within this (m)
 }
 
 interface Species {
@@ -173,7 +181,7 @@ const SPECIES: Species[] = [
       temperament: "neutral", maxHealth: 300, sight: 60,
       attackRange: 4.5, fovDeg: 210, damage: 28, cooldown: 2.2, strikeAt: 0.4,
       wanderSpeed: 1.2, chaseSpeed: 6.0, turnSpeed: 4.0, leash: 70, giveUp: 40,
-      fleeHealth: 0, standM: 1.3, maxWadeM: 3,
+      fleeHealth: 0, standM: 1.3, maxWadeM: 3, personalSpaceM: 8,
     },
   },
   {
@@ -191,7 +199,7 @@ const SPECIES: Species[] = [
       temperament: "aggressive", maxHealth: 420, sight: 60,
       attackRange: 5.0, fovDeg: 210, damage: 38, cooldown: 2.4, strikeAt: 0.4,
       wanderSpeed: 1.1, chaseSpeed: 5.6, turnSpeed: 3.6, leash: 70, giveUp: 40,
-      fleeHealth: 0, standM: 1.6, maxWadeM: 3,
+      fleeHealth: 0, standM: 1.6, maxWadeM: 3, personalSpaceM: 6,
     },
   },
 ];
@@ -269,7 +277,7 @@ interface Creature {
   tamed: boolean;
   basking: boolean;
   baskTimer: number;
-  baskCd: number;
+  nextBaskAt: number; // elapsed time it next baskes (deterministic feed schedule)
   feedWindow: number;
   agitated: number;
   // tracking / persistence / tamed orders (ARK-style interaction menu)
@@ -344,6 +352,7 @@ export class SeaCreatures {
   private readonly camera?: THREE.Camera;
   private nextId = 1;
   private pendingRestore: FaunaSaveEntry[] | null = null;
+  private hasRestored = false;
   private ready = false;
   private elapsed = 0;
 
@@ -376,8 +385,11 @@ export class SeaCreatures {
 
   /** Seed the population around the focus point (once preload has resolved). */
   private populate(focus: THREE.Vector3): void {
-    if (!this.ready || this.creatures.length > 0) return;
-    for (let i = 0; i < this.count; i++) {
+    if (!this.ready) return;
+    // Additive: fill UP TO count. Restored tracked/tamed creatures are already
+    // in the list, so restoring one must not starve the rest of the spawn.
+    const need = populationDeficit(this.creatures.length, this.count);
+    for (let i = 0; i < need; i++) {
       const c = this.build(this.pickSpecies());
       this.place(c, focus, true);
       this.creatures.push(c);
@@ -398,7 +410,7 @@ export class SeaCreatures {
       this.applyRestore(this.pendingRestore);
       this.pendingRestore = null;
     }
-    if (this.creatures.length === 0) this.populate(focus);
+    if (this.creatures.length < this.count) this.populate(focus);
 
     for (const c of this.creatures) {
       // Stream: anything past the cull radius recycles to a fresh spawn ahead.
@@ -575,8 +587,10 @@ export class SeaCreatures {
       }
     }
     if (!best) return null;
-    const secs = Math.max(0, best.feedWindow) + Math.max(0, best.agitated) + Math.max(0, best.baskCd);
-    return { name: speciesName(best.species.id), secs: Math.ceil(secs) };
+    // Exact: the scheduled next-bask time minus now (agitated/feedWindow are
+    // subsumed by nextBaskAt, so no double-counting).
+    const secs = feedCooldownSecs(best.nextBaskAt, this.elapsed);
+    return { name: speciesName(best.species.id), secs };
   }
 
   // ── tracking + persistence ─────────────────────────────────────────────────
@@ -675,21 +689,30 @@ export class SeaCreatures {
 
   /** Queue saved tracked/tamed creatures to respawn once models are loaded. */
   restore(list: FaunaSaveEntry[]): void {
+    // Apply at most once — a second restore() (a re-enter) must not duplicate
+    // the saved creatures.
+    if (this.hasRestored) return;
     if (list && list.length) this.pendingRestore = list;
   }
 
   private applyRestore(list: FaunaSaveEntry[]): void {
-    for (const e of list) {
-      const sp = SPECIES.find((s) => s.id === e.species);
-      if (!sp) continue;
+    if (this.hasRestored) return;
+    this.hasRestored = true;
+    const valid = new Set<string>(SPECIES.map((s) => s.id));
+    for (const raw of list) {
+      // Sanitise untrusted save data: drop unknown species / non-finite coords,
+      // clamp tamePct, normalise behaviour.
+      const e = validateFaunaEntry(raw, valid);
+      if (!e) continue;
+      const sp = SPECIES.find((s) => s.id === e.species)!;
       const c = this.build(sp);
       c.group.position.set(e.x, 0, e.z);
       c.home.set(e.x, 0, e.z);
       c.tamePct = e.tamePct;
       c.tamed = e.tamed;
       c.tracked = e.tracked;
-      c.behavior = e.behavior ?? "wander";
-      c.aggressive = e.aggressive ?? false;
+      c.behavior = e.behavior;
+      c.aggressive = e.aggressive;
       if (sp.habitat === "sea") {
         c.heading.set(Math.sin(e.yaw), 0, Math.cos(e.yaw));
         c.prevHeading.copy(c.heading);
@@ -922,7 +945,6 @@ export class SeaCreatures {
     c.stateT += dt;
     c.attackCd = Math.max(0, c.attackCd - dt);
     if (c.provokedT > 0) c.provokedT -= dt;
-    if (c.baskCd > 0) c.baskCd -= dt;
     if (c.agitated > 0) c.agitated -= dt;
 
     // Feeding window: while eating after a passive feed the croc is occupied and
@@ -938,7 +960,8 @@ export class SeaCreatures {
           this.enter(c, LAND_IDLE);
         } else {
           c.agitated = AGITATED_DUR; // now hostile — run!
-          c.baskCd = BASK_CD; // then a lull before it basks (feedable) again
+          // Deterministic: it will bask (be feedable) again exactly this far out.
+          c.nextBaskAt = this.elapsed + AGITATED_DUR + BASK_CD;
           this.enter(c, LAND_WANDER);
         }
       }
@@ -954,6 +977,20 @@ export class SeaCreatures {
       this.groundLand(c);
       this.animateBody(c, dt);
       return;
+    }
+
+    // Deterministic basking schedule: when it's due and the croc is calm, drop
+    // into a bask (the feedable window). Replaces the old random 50% roll so the
+    // feed-cooldown readout can be exact.
+    if (
+      !c.basking &&
+      c.agitated <= 0 &&
+      this.elapsed >= c.nextBaskAt &&
+      (c.state === LAND_IDLE || c.state === LAND_WANDER)
+    ) {
+      c.basking = true;
+      c.baskTimer = BASK_DUR;
+      this.enter(c, LAND_BASK);
     }
 
     c.thinkAcc += dt;
@@ -1020,20 +1057,50 @@ export class SeaCreatures {
         return;
       }
     }
-    const seen = this.acquirePlayer(c, player);
-    const provoked = c.provokedT > 0 && player && player.vulnerable;
-    if (cfg.temperament === "aggressive") {
-      if (seen) {
-        this.engageLand(c, player!);
-        return;
+    const provoked = c.provokedT > 0 && !!player && player.vulnerable;
+    switch (cfg.temperament) {
+      case "aggressive":
+        // Hunts: engages any target seen across its perception range.
+        if (this.acquirePlayer(c, player)) {
+          this.engageLand(c, player!);
+          return;
+        }
+        break;
+      case "neutral": {
+        // Ambusher: fights ONLY when provoked, or when the player is inside its
+        // personal space (and in view) — never a long-range chaser. (This is the
+        // fix for neutral previously out-aggressing "aggressive".)
+        const engage =
+          !!player &&
+          player.vulnerable &&
+          neutralShouldEngage(
+            c.group.position.distanceTo(player.pos),
+            cfg.personalSpaceM * U,
+            provoked,
+          ) &&
+          (provoked || this.inFov(c, player.pos));
+        if (engage) {
+          this.engageLand(c, player!);
+          return;
+        }
+        break;
       }
-    } else if (cfg.temperament === "neutral") {
-      if (seen || provoked) {
-        if (player) this.engageLand(c, player);
-        return;
-      }
+      case "skittish":
+        // Flees anything it notices.
+        if (
+          player &&
+          player.vulnerable &&
+          c.group.position.distanceTo(player.pos) <= cfg.sight * U
+        ) {
+          c.hasTarget = true;
+          this.enter(c, LAND_FLEE);
+          return;
+        }
+        break;
+      case "passive":
+      default:
+        break; // never initiates combat
     }
-    // passive/skittish crocs don't apply here; fall through to roam.
     this.loseAndRoam(c);
   }
 
@@ -1098,25 +1165,19 @@ export class SeaCreatures {
     const cfg = c.species.land!;
     switch (c.state) {
       case LAND_IDLE:
+        // Basking is scheduled deterministically in updateLand (nextBaskAt); idle
+        // just waits then wanders.
         c.idleHold -= dt;
         if (c.idleHold <= 0) {
-          // Sometimes drop into a mouth-open bask (the passive-tame window)
-          // instead of wandering — untamed, calm, and off cooldown only.
-          if (!c.tamed && c.baskCd <= 0 && c.agitated <= 0 && this.rng() < 0.5) {
-            c.basking = true;
-            c.baskTimer = BASK_DUR;
-            this.enter(c, LAND_BASK);
-          } else {
-            this.pickWanderLand(c);
-            this.enter(c, LAND_WANDER);
-          }
+          this.pickWanderLand(c);
+          this.enter(c, LAND_WANDER);
         }
         break;
       case LAND_BASK:
         c.baskTimer -= dt;
         if (c.baskTimer <= 0) {
           c.basking = false;
-          c.baskCd = BASK_CD;
+          c.nextBaskAt = this.elapsed + BASK_CD; // next bask a while off
           c.idleHold = 1 + this.rng() * 2;
           this.enter(c, LAND_IDLE);
         }
@@ -1425,7 +1486,7 @@ export class SeaCreatures {
     c.tamed = false;
     c.basking = false;
     c.baskTimer = 0;
-    c.baskCd = 2 + this.rng() * 6;
+    c.nextBaskAt = this.elapsed + 2 + this.rng() * 6;
     c.feedWindow = 0;
     c.agitated = 0;
     c.tracked = false; // a recycled creature is a fresh, untracked one
@@ -1502,7 +1563,7 @@ export class SeaCreatures {
       tamed: false,
       basking: false,
       baskTimer: 0,
-      baskCd: 2 + this.rng() * 6,
+      nextBaskAt: this.elapsed + 2 + this.rng() * 6,
       feedWindow: 0,
       agitated: 0,
       id: this.nextId++,

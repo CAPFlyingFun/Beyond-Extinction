@@ -732,9 +732,12 @@ class ChapterOnePlaceholderScene implements IScene {
     menu.querySelectorAll<HTMLButtonElement>("[data-order]").forEach((b) => {
       b.classList.toggle("active", b.dataset.order === t.behavior);
     });
+    // Passive/Aggressive is disabled until creature-vs-creature combat exists —
+    // the flag is stored but nothing reads it yet, so don't imply behaviour.
     const agg = menu.querySelector<HTMLButtonElement>("[data-agg]")!;
-    agg.textContent = t.aggressive ? "Aggressive" : "Passive";
-    agg.classList.toggle("active", t.aggressive);
+    agg.textContent = "Defend — coming soon";
+    agg.disabled = true;
+    agg.classList.remove("active");
     menu.style.display = "flex";
     this.ctx.input.setEnabled(false); // freeze look/move while the menu is open
     if (this.petBtnEl) this.petBtnEl.style.display = "none";
