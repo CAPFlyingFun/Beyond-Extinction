@@ -84,22 +84,13 @@ function billboardMaterial(
         `#include <common>
         uniform float uTime, uSway;
         varying float vOpacity;
-        // Distance fade (metres → opacity). Matches the requested LOD table:
-        // ≤10m full, then −10%/band out to 160m where it's gone. Kept as a
-        // varying and applied by an ordered dither in the fragment shader, so
-        // far trees cost fewer pixels while their silhouette stays readable.
+        // Distance fade (metres → opacity): a smooth linear ramp, full at 0 m
+        // to gone at 200 m (i.e. −25% every 50 m). Continuous rather than
+        // stepped so it doesn't band as you move. Applied by an ordered dither
+        // in the fragment shader, so far trees cost fewer pixels while their
+        // silhouette stays readable.
         float treeFade(float m) {
-          if (m <= 10.0) return 1.0;
-          if (m >= 160.0) return 0.0;
-          return m < 30.0  ? mix(1.0, 0.9, (m - 10.0) / 20.0)
-               : m < 50.0  ? mix(0.9, 0.8, (m - 30.0) / 20.0)
-               : m < 70.0  ? mix(0.8, 0.7, (m - 50.0) / 20.0)
-               : m < 90.0  ? mix(0.7, 0.6, (m - 70.0) / 20.0)
-               : m < 100.0 ? mix(0.6, 0.5, (m - 90.0) / 10.0)
-               : m < 110.0 ? mix(0.5, 0.4, (m - 100.0) / 10.0)
-               : m < 120.0 ? mix(0.4, 0.3, (m - 110.0) / 10.0)
-               : m < 140.0 ? mix(0.3, 0.2, (m - 120.0) / 20.0)
-               :             mix(0.2, 0.1, (m - 140.0) / 20.0);
+          return clamp(1.0 - m / 200.0, 0.0, 1.0);
         }`,
       )
       .replace(
