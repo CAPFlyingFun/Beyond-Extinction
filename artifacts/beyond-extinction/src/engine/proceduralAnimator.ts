@@ -34,8 +34,9 @@ export interface AnimChannel {
   amp?: number; // degrees
   freq?: number;
   phase?: number;
-  offset?: number; // constant degrees
+  offset?: number; // constant (held) degrees
   cascade?: number; // per-bone phase increment down a group's chain
+  attack?: number; // seconds to ramp the offset in — one-shot clips only (Menace/Lunge)
 }
 export interface ClipDef {
   len: number;
@@ -201,7 +202,113 @@ export const SARAH_RIG: RigConfig = {
   ],
 };
 
-export const RIGS: Record<string, RigConfig> = { Jack: JACK_RIG, Sarah: SARAH_RIG };
+/**
+ * Dilophosaurus — Meshy auto-rig ("Dilo rigged - no animations.glb", 51 unnamed
+ * bones, no clips). Bone map decoded from rest-pose geometry + rig screenshots in
+ * the Godot source (Dinos/dilo_animator.gd). Quadruped-style theropod: spine runs
+ * along +Z, so PITCH swings legs/neck, YAW side-sways tail/body. No T-pose
+ * correction is needed (the rig ships posed), so poseChannels is empty.
+ */
+export const DILO_RIG: RigConfig = {
+  bones: {
+    root: "Bone_000",
+    spine: ["Bone_001", "Bone_003", "Bone_002"],
+    neck: ["Bone_017", "Bone_016", "Bone_015", "Bone_014"],
+    head: ["Bone_050", "Bone_049", "Bone_048", "Bone_047"],
+    snout: ["Bone_046", "Bone_045", "Bone_044"],
+    arm_l: ["Bone_036", "Bone_035", "Bone_034", "Bone_033"],
+    arm_r: ["Bone_043", "Bone_042", "Bone_041", "Bone_040"],
+    thigh_l: ["Bone_023"], shin_l: ["Bone_022"], foot_l: ["Bone_021"],
+    thigh_r: ["Bone_029"], shin_r: ["Bone_028"], foot_r: ["Bone_027"],
+    tail: [
+      "Bone_013", "Bone_012", "Bone_011", "Bone_010", "Bone_009",
+      "Bone_008", "Bone_007", "Bone_006", "Bone_005", "Bone_004",
+    ],
+  },
+  poseChannels: [],
+};
+
+/**
+ * Dilophosaurus clip set, ported verbatim from the Godot DiloAnimator CLIPS.
+ * Idle / Walk / Run loop; Menace (rear-up threat display — the crest-flare story
+ * beat, pair with the snarl SFX) and Lunge (bite-snap) are one-shots that hold
+ * their final pose (play with LoopOnce + clampWhenFinished).
+ */
+export const DILO_CLIPS: Record<string, ClipDef> = {
+  Idle: {
+    len: 3.0, loop: true, bob: 0.004, bob_freq: 1.0,
+    channels: [
+      { g: "spine", axis: PITCH, amp: 1.2, freq: 1.0 },
+      { g: "neck", axis: PITCH, amp: 1.6, freq: 1.0, phase: 0.4 },
+      { g: "head", axis: YAW, amp: 2.0, freq: 1.0, phase: 1.1 },
+      { g: "tail", axis: YAW, amp: 2.6, freq: 1.0, cascade: 0.45 },
+      { g: "arm_l", axis: PITCH, amp: 1.5, freq: 1.0, phase: 0.7 },
+      { g: "arm_r", axis: PITCH, amp: 1.5, freq: 1.0, phase: 2.3 },
+    ],
+  },
+  Walk: {
+    len: 1.4, loop: true, bob: 0.015, bob_freq: 2.0,
+    channels: [
+      { g: "thigh_l", axis: PITCH, amp: 24.0, freq: 1.0 },
+      { g: "thigh_r", axis: PITCH, amp: 24.0, freq: 1.0, phase: PI },
+      { g: "shin_l", axis: PITCH, amp: 16.0, freq: 1.0, phase: -1.6, offset: 6.0 },
+      { g: "shin_r", axis: PITCH, amp: 16.0, freq: 1.0, phase: -1.6 + PI, offset: 6.0 },
+      { g: "foot_l", axis: PITCH, amp: 10.0, freq: 1.0, phase: -0.1 },
+      { g: "foot_r", axis: PITCH, amp: 10.0, freq: 1.0, phase: -0.1 + PI },
+      { g: "spine", axis: YAW, amp: 2.5, freq: 1.0 },
+      { g: "neck", axis: PITCH, amp: 2.0, freq: 2.0, phase: 0.6 },
+      { g: "tail", axis: YAW, amp: 5.0, freq: 1.0, cascade: 0.5 },
+      { g: "arm_l", axis: PITCH, amp: 4.0, freq: 1.0, phase: 0.8 },
+      { g: "arm_r", axis: PITCH, amp: 4.0, freq: 1.0, phase: 0.8 + PI },
+    ],
+  },
+  Run: {
+    len: 0.7, loop: true, bob: 0.03, bob_freq: 2.0,
+    channels: [
+      { g: "thigh_l", axis: PITCH, amp: 38.0, freq: 1.0 },
+      { g: "thigh_r", axis: PITCH, amp: 38.0, freq: 1.0, phase: PI },
+      { g: "shin_l", axis: PITCH, amp: 26.0, freq: 1.0, phase: -1.6, offset: 10.0 },
+      { g: "shin_r", axis: PITCH, amp: 26.0, freq: 1.0, phase: -1.6 + PI, offset: 10.0 },
+      { g: "foot_l", axis: PITCH, amp: 14.0, freq: 1.0, phase: -0.1 },
+      { g: "foot_r", axis: PITCH, amp: 14.0, freq: 1.0, phase: -0.1 + PI },
+      { g: "spine", axis: PITCH, amp: 1.5, freq: 2.0, offset: -6.0 }, // forward lean
+      { g: "neck", axis: PITCH, amp: 2.5, freq: 2.0, offset: 4.0 }, // head level
+      { g: "tail", axis: YAW, amp: 4.0, freq: 1.0, cascade: 0.6 },
+      { g: "tail", axis: PITCH, amp: 0.0, freq: 1.0, offset: 2.5 }, // tail lifts
+      { g: "arm_l", axis: PITCH, amp: 7.0, freq: 1.0, phase: 0.8 },
+      { g: "arm_r", axis: PITCH, amp: 7.0, freq: 1.0, phase: 0.8 + PI },
+    ],
+  },
+  Menace: {
+    // One-shot: rears up over 0.6 s and holds. NEGATIVE pitch = front rises.
+    len: 2.2, loop: false, bob: 0.0, bob_freq: 1.0,
+    channels: [
+      { g: "spine", axis: PITCH, amp: 0.0, freq: 1.0, offset: -9.0, attack: 0.6 },
+      { g: "neck", axis: PITCH, amp: 0.0, freq: 1.0, offset: -18.0, attack: 0.6 },
+      { g: "head", axis: YAW, amp: 6.0, freq: 5.5 }, // threat shake
+      { g: "arm_l", axis: ROLL, amp: 0.0, freq: 1.0, offset: -14.0, attack: 0.6 },
+      { g: "arm_r", axis: ROLL, amp: 0.0, freq: 1.0, offset: 14.0, attack: 0.6 },
+      { g: "tail", axis: PITCH, amp: 0.0, freq: 1.0, offset: 3.0, attack: 0.6 },
+      { g: "tail", axis: YAW, amp: 4.0, freq: 2.0, cascade: 0.5 },
+    ],
+  },
+  Lunge: {
+    // One-shot bite-snap, upper body only — legs stay planted.
+    len: 0.8, loop: false, bob: 0.0, bob_freq: 1.0,
+    channels: [
+      { g: "spine", axis: PITCH, amp: -5.0, freq: 1.0 },
+      { g: "neck", axis: PITCH, amp: -10.0, freq: 1.0 },
+      { g: "head", axis: PITCH, amp: -5.0, freq: 1.0 },
+      { g: "tail", axis: PITCH, amp: 5.0, freq: 0.5, cascade: 0.3 },
+    ],
+  },
+};
+
+export const RIGS: Record<string, RigConfig> = {
+  Jack: JACK_RIG,
+  Sarah: SARAH_RIG,
+  Dilo: DILO_RIG,
+};
 
 interface BonePlan {
   axis: THREE.Vector3;
@@ -209,6 +316,7 @@ interface BonePlan {
   freq: number;
   phase: number;
   offset: number;
+  attack: number;
 }
 
 /**
@@ -267,6 +375,7 @@ export function bakeHumanoidClips(
             freq: ch.freq ?? 1,
             phase: (ch.phase ?? 0) + (ch.cascade ?? 0) * i,
             offset: ch.offset ?? 0,
+            attack: ch.attack ?? 0,
           });
         });
       }
@@ -288,7 +397,11 @@ export function bakeHumanoidClips(
       for (const t of times) {
         q.copy(restQ);
         for (const e of plans) {
-          const deg = e.offset + e.amp * Math.sin(TAU * e.freq * (t / length) + e.phase);
+          // Attack ramps the held offset in over the first `attack` seconds, but
+          // only on one-shots — on a loop the ramp would restart every cycle and
+          // pop, so looping clips hold the full offset (matches the Godot baker).
+          const ramp = !def.loop && e.attack > 0 ? Math.min(t / e.attack, 1) : 1;
+          const deg = e.offset * ramp + e.amp * Math.sin(TAU * e.freq * (t / length) + e.phase);
           if (Math.abs(deg) > 1e-4) {
             axisLocal.copy(e.axis).applyQuaternion(parentInv).normalize();
             rot.setFromAxisAngle(axisLocal, deg * DEG);

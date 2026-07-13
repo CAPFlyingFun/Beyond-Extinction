@@ -52,6 +52,7 @@ import { MarkerStore } from "../engine/MarkerStore";
 import { spawnSceneMarkers } from "../engine/MarkerEditor";
 import { AnimStore } from "../engine/AnimStore";
 import { RIGS, bakeHumanoidClips, STD_CLIPS } from "../engine/proceduralAnimator";
+import { StoryDilo } from "../engine/StoryDilo";
 
 /** The animation actions a rigged character drives (idle/walk crossfade). */
 interface CharacterActions {
@@ -211,6 +212,19 @@ class ChapterOnePlaceholderScene implements IScene {
   private findSarahArmed = false;
   private static readonly FLYOVER_FOV = 65; // Godot FlyoverCam fov
   private static readonly SARAH_TRIGGER = 3.0 / METERS_PER_UNIT; // 3 m (Godot TRIGGER_RADIUS)
+
+  // The scripted first-encounter Dilophosaurus (a story entity, hand-placed at
+  // the treeline; NOT part of the fauna streamer). Armed once Sarah is found;
+  // walking up to the treeline fires the reveal cutscene once.
+  private dilo?: StoryDilo;
+  private diloArmed = false;
+  private diloRevealStarted = false;
+  private readonly diloTreeline = new THREE.Vector3();
+  /** While set, update() locks the camera onto this world point (the reveal). */
+  private revealLook: THREE.Vector3 | null = null;
+  private static readonly DILO_HEIGHT = 9; // units (~2.5 m tall at the crest)
+  private static readonly TREELINE_TRIGGER = 14 / METERS_PER_UNIT; // 14 m
+  private static readonly UP = new THREE.Vector3(0, 1, 0);
 
   private cameraDirector!: CameraDirector<CameraZoneState>;
   private highlights: ObjectiveHighlight[] = [];
@@ -458,6 +472,24 @@ class ChapterOnePlaceholderScene implements IScene {
     scene.add(driftwood);
 
     this.registerInteractions(driftwood);
+
+    // The scripted first predator — hand-placed just inside the treeline (inland,
+    // +Z of the arrival spawn), hidden until the reveal. Only for a fresh
+    // first-person arrival (a resume drops the player back into free roam).
+    if (this.firstPerson && freshArrival) {
+      const inlandU = 40 / METERS_PER_UNIT; // 40 m up the beach, at the trees
+      this.diloTreeline.set(
+        jackSpawn.x + 8 / METERS_PER_UNIT,
+        0,
+        jackSpawn.z + inlandU,
+      );
+      this.diloTreeline.y = beachHeight(this.diloTreeline.x, this.diloTreeline.z);
+      this.dilo = new StoryDilo();
+      await this.dilo.load(ChapterOnePlaceholderScene.DILO_HEIGHT);
+      if (this.disposed) return;
+      this.dilo.placeAt(this.diloTreeline.x, this.diloTreeline.z);
+      scene.add(this.dilo.group);
+    }
 
     this.cameraDirector = new CameraDirector(this.camera);
     this.buildCameraZones();
@@ -1157,7 +1189,83 @@ class ChapterOnePlaceholderScene implements IScene {
     this.faceTowards(this.sarah, this.jack.position);
     await this.wake(this.sarah, 1100);
     if (this.disposed) return;
-    this.ctx.quest.setObjective("Assess the situation");
+    // With the Dilo staged, point the player toward the treeline — walking up to
+    // it springs the first-encounter reveal. Otherwise, plain free roam.
+    if (this.dilo) {
+      this.ctx.dialogue.showSubtitle({
+        speaker: "Sarah",
+        text: "We can't stay in the open. The trees — there'll be cover.",
+      });
+      await this.waitMs(2600);
+      if (this.disposed) return;
+      this.ctx.dialogue.hideSubtitle();
+      this.ctx.quest.setObjective("Head inland — reach the treeline");
+      this.diloArmed = true;
+    } else {
+      this.ctx.quest.setObjective("Assess the situation");
+    }
+  }
+
+  /**
+   * The scripted first-encounter reveal — the memorable beat, not a random AI
+   * spawn. Freeze the player and take the camera, the Dilophosaurus stalks out of
+   * the treeline, rears up with a snarl (the crest-flare display), lunges at the
+   * camera, then a hard cut to black and the far, giant roar closes the slice.
+   */
+  private async runDiloReveal(): Promise<void> {
+    if (this.diloRevealStarted || !this.dilo || this.disposed) return;
+    this.diloRevealStarted = true;
+    const audio = this.ctx.audio;
+
+    // Freeze the player; the camera holds at their eye and locks onto the animal.
+    this.ctx.input.setEnabled(false);
+    this.player?.setActive(false);
+    this.ctx.quest.clear();
+    this.ctx.overlays.hideHint();
+
+    const eye = this.camera.position.clone();
+    this.dilo.faceToward(eye);
+    this.revealLook = this.dilo.headWorld(new THREE.Vector3());
+    this.dilo.setVisible(true);
+    this.hissDone = true; // the dodo bolts (update() turns it away)
+    audio.playSfx("large-creature-hiss");
+    audio.playSfx("dilo-call");
+
+    // 1) It stalks a couple of steps clear of the trees.
+    this.dilo.play("Walk", 0.2);
+    for (let i = 0; i < 10 && !this.disposed; i++) {
+      this.dilo.moveForward(0.9);
+      await this.waitMs(90);
+    }
+    if (this.disposed) return;
+
+    // 2) Rear-up threat display + snarl — the crest-flare beat, chase sting hits.
+    this.dilo.play("Idle", 0.15);
+    this.dilo.playOnce("Menace");
+    audio.playSfx("dilo-snarl");
+    audio.playMusic("dilo-chase");
+    this.ctx.dialogue.showSubtitle({ speaker: "Sarah", text: "Jack — RUN!" });
+    await this.waitMs(1500);
+    if (this.disposed) return;
+    this.ctx.dialogue.hideSubtitle();
+
+    // 3) It lunges at the camera.
+    this.dilo.faceToward(this.camera.position);
+    this.dilo.playOnce("Lunge");
+    audio.playSfx("dilo-spit");
+    for (let i = 0; i < 6 && !this.disposed; i++) {
+      this.dilo.moveForward(1.6);
+      await this.waitMs(45);
+    }
+    if (this.disposed) return;
+
+    // 4) Hard cut to black + the far, giant roar — "what was THAT?"
+    this.ctx.overlays.setBlackInstant(true);
+    audio.playSfx("roar-distant");
+    await this.waitMs(1700);
+    if (this.disposed) return;
+    this.revealLook = null;
+    this.showEndCard();
   }
 
   // ---------- Story ----------
@@ -1983,6 +2091,28 @@ class ChapterOnePlaceholderScene implements IScene {
       this.applyLocomotion(this.jack, false, dt);
       this.applyLocomotion(this.sarah, false, dt);
       for (const m of this.mixers) m.update(dt);
+      this.dilo?.update(dt);
+      this.treesUpdate?.(dt, this.camera.position);
+      updateBillboardsYAxis(this.billboards, this.camera.position);
+      return;
+    }
+
+    if (this.revealLook) {
+      // Dilophosaurus reveal cutscene: the player is frozen, the camera holds at
+      // their eye and swings to lock onto the animal (its head, tracked live).
+      this.dilo?.headWorld(this.revealLook);
+      const m = new THREE.Matrix4().lookAt(
+        this.camera.position,
+        this.revealLook,
+        ChapterOnePlaceholderScene.UP,
+      );
+      const q = new THREE.Quaternion().setFromRotationMatrix(m);
+      this.camera.quaternion.slerp(q, 1 - Math.pow(0.0016, dt));
+      this.oceanUniforms.uCamPos.value.copy(this.camera.position);
+      this.updateSun();
+      this.applyLocomotion(this.sarah, false, dt);
+      for (const mx of this.mixers) mx.update(dt);
+      this.dilo?.update(dt);
       this.treesUpdate?.(dt, this.camera.position);
       updateBillboardsYAxis(this.billboards, this.camera.position);
       return;
@@ -2081,6 +2211,16 @@ class ChapterOnePlaceholderScene implements IScene {
           void this.sarahFound();
         }
       }
+      // Walking up to the treeline springs the Dilophosaurus reveal (once).
+      if (this.diloArmed && this.dilo) {
+        const tdx = cx - this.diloTreeline.x;
+        const tdz = cz - this.diloTreeline.z;
+        const tr = ChapterOnePlaceholderScene.TREELINE_TRIGGER;
+        if (tdx * tdx + tdz * tdz <= tr * tr) {
+          this.diloArmed = false;
+          void this.runDiloReveal();
+        }
+      }
       // First-person body: Jack stands at the player's feet (NOT under the
       // nudged camera — that would drift him forward each frame), faces the look
       // yaw, and walks. He crouches/lies with the eye via a body drop so the
@@ -2099,6 +2239,7 @@ class ChapterOnePlaceholderScene implements IScene {
       this.camera.position.z -= Math.cos(yaw) * ChapterOnePlaceholderScene.CAM_FWD;
       this.applyLocomotion(this.sarah, false, dt);
       for (const m of this.mixers) m.update(dt);
+      this.dilo?.update(dt);
       this.treesUpdate?.(dt, this.camera.position);
       for (const h of this.highlights) h.update(dt);
       updateBillboardsYAxis(this.billboards, this.camera.position);
@@ -2197,6 +2338,7 @@ class ChapterOnePlaceholderScene implements IScene {
     closeHudEditor();
     setHudEditorContext("lab"); // island HUD leaves with the scene
     this.seaCreatures?.dispose();
+    this.dilo?.dispose();
     this.hurtEl?.remove();
     this.unsubFeed?.();
     this.feedBtnEl?.remove();

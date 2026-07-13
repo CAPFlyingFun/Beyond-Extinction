@@ -12,6 +12,8 @@ const MUSIC_TRACKS: Record<string, string> = {
   "lab-suspense": "assets/audio/lab-suspense.mp3",
   // Island ambience (Chapter Two) — the looping beach bed under free roam.
   "beach-dawn": "assets/audio/ambient-beach.mp3",
+  // The Dilophosaurus first-encounter — drives the reveal/chase sting.
+  "dilo-chase": "assets/audio/dilo-chase.mp3",
 };
 
 const SFX_TRACKS: Record<string, string> = {
@@ -31,6 +33,13 @@ const SFX_TRACKS: Record<string, string> = {
   "jungle-crash": "assets/audio/footsteps-jungle.mp3",
   "roar-distant": "assets/audio/dino-roar-far.mp3",
   gasp: "assets/audio/breath-gasp.mp3",
+  // Dilophosaurus first-encounter SFX (from the Godot audio pack). The treeline
+  // "hiss" the story already cues now resolves to the real snarl.
+  "dilo-snarl": "assets/audio/dilo-snarl.mp3",
+  "dilo-call": "assets/audio/dilo-call.mp3",
+  "dilo-spit": "assets/audio/dilo-spit.mp3",
+  "large-creature-hiss": "assets/audio/dilo-snarl.mp3",
+  "dodo-cluck": "assets/audio/dodo-cluck.mp3",
 };
 
 // Base music level. Kept deliberately low so the score is atmosphere, not a
