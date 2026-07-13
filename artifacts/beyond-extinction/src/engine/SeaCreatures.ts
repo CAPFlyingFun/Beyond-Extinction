@@ -46,6 +46,8 @@ export type SeaSpeciesId =
 type Habitat = "sea" | "amphibious";
 type SeaAggression = "ambient" | "curious" | "aggressive";
 type LandTemperament = "neutral" | "aggressive" | "skittish" | "passive";
+/** Order given to a TAMED creature via the interaction menu (ARK Mobile-style). */
+export type TamedBehavior = "follow" | "stay" | "wander";
 
 /** Free-swimming water brain tuning (SeaConfig). Distances/speeds in metres. */
 interface SeaBrainCfg {
@@ -270,9 +272,11 @@ interface Creature {
   baskCd: number;
   feedWindow: number;
   agitated: number;
-  // tracking / persistence
+  // tracking / persistence / tamed orders (ARK-style interaction menu)
   id: number;
   tracked: boolean;
+  behavior: TamedBehavior;
+  aggressive: boolean;
   // debug
   label?: THREE.Sprite;
   labelText?: string;
@@ -319,6 +323,8 @@ export interface FaunaSaveEntry {
   tamePct: number;
   tamed: boolean;
   tracked: boolean;
+  behavior?: TamedBehavior;
+  aggressive?: boolean;
 }
 
 export class SeaCreatures {
@@ -551,6 +557,28 @@ export class SeaCreatures {
     return { name: speciesName(c.species.id), tamePct: Math.round(c.tamePct) };
   }
 
+  /** Seconds until the nearest non-basking, untamed croc can be fed again, so
+   *  the HUD can show a "ready in Ns" meter instead of you guessing. Null if
+   *  there's a feedable one right now, or none in range. */
+  feedCooldown(pos: THREE.Vector3, rangeM: number): { name: string; secs: number } | null {
+    const r = rangeM * U;
+    let best: Creature | null = null;
+    let bestD = Infinity;
+    for (const c of this.creatures) {
+      if (c.species.habitat !== "amphibious" || c.tamed || c.parked) continue;
+      // Already feedable → the Feed prompt handles it, not a cooldown.
+      if (c.basking && c.feedWindow <= 0 && c.agitated <= 0) continue;
+      const d = c.group.position.distanceTo(pos);
+      if (d <= r && d < bestD) {
+        bestD = d;
+        best = c;
+      }
+    }
+    if (!best) return null;
+    const secs = Math.max(0, best.feedWindow) + Math.max(0, best.agitated) + Math.max(0, best.baskCd);
+    return { name: speciesName(best.species.id), secs: Math.ceil(secs) };
+  }
+
   // ── tracking + persistence ─────────────────────────────────────────────────
 
   /** Toggle tracking on the creature under the crosshair ray (origin+dir), or
@@ -581,6 +609,50 @@ export class SeaCreatures {
     return { name: speciesName(best.species.id), tracked: best.tracked };
   }
 
+  /** The TAMED creature under the crosshair ray (for the interaction menu), or
+   *  null. Same ray-sphere test as trackUnderRay, filtered to tamed. */
+  tamedUnderRay(
+    origin: THREE.Vector3,
+    dir: THREE.Vector3,
+    maxM = 40,
+  ): { id: number; name: string; behavior: TamedBehavior; aggressive: boolean } | null {
+    const d = dir.clone().normalize();
+    const oc = new THREE.Vector3();
+    let best: Creature | null = null;
+    let bestT = Infinity;
+    for (const c of this.creatures) {
+      if (!c.tamed || c.parked) continue;
+      const radius = c.species.lengthM * U * 0.6;
+      oc.copy(c.group.position).sub(origin);
+      const t = oc.dot(d);
+      if (t < 0 || t > maxM * U) continue;
+      if (oc.lengthSq() - t * t <= radius * radius && t < bestT) {
+        bestT = t;
+        best = c;
+      }
+    }
+    return best
+      ? {
+          id: best.id,
+          name: speciesName(best.species.id),
+          behavior: best.behavior,
+          aggressive: best.aggressive,
+        }
+      : null;
+  }
+
+  /** Set a tamed creature's order (from the interaction menu). */
+  setBehavior(id: number, behavior: TamedBehavior): void {
+    const c = this.creatures.find((x) => x.id === id);
+    if (c && c.tamed) c.behavior = behavior;
+  }
+
+  /** Toggle a tamed creature between passive and aggressive (future combat). */
+  setAggressive(id: number, on: boolean): void {
+    const c = this.creatures.find((x) => x.id === id);
+    if (c && c.tamed) c.aggressive = on;
+  }
+
   /** Snapshot every tracked or tamed creature for the save file. */
   serialize(): FaunaSaveEntry[] {
     const out: FaunaSaveEntry[] = [];
@@ -594,6 +666,8 @@ export class SeaCreatures {
         tamePct: c.tamePct,
         tamed: c.tamed,
         tracked: c.tracked,
+        behavior: c.behavior,
+        aggressive: c.aggressive,
       });
     }
     return out;
@@ -614,6 +688,8 @@ export class SeaCreatures {
       c.tamePct = e.tamePct;
       c.tamed = e.tamed;
       c.tracked = e.tracked;
+      c.behavior = e.behavior ?? "wander";
+      c.aggressive = e.aggressive ?? false;
       if (sp.habitat === "sea") {
         c.heading.set(Math.sin(e.yaw), 0, Math.cos(e.yaw));
         c.prevHeading.copy(c.heading);
@@ -862,10 +938,20 @@ export class SeaCreatures {
           this.enter(c, LAND_IDLE);
         } else {
           c.agitated = AGITATED_DUR; // now hostile — run!
+          c.baskCd = BASK_CD; // then a lull before it basks (feedable) again
           this.enter(c, LAND_WANDER);
         }
       }
       this.groundLand(c); // jaws working, body still
+      this.animateBody(c, dt);
+      return;
+    }
+
+    // Tamed: friendly — never targets the player; obeys its interaction-menu
+    // order (follow / stay / wander) instead of the wild-creature FSM.
+    if (c.tamed) {
+      this.tamedBehave(c, dt, player);
+      this.groundLand(c);
       this.animateBody(c, dt);
       return;
     }
@@ -888,6 +974,27 @@ export class SeaCreatures {
     const g = beachHeight(c.group.position.x, c.group.position.z);
     c.group.position.y = g + (this.halfH.get(c.species.id) ?? 0);
     c.group.rotation.set(0, c.yaw, 0);
+  }
+
+  /** A tamed creature's movement, per its interaction-menu order. */
+  private tamedBehave(c: Creature, dt: number, player?: FaunaPlayer): void {
+    const cfg = c.species.land!;
+    if (c.behavior === "stay") {
+      if (player) this.face(c, player.pos, dt); // watch you, hold position
+      return;
+    }
+    if (c.behavior === "follow") {
+      if (!player) return;
+      const keep = 6 * U; // trail ~6 m behind
+      if (c.group.position.distanceTo(player.pos) > keep) {
+        this.moveToward(c, player.pos, cfg.wanderSpeed * 1.8 * U, dt, false);
+      } else {
+        this.face(c, player.pos, dt);
+      }
+      return;
+    }
+    // "wander" — the calm idle/wander cycle, no target (never basks while tamed).
+    this.moveLand(c, dt, undefined);
   }
 
   private thinkLand(c: Creature, player?: FaunaPlayer): void {
@@ -1322,6 +1429,8 @@ export class SeaCreatures {
     c.feedWindow = 0;
     c.agitated = 0;
     c.tracked = false; // a recycled creature is a fresh, untracked one
+    c.behavior = "wander";
+    c.aggressive = false;
     if (c.species.land) c.health = c.species.land.maxHealth;
   }
 
@@ -1398,6 +1507,8 @@ export class SeaCreatures {
       agitated: 0,
       id: this.nextId++,
       tracked: false,
+      behavior: "wander",
+      aggressive: false,
     };
     return c;
   }

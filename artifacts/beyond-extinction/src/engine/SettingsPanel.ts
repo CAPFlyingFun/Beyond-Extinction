@@ -1,5 +1,6 @@
 import type { AudioManager } from "./AudioManager";
 import { openHudEditor } from "./HudEditor";
+import { Progression } from "./Progression";
 import {
   getSettings,
   resetSettings,
@@ -12,6 +13,8 @@ interface OpenOptions {
   parent: HTMLElement;
   audio?: AudioManager;
   onClose?: () => void;
+  /** Fired when the Unlimited Mode toggle changes (island updates the boundary). */
+  onUnlimitedChange?: (on: boolean) => void;
 }
 
 let openEl: HTMLDivElement | null = null;
@@ -37,7 +40,7 @@ export function closeSettingsPanel(): void {
  * Sliders write to the persisted settings store live, so any subscribed camera
  * updates immediately.
  */
-export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void {
+export function openSettingsPanel({ parent, audio, onClose, onUnlimitedChange }: OpenOptions): void {
   if (openEl) return;
 
   const el = document.createElement("div");
@@ -58,6 +61,14 @@ export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void
         <span class="be-toggle__text">
           <span class="be-toggle__title">Subtitles (CC)</span>
           <span class="be-toggle__hint">Show captions under voiced dialogue and narration.</span>
+        </span>
+        <input type="checkbox" />
+        <span class="be-toggle__switch" aria-hidden="true"></span>
+      </label>
+      <label class="be-toggle" data-key="unlimited">
+        <span class="be-toggle__text">
+          <span class="be-toggle__title">Unlimited Mode</span>
+          <span class="be-toggle__hint">Testing: remove the chapter story boundary and open the whole island.</span>
         </span>
         <input type="checkbox" />
         <span class="be-toggle__switch" aria-hidden="true"></span>
@@ -126,6 +137,16 @@ export function openSettingsPanel({ parent, audio, onClose }: OpenOptions): void
   syncSubtitles(getSettings().subtitles);
   subtitlesInput.addEventListener("change", () => {
     setSettings({ subtitles: subtitlesInput.checked });
+  });
+
+  // Unlimited Mode — persisted campaign flag (Progression), not a camera setting.
+  const unlimitedInput = el.querySelector(
+    '[data-key="unlimited"] input',
+  ) as HTMLInputElement;
+  unlimitedInput.checked = Progression.unlimitedMode;
+  unlimitedInput.addEventListener("change", () => {
+    Progression.setUnlimited(unlimitedInput.checked);
+    onUnlimitedChange?.(unlimitedInput.checked);
   });
 
   // Minimap position — a 4-way corner preset (segmented buttons).

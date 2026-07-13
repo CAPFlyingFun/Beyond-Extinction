@@ -1584,6 +1584,107 @@ body {
 }
 .be-track-btn:active { transform: translateX(-50%) translateY(1px); filter: brightness(1.2); }
 
+/* Feed button in "cooldown" state — a passive readout, not tappable. */
+.be-feed-btn--wait {
+  border-color: rgba(150, 170, 190, 0.4);
+  background: linear-gradient(180deg, rgba(30, 40, 52, 0.9), rgba(16, 22, 32, 0.9));
+  color: #9fb2c4;
+  pointer-events: none;
+  animation: none;
+}
+
+/* Tamed-creature command button (⚙). */
+.be-pet-btn {
+  position: fixed;
+  left: 50%;
+  bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 42;
+  padding: 10px 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(180, 160, 240, 0.6);
+  background: linear-gradient(180deg, rgba(42, 34, 64, 0.92), rgba(22, 18, 34, 0.92));
+  color: #e6dcff;
+  font: 700 0.9rem/1 "Inter", sans-serif;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+.be-pet-btn:active { transform: translateX(-50%) translateY(1px); filter: brightness(1.2); }
+
+/* Tamed-creature interaction menu overlay. */
+.be-tame-menu {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 8, 14, 0.55);
+  pointer-events: auto;
+}
+.be-tame-menu__panel {
+  min-width: 240px;
+  padding: 18px 18px 14px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(20, 30, 44, 0.98), rgba(10, 16, 26, 0.98));
+  border: 1px solid rgba(180, 160, 240, 0.35);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.be-tame-menu__title {
+  font: 800 1.1rem/1 "Inter", sans-serif;
+  color: #e6dcff;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+.be-tame-menu__orders {
+  display: flex;
+  gap: 8px;
+}
+.be-tame-menu__orders button {
+  flex: 1;
+  padding: 12px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(120, 200, 255, 0.35);
+  background: rgba(14, 26, 40, 0.85);
+  color: #d9f2ff;
+  font: 700 0.86rem/1 "Inter", sans-serif;
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.be-tame-menu__orders button.active {
+  border-color: rgba(120, 240, 150, 0.8);
+  background: linear-gradient(180deg, rgba(40, 90, 54, 0.9), rgba(24, 54, 32, 0.9));
+  color: #d9ffe2;
+}
+.be-tame-menu__agg,
+.be-tame-menu__close {
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(120, 200, 255, 0.3);
+  background: rgba(14, 26, 40, 0.85);
+  color: #cfe4f5;
+  font: 700 0.86rem/1 "Inter", sans-serif;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+.be-tame-menu__agg.active {
+  border-color: rgba(255, 139, 107, 0.7);
+  background: linear-gradient(180deg, rgba(90, 40, 34, 0.9), rgba(54, 24, 20, 0.9));
+  color: #ffd9cf;
+}
+.be-tame-menu__close { border-color: rgba(150, 170, 190, 0.35); color: #9fb2c4; }
+
 /* ── Inventory: floating pack button ─────────────────────────────────────── */
 .be-inv-btn {
   position: fixed;

@@ -24,6 +24,7 @@ import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 import { closeHudEditor, setHudEditorContext } from "../engine/HudEditor";
 import { ISLAND_LOCATIONS, MAP_METRES, locationWorld } from "../engine/islandLocations";
 import { SeaCreatures, type FaunaSaveEntry } from "../engine/SeaCreatures";
+import { Progression } from "../engine/Progression";
 import { beachStory } from "../data/beachSequences";
 import { VOICE_CLIPS } from "../data/voiceClips";
 import {
@@ -141,6 +142,10 @@ class ChapterOnePlaceholderScene implements IScene {
   // no-cull) and persist it through save/resume.
   private trackBtnEl?: HTMLButtonElement;
   private resumeFauna?: FaunaSaveEntry[];
+  // Tamed-creature interaction menu (⚙ Command → Follow / Stay / Wander).
+  private petBtnEl?: HTMLButtonElement;
+  private tameMenuEl?: HTMLDivElement;
+  private tameMenuTargetId?: number;
   // Survival model + hybrid ARK×PoT HUD (first-person island only). Stats tick
   // only while player input is enabled, so cinematics/menus freeze the clock.
   private stats?: SurvivalStats;
@@ -240,12 +245,21 @@ class ChapterOnePlaceholderScene implements IScene {
   // Roam the WHOLE island: the heightmap spans x ±150·MS, z −28..272·MS —
   // these bounds cover all of it plus a swimmable shallows margin, so nothing
   // stops you mid-island (the volcano included).
-  private static readonly PLAY = {
+  // Full-island bounds — used only once Unlimited Mode unlocks (the open sandbox
+  // after the campaign). Covers the whole heightmap plus a swimmable margin.
+  private static readonly ISLAND = {
     minX: -170 * MAP_SCALE,
     maxX: 170 * MAP_SCALE,
     minZ: -48 * MAP_SCALE,
     maxZ: 292 * MAP_SCALE,
   };
+  // Fixed story grid for this chapter (metres) — the player is clamped to this
+  // box until Unlimited Mode unlocks. Larger chapters bump this up.
+  private static readonly CHAPTER_GRID_M = 500;
+  // Computed in enter() from the arrival spawn + CHAPTER_GRID_M.
+  private gridBounds = ChapterOnePlaceholderScene.ISLAND;
+  private boundaryBox?: THREE.Group;
+  private boundaryToastAt = 0;
 
   constructor(private ctx: SceneContext) {
     this.camera = new THREE.PerspectiveCamera(
@@ -381,6 +395,22 @@ class ChapterOnePlaceholderScene implements IScene {
     const jackSpawn = savedSpawns.jack ?? ChapterOnePlaceholderScene.JACK_SPAWN;
     const sarahSpawn = savedSpawns.sarah ?? ChapterOnePlaceholderScene.SARAH_SPAWN;
     this.jackFacingDeg = jackSpawn.rot;
+
+    // Story grid: a fixed CHAPTER_GRID_M box around the arrival, the play area
+    // until Unlimited Mode unlocks. Dev override: ?unlimited=1 / =0 (dev builds).
+    if (import.meta.env.DEV) {
+      const u = new URLSearchParams(location.search).get("unlimited");
+      if (u === "1") Progression.setUnlimited(true);
+      else if (u === "0") Progression.setUnlimited(false);
+    }
+    const halfU = ChapterOnePlaceholderScene.CHAPTER_GRID_M / 2 / METERS_PER_UNIT;
+    this.gridBounds = {
+      minX: jackSpawn.x - halfU,
+      maxX: jackSpawn.x + halfU,
+      minZ: jackSpawn.z - halfU,
+      maxZ: jackSpawn.z + halfU,
+    };
+    this.buildBoundary(scene);
 
     // Jack, just come to on the sand — standing dazed (no lying clip; tipping
     // him would snap upright when he first walks).
@@ -598,6 +628,10 @@ class ChapterOnePlaceholderScene implements IScene {
           onClose: () => {
             if (!this.disposed) this.ctx.input.setEnabled(wasEnabled);
           },
+          // Show/hide the story-grid boundary live as Unlimited Mode toggles.
+          onUnlimitedChange: (on) => {
+            if (this.boundaryBox) this.boundaryBox.visible = !on;
+          },
         });
       },
       onOpenMap: () => this.islandMap?.openFull(),
@@ -645,6 +679,90 @@ class ChapterOnePlaceholderScene implements IScene {
     });
     this.ctx.uiLayer.appendChild(track);
     this.trackBtnEl = track;
+
+    // Tamed-creature command button (⚙) — shown when the crosshair is on a
+    // tamed croc; opens the interaction menu.
+    const pet = document.createElement("button");
+    pet.type = "button";
+    pet.className = "be-pet-btn";
+    pet.textContent = "⚙ Command";
+    pet.style.display = "none";
+    pet.addEventListener("click", (e) => {
+      e.preventDefault();
+      this.openTameMenu();
+    });
+    this.ctx.uiLayer.appendChild(pet);
+    this.petBtnEl = pet;
+
+    // The interaction menu overlay (ARK Mobile-style order list).
+    const menu = document.createElement("div");
+    menu.className = "be-tame-menu";
+    menu.style.display = "none";
+    menu.innerHTML = `
+      <div class="be-tame-menu__panel">
+        <div class="be-tame-menu__title"></div>
+        <div class="be-tame-menu__orders">
+          <button type="button" data-order="follow">Follow</button>
+          <button type="button" data-order="stay">Stay</button>
+          <button type="button" data-order="wander">Wander</button>
+        </div>
+        <button type="button" class="be-tame-menu__agg" data-agg></button>
+        <button type="button" class="be-tame-menu__close" data-close>Close</button>
+      </div>`;
+    this.ctx.uiLayer.appendChild(menu);
+    this.tameMenuEl = menu;
+    menu.querySelector("[data-close]")?.addEventListener("click", () => this.closeTameMenu());
+    menu.querySelectorAll<HTMLButtonElement>("[data-order]").forEach((b) => {
+      b.addEventListener("click", () =>
+        this.setTameOrder(b.dataset.order as "follow" | "stay" | "wander"),
+      );
+    });
+    menu.querySelector("[data-agg]")?.addEventListener("click", () => this.toggleTameAgg());
+  }
+
+  private openTameMenu(): void {
+    if (this.disposed || !this.seaCreatures || !this.tameMenuEl) return;
+    const dir = new THREE.Vector3();
+    this.camera.getWorldDirection(dir);
+    const t = this.seaCreatures.tamedUnderRay(this.camera.position, dir);
+    if (!t) return;
+    this.tameMenuTargetId = t.id;
+    const menu = this.tameMenuEl;
+    menu.querySelector(".be-tame-menu__title")!.textContent = `${t.name}`;
+    menu.querySelectorAll<HTMLButtonElement>("[data-order]").forEach((b) => {
+      b.classList.toggle("active", b.dataset.order === t.behavior);
+    });
+    const agg = menu.querySelector<HTMLButtonElement>("[data-agg]")!;
+    agg.textContent = t.aggressive ? "Aggressive" : "Passive";
+    agg.classList.toggle("active", t.aggressive);
+    menu.style.display = "flex";
+    this.ctx.input.setEnabled(false); // freeze look/move while the menu is open
+    if (this.petBtnEl) this.petBtnEl.style.display = "none";
+  }
+
+  private closeTameMenu(): void {
+    if (this.tameMenuEl) this.tameMenuEl.style.display = "none";
+    this.tameMenuTargetId = undefined;
+    if (!this.disposed) this.ctx.input.setEnabled(true);
+  }
+
+  private setTameOrder(order: "follow" | "stay" | "wander"): void {
+    if (this.tameMenuTargetId == null || !this.seaCreatures) return;
+    this.seaCreatures.setBehavior(this.tameMenuTargetId, order);
+    this.ctx.audio.playSfx("ui-select");
+    this.ctx.overlays.showToast(`Order: ${order}`);
+    this.persistIsland();
+    this.closeTameMenu();
+  }
+
+  private toggleTameAgg(): void {
+    if (this.tameMenuTargetId == null || !this.seaCreatures || !this.tameMenuEl) return;
+    const agg = this.tameMenuEl.querySelector<HTMLButtonElement>("[data-agg]")!;
+    const on = !agg.classList.contains("active");
+    this.seaCreatures.setAggressive(this.tameMenuTargetId, on);
+    agg.textContent = on ? "Aggressive" : "Passive";
+    agg.classList.toggle("active", on);
+    this.persistIsland();
   }
 
   /** Toggle tracking on whatever creature is under the crosshair. */
@@ -710,6 +828,8 @@ class ChapterOnePlaceholderScene implements IScene {
     if (this.trackBtnEl) {
       this.trackBtnEl.style.display = active ? "block" : "none";
     }
+    // While the interaction menu is open, hide the contextual buttons.
+    const menuOpen = this.tameMenuEl?.style.display === "flex";
     // Post-feed window: count the "back off" bar down.
     if (this.feedWindowT > 0) {
       this.feedWindowT -= dt;
@@ -717,23 +837,45 @@ class ChapterOnePlaceholderScene implements IScene {
         this.feedBarFillEl.style.width = `${Math.max(0, (this.feedWindowT / 4) * 100)}%`;
       }
       if (this.feedWindowT <= 0 && this.feedBarEl) this.feedBarEl.style.display = "none";
+      if (this.feedBtnEl) this.feedBtnEl.style.display = "none";
+      if (this.petBtnEl) this.petBtnEl.style.display = "none";
       return;
     }
-    // Show the Feed button when a basking croc is in reach and we have meat.
     const btn = this.feedBtnEl;
-    if (!btn) return;
-    const target =
-      active && this.seaCreatures && PlayerInventory.count("meat") > 0
-        ? this.seaCreatures.feedTarget(
-            this.camera.position,
-            ChapterOnePlaceholderScene.FEED_RANGE_M,
-          )
+    const canSee = active && this.seaCreatures && !menuOpen;
+    const dir = new THREE.Vector3();
+    if (canSee) this.camera.getWorldDirection(dir);
+    const R = ChapterOnePlaceholderScene.FEED_RANGE_M;
+
+    // Feed button: a basking croc in reach + meat → Feed; else a cooling croc
+    // nearby → a disabled "ready in Ns" meter; else hidden.
+    if (btn) {
+      const target =
+        canSee && PlayerInventory.count("meat") > 0
+          ? this.seaCreatures!.feedTarget(this.camera.position, R)
+          : null;
+      if (target) {
+        btn.textContent = `🥩 Feed ${target.name} · ${target.tamePct}%`;
+        btn.classList.remove("be-feed-btn--wait");
+        btn.style.display = "block";
+      } else {
+        const cd = canSee ? this.seaCreatures!.feedCooldown(this.camera.position, R) : null;
+        if (cd) {
+          btn.textContent = `🥩 ${cd.name} ready in ${cd.secs}s`;
+          btn.classList.add("be-feed-btn--wait");
+          btn.style.display = "block";
+        } else if (btn.style.display !== "none") {
+          btn.style.display = "none";
+        }
+      }
+    }
+
+    // ⚙ Command button: shown when the crosshair is on a tamed creature.
+    if (this.petBtnEl) {
+      const tamed = canSee
+        ? this.seaCreatures!.tamedUnderRay(this.camera.position, dir)
         : null;
-    if (target) {
-      btn.textContent = `🥩 Feed ${target.name} · ${target.tamePct}%`;
-      btn.style.display = "block";
-    } else if (btn.style.display !== "none") {
-      btn.style.display = "none";
+      this.petBtnEl.style.display = tamed ? "block" : "none";
     }
   }
 
@@ -1572,11 +1714,55 @@ class ChapterOnePlaceholderScene implements IScene {
   // ---------- Helpers ----------
 
   private clampToPlay(nx: number, nz: number): { x: number; z: number } {
-    const p = ChapterOnePlaceholderScene.PLAY;
-    return {
-      x: THREE.MathUtils.clamp(nx, p.minX, p.maxX),
-      z: THREE.MathUtils.clamp(nz, p.minZ, p.maxZ),
-    };
+    // Locked to the chapter's story grid until Unlimited Mode opens the island.
+    const p = Progression.unlimitedMode
+      ? ChapterOnePlaceholderScene.ISLAND
+      : this.gridBounds;
+    const x = THREE.MathUtils.clamp(nx, p.minX, p.maxX);
+    const z = THREE.MathUtils.clamp(nz, p.minZ, p.maxZ);
+    if ((x !== nx || z !== nz) && !Progression.unlimitedMode) this.boundaryHit();
+    return { x, z };
+  }
+
+  /** Throttled nudge when the player pushes against the story-grid boundary. */
+  private boundaryHit(): void {
+    const now = this.elapsed;
+    if (now - this.boundaryToastAt < 6) return;
+    this.boundaryToastAt = now;
+    this.ctx.overlays.showToast("Story boundary — the island opens up in Unlimited Mode");
+  }
+
+  /** A glowing wireframe cage + faint shell at the story-grid edge (hidden in
+   *  Unlimited Mode). Purely a visual marker; the clamp does the real work. */
+  private buildBoundary(scene: THREE.Scene): void {
+    const g = this.gridBounds;
+    const yLo = -6 / METERS_PER_UNIT;
+    const yHi = 34 / METERS_PER_UNIT;
+    const w = g.maxX - g.minX;
+    const h = yHi - yLo;
+    const d = g.maxZ - g.minZ;
+    const group = new THREE.Group();
+    group.position.set((g.minX + g.maxX) / 2, (yLo + yHi) / 2, (g.minZ + g.maxZ) / 2);
+
+    const boxGeo = new THREE.BoxGeometry(w, h, d);
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(boxGeo),
+      new THREE.LineBasicMaterial({ color: 0x69d2e7, transparent: true, opacity: 0.5 }),
+    );
+    const shell = new THREE.Mesh(
+      boxGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0x69d2e7,
+        transparent: true,
+        opacity: 0.035,
+        side: THREE.BackSide,
+        depthWrite: false,
+      }),
+    );
+    group.add(shell, edges);
+    group.visible = !Progression.unlimitedMode;
+    scene.add(group);
+    this.boundaryBox = group;
   }
 
   /** Manual save from the island inventory screen. */
@@ -2007,6 +2193,15 @@ class ChapterOnePlaceholderScene implements IScene {
     this.feedBtnEl?.remove();
     this.feedBarEl?.remove();
     this.trackBtnEl?.remove();
+    this.petBtnEl?.remove();
+    this.tameMenuEl?.remove();
+    this.boundaryBox?.traverse((o) => {
+      const m = o as THREE.Mesh | THREE.LineSegments;
+      (m.geometry as THREE.BufferGeometry | undefined)?.dispose?.();
+      const mat = (m as THREE.Mesh).material;
+      if (mat) (Array.isArray(mat) ? mat : [mat]).forEach((x) => x.dispose());
+    });
+    this.boundaryBox?.removeFromParent();
     if (SpawnTools.current) SpawnTools.current = undefined; // Dev spawn tools leave with the scene
     this.survivalHud?.dispose();
     this.stats?.dispose();
