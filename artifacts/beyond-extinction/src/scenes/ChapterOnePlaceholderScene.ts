@@ -223,6 +223,7 @@ class ChapterOnePlaceholderScene implements IScene {
   /** While set, update() locks the camera onto this world point (the reveal). */
   private revealLook: THREE.Vector3 | null = null;
   private static readonly DILO_HEIGHT = 9; // units (~2.5 m tall at the crest)
+  private static readonly DODO_HEIGHT = 3.6; // units (~1 m tall)
   private static readonly TREELINE_TRIGGER = 14 / METERS_PER_UNIT; // 14 m
   private static readonly UP = new THREE.Vector3(0, 1, 0);
 
@@ -454,12 +455,14 @@ class ChapterOnePlaceholderScene implements IScene {
     this.setProne(this.sarah, true);
 
     // A curious dodo nearby (set-dressing positions scale with the world).
-    this.dodo = this.buildDodo();
+    this.dodo = await this.buildDodo();
+    if (this.disposed) return;
     this.dodo.position.set(
       14 * MAP_SCALE,
       beachHeight(14 * MAP_SCALE, 244 * MAP_SCALE),
       244 * MAP_SCALE, // mirrored with the true-aerial-view flip (was z=0)
     );
+    this.dodo.rotation.y = 0.6; // angled toward the beach, unbothered — for now
     scene.add(this.dodo);
 
     // Driftwood scattered up the sand (the "gather" objective anchor).
@@ -1227,7 +1230,8 @@ class ChapterOnePlaceholderScene implements IScene {
     this.dilo.faceToward(eye);
     this.revealLook = this.dilo.headWorld(new THREE.Vector3());
     this.dilo.setVisible(true);
-    this.hissDone = true; // the dodo bolts (update() turns it away)
+    this.hissDone = true;
+    if (this.dodo) this.dodo.rotation.y = this.dilo.group.rotation.y + Math.PI; // bolts away from the trees
     audio.playSfx("large-creature-hiss");
     audio.playSfx("dilo-call");
 
@@ -1780,7 +1784,54 @@ class ChapterOnePlaceholderScene implements IScene {
     return g;
   }
 
-  private buildDodo(): THREE.Group {
+  /** The curious dodo — the real Meshy model with its baked Walking cycle
+   *  (ambling in place). Scaled to a real dodo's ~1 m height; the coarse
+   *  procedural bird stays only as a fallback if the GLB fails to load. A
+   *  rigged replacement with custom weighted anims can drop in later. */
+  private async buildDodo(): Promise<THREE.Group> {
+    const g = new THREE.Group();
+    const model = await loadModel("assets/models/dodo.glb", () => this.buildDodoFallback());
+
+    // Scale to ~1 m tall, feet on the group origin.
+    const size = new THREE.Vector3();
+    new THREE.Box3().setFromObject(model).getSize(size);
+    if (size.y > 1e-3) model.scale.multiplyScalar(ChapterOnePlaceholderScene.DODO_HEIGHT / size.y);
+    model.position.y -= new THREE.Box3().setFromObject(model).min.y;
+
+    // Meshy GLBs import fully-metallic/emissive — tame that (as the rigs do).
+    model.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.castShadow = true;
+      mesh.frustumCulled = false;
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const m of mats) {
+        const sm = m as THREE.MeshStandardMaterial;
+        if (sm && "metalness" in sm) {
+          sm.metalness = Math.min(sm.metalness ?? 0, 0.1);
+          if (sm.emissive) sm.emissiveIntensity = 0;
+        }
+      }
+    });
+    g.add(model);
+
+    // Play the baked Walking cycle as a calm in-place amble (no root motion, so
+    // it pecks about without drifting). Its mixer rides this.mixers.
+    if (model.animations && model.animations.length > 0) {
+      const mixer = new THREE.AnimationMixer(model);
+      const walk =
+        THREE.AnimationClip.findByName(model.animations, "Walking") ?? model.animations[0];
+      const action = mixer.clipAction(walk);
+      action.timeScale = 0.6;
+      action.play();
+      mixer.update(0);
+      this.mixers.push(mixer);
+    }
+    return g;
+  }
+
+  /** Coarse procedural dodo — fallback only, if dodo.glb fails to load. */
+  private buildDodoFallback(): THREE.Group {
     const g = new THREE.Group();
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0x9a8f7d, roughness: 0.9, flatShading: true });
     const beakMat = new THREE.MeshStandardMaterial({ color: 0xe2c044, roughness: 0.7 });
@@ -1801,7 +1852,7 @@ class ChapterOnePlaceholderScene implements IScene {
       g.add(leg);
     }
     g.add(body, head, beak);
-    g.userData.baseX = 14;
+    g.userData.isPlaceholder = true;
     return g;
   }
 
@@ -2243,13 +2294,8 @@ class ChapterOnePlaceholderScene implements IScene {
       this.treesUpdate?.(dt, this.camera.position);
       for (const h of this.highlights) h.update(dt);
       updateBillboardsYAxis(this.billboards, this.camera.position);
-      if (this.dodo) {
-        this.dodo.position.x = this.dodo.userData.baseX + Math.sin(elapsed * 0.6) * 2;
-        this.dodo.position.y =
-          beachHeight(this.dodo.position.x, this.dodo.position.z) +
-          Math.abs(Math.sin(elapsed * 4)) * 0.3;
-        this.dodo.rotation.y = this.hissDone ? Math.PI : Math.sin(elapsed * 0.6) * 0.4;
-      }
+      // The dodo's baked Walking cycle (via this.mixers) is its whole animation
+      // now — no procedural hop/sway. It stays put until it bolts on the hiss.
       return;
     }
 
@@ -2267,14 +2313,6 @@ class ChapterOnePlaceholderScene implements IScene {
     this.cameraDirector?.update(this.cameraState(), dt);
     for (const h of this.highlights) h.update(dt);
     updateBillboardsYAxis(this.billboards, this.camera.position);
-
-    if (this.dodo) {
-      this.dodo.position.x = this.dodo.userData.baseX + Math.sin(elapsed * 0.6) * 2;
-      this.dodo.position.y =
-        beachHeight(this.dodo.position.x, this.dodo.position.z) +
-        Math.abs(Math.sin(elapsed * 4)) * 0.3;
-      this.dodo.rotation.y = this.hissDone ? Math.PI : Math.sin(elapsed * 0.6) * 0.4;
-    }
   }
 
   /**
