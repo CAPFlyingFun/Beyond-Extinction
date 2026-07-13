@@ -255,7 +255,7 @@ class ChapterOnePlaceholderScene implements IScene {
   };
   // Fixed story grid for this chapter (metres) — the player is clamped to this
   // box until Unlimited Mode unlocks. Larger chapters bump this up.
-  private static readonly CHAPTER_GRID_M = 500;
+  private static readonly CHAPTER_GRID_M = 1000;
   // Computed in enter() from the arrival spawn + CHAPTER_GRID_M.
   private gridBounds = ChapterOnePlaceholderScene.ISLAND;
   private boundaryBox?: THREE.Group;
@@ -368,6 +368,12 @@ class ChapterOnePlaceholderScene implements IScene {
     this.seaCreatures = new SeaCreatures(this.scene, {
       count: 6,
       camera: this.camera,
+      // Chapter 1–3 is the protected arrival beach: only marine species stream
+      // in, and only offshore in deep water. Crocs (Sarco/Deino) are amphibious
+      // and would otherwise camp the shoreline where the player spawns — they
+      // belong to the rivers/swamps of later chapters, so they're gated out here.
+      // The first hour should read as "where are we?", not an ambush.
+      allowedSpecies: ["megalodon", "mosasaurus", "ichthyosaurus"],
       onBitePlayer: (dmg, species) => this.onCreatureBite(dmg, species),
       onTamed: (name) => this.onCreatureTamed(name),
       // Float a state label over each creature until we have rest/walk/attack

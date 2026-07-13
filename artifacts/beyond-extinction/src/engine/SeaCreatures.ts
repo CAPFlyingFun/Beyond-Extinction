@@ -7,6 +7,7 @@ import {
   neutralShouldEngage,
   feedCooldownSecs,
   validateFaunaEntry,
+  filterSpawnPool,
 } from "./faunaLogic";
 import type { TamedBehavior } from "./faunaLogic";
 
@@ -312,6 +313,13 @@ export interface SeaCreaturesOptions {
   rangeM?: number; // ring the population is kept within
   cullM?: number; // recycle past this distance
   minDepthM?: number; // sea creatures only spawn where water is at least this deep
+  /**
+   * Biome/chapter allow-list: only these species stream in around the focus.
+   * Omit for the full roster. Chapter 1–3 passes marine-only ids so crocs never
+   * spawn on the protected arrival beach (they belong to rivers/swamps we add
+   * later). Restored tamed/tracked creatures are exempt — they respawn by id.
+   */
+  allowedSpecies?: SeaSpeciesId[];
   /** Called when a creature's bite connects with the player. */
   onBitePlayer?: (damage: number, species: SeaSpeciesId) => void;
   /** Called when a croc's passive tame completes. */
@@ -342,6 +350,8 @@ export class SeaCreatures {
   /** Half the fitted body height per species — lifts land walkers onto the ground. */
   private readonly halfH = new Map<SeaSpeciesId, number>();
   private readonly rng = mulberry32(0x5ea1e);
+  /** Species eligible to stream in here (biome/chapter-gated). */
+  private readonly spawnPool: readonly Species[];
   private readonly count: number;
   private readonly rangeU: number;
   private readonly cullU: number;
@@ -358,6 +368,7 @@ export class SeaCreatures {
 
   constructor(scene: THREE.Scene, opts: SeaCreaturesOptions = {}) {
     this.count = opts.count ?? 6;
+    this.spawnPool = filterSpawnPool(SPECIES, opts.allowedSpecies ?? null);
     this.rangeU = (opts.rangeM ?? 140) * U;
     this.cullU = (opts.cullM ?? 240) * U;
     this.minDepthU = (opts.minDepthM ?? 4) * U;
@@ -1454,13 +1465,14 @@ export class SeaCreatures {
   }
 
   private pickSpecies(): Species {
-    const total = SPECIES.reduce((s, sp) => s + sp.spawnWeight, 0);
+    const pool = this.spawnPool;
+    const total = pool.reduce((s, sp) => s + sp.spawnWeight, 0);
     let r = this.rng() * total;
-    for (const sp of SPECIES) {
+    for (const sp of pool) {
       r -= sp.spawnWeight;
       if (r <= 0) return sp;
     }
-    return SPECIES[0];
+    return pool[0];
   }
 
   private resetState(c: Creature): void {

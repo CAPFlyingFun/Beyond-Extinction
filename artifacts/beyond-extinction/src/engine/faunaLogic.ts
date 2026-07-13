@@ -39,6 +39,28 @@ export function feedCooldownSecs(nextBaskAt: number, now: number): number {
   return Math.max(0, Math.ceil(nextBaskAt - now));
 }
 
+/**
+ * Biome gate for streaming spawns. Given the full species pool and an optional
+ * allow-list (the species that belong in the current biome/chapter play area),
+ * return the subset that may spawn. A null/undefined allow-list means "no
+ * restriction" (every species is eligible). An allow-list that filters
+ * everything out falls back to the full pool rather than spawning nothing — the
+ * caller never wants an empty world from a typo'd allow-list.
+ *
+ * This is what keeps apex predators off the protected arrival beach: Chapter 1–3
+ * passes marine-only ids, so crocs (amphibious) are simply never picked, and the
+ * shore stays safe. Crocs return once we add river/swamp biomes to the list.
+ */
+export function filterSpawnPool<T extends { id: string }>(
+  pool: readonly T[],
+  allowed: readonly string[] | null | undefined,
+): readonly T[] {
+  if (!allowed) return pool;
+  const set = new Set(allowed);
+  const kept = pool.filter((sp) => set.has(sp.id));
+  return kept.length > 0 ? kept : pool;
+}
+
 /** Loose shape of a persisted fauna entry, before validation. */
 export interface RawFaunaEntry {
   species?: unknown;

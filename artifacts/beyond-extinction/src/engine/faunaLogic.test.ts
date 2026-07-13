@@ -5,6 +5,7 @@ import {
   neutralShouldEngage,
   feedCooldownSecs,
   validateFaunaEntry,
+  filterSpawnPool,
 } from "./faunaLogic.ts";
 
 test("populationDeficit fills additively after a restore", () => {
@@ -28,6 +29,27 @@ test("feed cooldown is the scheduled next-bask time, never a sum/negative", () =
   assert.equal(feedCooldownSecs(20, 8), 12); // 12 s until it baskes again
   assert.equal(feedCooldownSecs(8, 20), 0); // already due → 0, not negative
   assert.equal(feedCooldownSecs(10.2, 10), 1); // ceils partial seconds
+});
+
+test("filterSpawnPool gates the biome/chapter spawn pool", () => {
+  const pool = [
+    { id: "megalodon" },
+    { id: "ichthyosaurus" },
+    { id: "deinosuchus" },
+    { id: "sarcosuchus" },
+  ];
+  // No allow-list → full roster.
+  assert.equal(filterSpawnPool(pool, null).length, 4);
+  assert.equal(filterSpawnPool(pool, undefined).length, 4);
+  // Marine-only (Chapter 1–3 beach) → crocs gated out.
+  const marine = filterSpawnPool(pool, ["megalodon", "ichthyosaurus"]);
+  assert.deepEqual(
+    marine.map((s) => s.id),
+    ["megalodon", "ichthyosaurus"],
+  );
+  // A typo'd allow-list that filters everything falls back to the full pool
+  // rather than spawning an empty world.
+  assert.equal(filterSpawnPool(pool, ["pteranodon"]).length, 4);
 });
 
 test("validateFaunaEntry sanitises and rejects bad saves", () => {
