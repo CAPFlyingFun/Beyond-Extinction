@@ -1561,6 +1561,29 @@ body {
   background: linear-gradient(90deg, #c9403f, #ff8b6b);
 }
 
+.be-track-btn {
+  position: fixed;
+  left: 50%;
+  bottom: calc(202px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 42;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(105, 210, 231, 0.55);
+  background: linear-gradient(180deg, rgba(16, 44, 60, 0.9), rgba(8, 22, 32, 0.9));
+  color: #d9f4fb;
+  font: 700 0.82rem/1 "Inter", sans-serif;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+.be-track-btn:active { transform: translateX(-50%) translateY(1px); filter: brightness(1.2); }
+
 /* ── Inventory: floating pack button ─────────────────────────────────────── */
 .be-inv-btn {
   position: fixed;

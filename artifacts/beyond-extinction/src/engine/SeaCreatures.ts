@@ -270,6 +270,9 @@ interface Creature {
   baskCd: number;
   feedWindow: number;
   agitated: number;
+  // tracking / persistence
+  id: number;
+  tracked: boolean;
   // debug
   label?: THREE.Sprite;
   labelText?: string;
@@ -303,6 +306,19 @@ export interface SeaCreaturesOptions {
   onTamed?: (name: string) => void;
   /** Float a state label over each creature (testing aid until animations land). */
   debug?: boolean;
+  /** Camera, so debug/tracked labels can hold a fixed on-screen size. */
+  camera?: THREE.Camera;
+}
+
+/** Persisted state for a tracked/tamed creature (save & resume). */
+export interface FaunaSaveEntry {
+  species: SeaSpeciesId;
+  x: number;
+  z: number;
+  yaw: number;
+  tamePct: number;
+  tamed: boolean;
+  tracked: boolean;
 }
 
 export class SeaCreatures {
@@ -319,6 +335,9 @@ export class SeaCreatures {
   private readonly onBitePlayer?: (d: number, s: SeaSpeciesId) => void;
   private readonly onTamed?: (name: string) => void;
   private readonly debug: boolean;
+  private readonly camera?: THREE.Camera;
+  private nextId = 1;
+  private pendingRestore: FaunaSaveEntry[] | null = null;
   private ready = false;
   private elapsed = 0;
 
@@ -330,6 +349,7 @@ export class SeaCreatures {
     this.onBitePlayer = opts.onBitePlayer;
     this.onTamed = opts.onTamed;
     this.debug = opts.debug ?? false;
+    this.camera = opts.camera;
     this.root.name = "SeaCreatures";
     scene.add(this.root);
   }
@@ -368,11 +388,21 @@ export class SeaCreatures {
   update(dt: number, focus: THREE.Vector3, player?: FaunaPlayer): void {
     if (dt <= 0 || !this.ready) return;
     this.elapsed += dt;
+    if (this.pendingRestore) {
+      this.applyRestore(this.pendingRestore);
+      this.pendingRestore = null;
+    }
     if (this.creatures.length === 0) this.populate(focus);
 
     for (const c of this.creatures) {
       // Stream: anything past the cull radius recycles to a fresh spawn ahead.
-      if (!c.parked && !c.tamed && dist2(c.group.position, focus) > this.cullU * this.cullU) {
+      // Tamed and tracked creatures are pinned — they persist where they are.
+      if (
+        !c.parked &&
+        !c.tamed &&
+        !c.tracked &&
+        dist2(c.group.position, focus) > this.cullU * this.cullU
+      ) {
         this.recycle(c, focus);
         continue;
       }
@@ -385,7 +415,8 @@ export class SeaCreatures {
       }
       if (c.species.habitat === "sea") this.updateSea(c, dt, player);
       else this.updateLand(c, dt, player);
-      if (this.debug) this.updateLabel(c);
+      if (this.debug || c.tracked) this.updateLabel(c);
+      else if (c.label) c.label.visible = false;
     }
   }
 
@@ -406,8 +437,14 @@ export class SeaCreatures {
     s.visible = true;
     const top = (this.halfH.get(c.species.id) ?? 1) * 2 + 3 * U;
     s.position.set(c.group.position.x, c.group.position.y + top, c.group.position.z);
+    // Fixed on-screen size: scale the sprite proportional to camera distance so
+    // it doesn't shrink/grow as you move (canvas is 320×72 → keep that aspect).
+    const dist = this.camera ? this.camera.position.distanceTo(s.position) : 40;
+    const w = 0.34 * Math.max(dist, 6);
+    s.scale.set(w, w * (72 / 320), 1);
+    // A tracked label wears a 🎯 marker so you can pick it out of the pack.
     const { text, color } = this.labelFor(c);
-    this.setLabel(c, text, color);
+    this.setLabel(c, c.tracked ? `🎯 ${text}` : text, color);
   }
 
   private labelFor(c: Creature): { text: string; color: string } {
@@ -512,6 +549,83 @@ export class SeaCreatures {
     c.tamePct = Math.min(100, c.tamePct + FEED_STEP);
     c.feedWindow = FEED_WINDOW;
     return { name: speciesName(c.species.id), tamePct: Math.round(c.tamePct) };
+  }
+
+  // ── tracking + persistence ─────────────────────────────────────────────────
+
+  /** Toggle tracking on the creature under the crosshair ray (origin+dir), or
+   *  null if the ray misses. Tracked creatures show a label + are never culled. */
+  trackUnderRay(
+    origin: THREE.Vector3,
+    dir: THREE.Vector3,
+    maxM = 140,
+  ): { name: string; tracked: boolean } | null {
+    const d = dir.clone().normalize();
+    const oc = new THREE.Vector3();
+    let best: Creature | null = null;
+    let bestT = Infinity;
+    for (const c of this.creatures) {
+      if (c.parked) continue;
+      const radius = c.species.lengthM * U * 0.55; // generous body sphere
+      oc.copy(c.group.position).sub(origin);
+      const t = oc.dot(d); // distance along the ray to the closest point
+      if (t < 0 || t > maxM * U) continue;
+      const perp2 = oc.lengthSq() - t * t; // squared miss distance
+      if (perp2 <= radius * radius && t < bestT) {
+        bestT = t;
+        best = c;
+      }
+    }
+    if (!best) return null;
+    best.tracked = !best.tracked;
+    return { name: speciesName(best.species.id), tracked: best.tracked };
+  }
+
+  /** Snapshot every tracked or tamed creature for the save file. */
+  serialize(): FaunaSaveEntry[] {
+    const out: FaunaSaveEntry[] = [];
+    for (const c of this.creatures) {
+      if (!c.tracked && !c.tamed) continue;
+      out.push({
+        species: c.species.id,
+        x: c.group.position.x,
+        z: c.group.position.z,
+        yaw: c.species.habitat === "sea" ? Math.atan2(c.heading.x, c.heading.z) : c.yaw,
+        tamePct: c.tamePct,
+        tamed: c.tamed,
+        tracked: c.tracked,
+      });
+    }
+    return out;
+  }
+
+  /** Queue saved tracked/tamed creatures to respawn once models are loaded. */
+  restore(list: FaunaSaveEntry[]): void {
+    if (list && list.length) this.pendingRestore = list;
+  }
+
+  private applyRestore(list: FaunaSaveEntry[]): void {
+    for (const e of list) {
+      const sp = SPECIES.find((s) => s.id === e.species);
+      if (!sp) continue;
+      const c = this.build(sp);
+      c.group.position.set(e.x, 0, e.z);
+      c.home.set(e.x, 0, e.z);
+      c.tamePct = e.tamePct;
+      c.tamed = e.tamed;
+      c.tracked = e.tracked;
+      if (sp.habitat === "sea") {
+        c.heading.set(Math.sin(e.yaw), 0, Math.cos(e.yaw));
+        c.prevHeading.copy(c.heading);
+        c.group.position.y = sp.sea!.bandTop * U;
+        this.pickWanderSea(c);
+      } else {
+        c.yaw = e.yaw;
+        this.pickWanderLand(c);
+      }
+      this.creatures.push(c);
+      this.root.add(c.group);
+    }
   }
 
   // ── SEA brain (free-swimming) ──────────────────────────────────────────────
@@ -1207,6 +1321,7 @@ export class SeaCreatures {
     c.baskCd = 2 + this.rng() * 6;
     c.feedWindow = 0;
     c.agitated = 0;
+    c.tracked = false; // a recycled creature is a fresh, untracked one
     if (c.species.land) c.health = c.species.land.maxHealth;
   }
 
@@ -1281,6 +1396,8 @@ export class SeaCreatures {
       baskCd: 2 + this.rng() * 6,
       feedWindow: 0,
       agitated: 0,
+      id: this.nextId++,
+      tracked: false,
     };
     return c;
   }

@@ -23,7 +23,7 @@ import {
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 import { closeHudEditor, setHudEditorContext } from "../engine/HudEditor";
 import { ISLAND_LOCATIONS, MAP_METRES, locationWorld } from "../engine/islandLocations";
-import { SeaCreatures } from "../engine/SeaCreatures";
+import { SeaCreatures, type FaunaSaveEntry } from "../engine/SeaCreatures";
 import { beachStory } from "../data/beachSequences";
 import { VOICE_CLIPS } from "../data/voiceClips";
 import {
@@ -137,6 +137,10 @@ class ChapterOnePlaceholderScene implements IScene {
   private feedWindowT = 0;
   private unsubFeed?: () => void;
   private static readonly FEED_RANGE_M = 5;
+  // Track button: mark the creature under the crosshair to follow it (label +
+  // no-cull) and persist it through save/resume.
+  private trackBtnEl?: HTMLButtonElement;
+  private resumeFauna?: FaunaSaveEntry[];
   // Survival model + hybrid ARK×PoT HUD (first-person island only). Stats tick
   // only while player input is enabled, so cinematics/menus freeze the clock.
   private stats?: SurvivalStats;
@@ -268,6 +272,9 @@ class ChapterOnePlaceholderScene implements IScene {
       // Loading an island save — keep exactly what was saved.
       PlayerInventory.hasBadge = resume.inventory.hasBadge;
       PlayerInventory.heldItems = [...resume.inventory.heldItems];
+      // Tracked / part-tamed creatures ride along in the save's flags.
+      const fauna = resume.flags?.fauna;
+      if (Array.isArray(fauna)) this.resumeFauna = fauna as FaunaSaveEntry[];
     } else {
       // Fresh arrival through the portal: set Jack's carry-over loadout
       // explicitly (the prologue's end-state inventory is unreliable). Jack keeps
@@ -346,12 +353,15 @@ class ChapterOnePlaceholderScene implements IScene {
     // around a focus point (the flyover camera during the cinematic, then Jack).
     this.seaCreatures = new SeaCreatures(this.scene, {
       count: 6,
+      camera: this.camera,
       onBitePlayer: (dmg, species) => this.onCreatureBite(dmg, species),
       onTamed: (name) => this.onCreatureTamed(name),
       // Float a state label over each creature until we have rest/walk/attack
       // animations to read the behaviour off — a testing aid (remove later).
       debug: true,
     });
+    // Restore tracked / part-tamed creatures from the loaded save (if any).
+    if (this.resumeFauna) this.seaCreatures.restore(this.resumeFauna);
     void this.seaCreatures.preload();
 
     await this.buildJungle();
@@ -621,6 +631,49 @@ class ChapterOnePlaceholderScene implements IScene {
     this.feedBarFillEl = bar.querySelector(".be-feed-bar__track i")!;
     this.ctx.uiLayer.appendChild(bar);
     this.feedBarEl = bar;
+
+    // Track button: whatever creature is under the crosshair gets tracked
+    // (persistent label + no-cull + saved). Always available in free roam.
+    const track = document.createElement("button");
+    track.type = "button";
+    track.className = "be-track-btn";
+    track.textContent = "🎯 Track";
+    track.style.display = "none";
+    track.addEventListener("click", (e) => {
+      e.preventDefault();
+      this.tryTrack();
+    });
+    this.ctx.uiLayer.appendChild(track);
+    this.trackBtnEl = track;
+  }
+
+  /** Toggle tracking on whatever creature is under the crosshair. */
+  private tryTrack(): void {
+    if (this.disposed || !this.seaCreatures) return;
+    const dir = new THREE.Vector3();
+    this.camera.getWorldDirection(dir);
+    const res = this.seaCreatures.trackUnderRay(this.camera.position, dir);
+    if (!res) {
+      this.ctx.overlays.showToast("Nothing under the crosshair");
+      return;
+    }
+    this.ctx.audio.playSfx("ui-select");
+    this.ctx.overlays.showToast(res.tracked ? `Tracking ${res.name}` : `Untracked ${res.name}`);
+    this.persistIsland(); // so the track list survives save & leave
+  }
+
+  /** Re-autosave the island with the current inventory + live fauna state. */
+  private persistIsland(): void {
+    if (this.disposed) return;
+    SaveManager.autosave({
+      label: "Chapter One — The Island",
+      scene: "island",
+      inventory: {
+        hasBadge: PlayerInventory.hasBadge,
+        heldItems: [...PlayerInventory.heldItems],
+      },
+      flags: { fauna: this.seaCreatures?.serialize() ?? [] },
+    });
   }
 
   /** Feed the nearest basking croc (Feed button / E key). */
@@ -645,6 +698,7 @@ class ChapterOnePlaceholderScene implements IScene {
     if (this.disposed) return;
     this.ctx.dialogue.showSubtitle({ speaker: "", text: `${name} tamed!` });
     this.ctx.audio.playSfx("ui-select");
+    this.persistIsland(); // keep the tame through save & resume
     window.setTimeout(() => {
       if (!this.disposed) this.ctx.dialogue.hideSubtitle();
     }, 2600);
@@ -652,6 +706,10 @@ class ChapterOnePlaceholderScene implements IScene {
 
   /** Per-frame: drive the Feed prompt + the back-off countdown bar. */
   private updateFeedUI(dt: number, active: boolean): void {
+    // Track button rides along with free-roam play.
+    if (this.trackBtnEl) {
+      this.trackBtnEl.style.display = active ? "block" : "none";
+    }
     // Post-feed window: count the "back off" bar down.
     if (this.feedWindowT > 0) {
       this.feedWindowT -= dt;
@@ -1523,14 +1581,17 @@ class ChapterOnePlaceholderScene implements IScene {
 
   /** Manual save from the island inventory screen. */
   private manualSaveIsland(): void {
-    SaveManager.save("manual-1", {
+    const snap = {
       label: "Chapter One — The Island",
       scene: "island",
       inventory: {
         hasBadge: PlayerInventory.hasBadge,
         heldItems: [...PlayerInventory.heldItems],
       },
-    });
+      flags: { fauna: this.seaCreatures?.serialize() ?? [] },
+    };
+    SaveManager.save("manual-1", snap);
+    SaveManager.autosave(snap); // resume picks the autosave — keep it in sync
     this.ctx.overlays.showToast("Game saved");
   }
 
@@ -1945,6 +2006,7 @@ class ChapterOnePlaceholderScene implements IScene {
     this.unsubFeed?.();
     this.feedBtnEl?.remove();
     this.feedBarEl?.remove();
+    this.trackBtnEl?.remove();
     if (SpawnTools.current) SpawnTools.current = undefined; // Dev spawn tools leave with the scene
     this.survivalHud?.dispose();
     this.stats?.dispose();
