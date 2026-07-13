@@ -2,8 +2,7 @@ import * as THREE from "three";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { loadModel, loadTexture } from "../engine/assets";
 import { updateBillboardsYAxis } from "../engine/Billboard";
-import { buildIslandFoliage } from "../engine/islandFoliage";
-import { loadIslandTrees } from "../engine/islandTrees";
+import { loadIslandBillboardTrees } from "../engine/islandBillboardTrees";
 import { Navigator } from "../engine/Navigator";
 import { PlayerController } from "../engine/PlayerController";
 import { InventoryOverlay } from "../engine/InventoryOverlay";
@@ -1572,17 +1571,13 @@ class ChapterOnePlaceholderScene implements IScene {
 
   private async buildJungle(): Promise<void> {
     if (this.disposed) return;
-    // Foliage + trees are OFF while the 8192 m terrain is being signed off —
-    // bare ground textures make the new scale and slopes easy to judge. Flip
-    // this back on (and retune islandTrees spacing to metres) afterwards.
-    const FOLIAGE_ENABLED = false;
-    if (!FOLIAGE_ENABLED) return;
-    this.scene.add(buildIslandFoliage({ trees: false }));
-    const trees = await loadIslandTrees();
+    // Billboard (impostor) forest — camera-facing photo quads, cheap on mobile.
+    // Ground foliage stays off for now; trees are the priority pass.
+    const trees = await loadIslandBillboardTrees();
     if (this.disposed) return;
     this.scene.add(trees.group);
     this.treesUpdate = trees.update;
-    console.info(`[Beyond Extinction] island trees placed: ${trees.count}`);
+    console.info(`[Beyond Extinction] island billboard trees placed: ${trees.count}`);
   }
 
   /**
