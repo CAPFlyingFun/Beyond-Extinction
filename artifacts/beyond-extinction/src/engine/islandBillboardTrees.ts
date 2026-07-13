@@ -6,6 +6,7 @@ import {
   VOLCANO_ROCK_H,
   MAP_SCALE,
   HEIGHT_SCALE,
+  METERS_PER_UNIT,
 } from "./beachTerrain";
 
 /**
@@ -76,8 +77,31 @@ function billboardMaterial(
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = uTime;
     shader.uniforms.uSway = { value: sway };
+    // ── VERTEX: billboard, wind sway, and per-tree LOD opacity by distance ──
     shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nuniform float uTime, uSway;")
+      .replace(
+        "#include <common>",
+        `#include <common>
+        uniform float uTime, uSway;
+        varying float vOpacity;
+        // Distance fade (metres → opacity). Matches the requested LOD table:
+        // ≤10m full, then −10%/band out to 160m where it's gone. Kept as a
+        // varying and applied by an ordered dither in the fragment shader, so
+        // far trees cost fewer pixels while their silhouette stays readable.
+        float treeFade(float m) {
+          if (m <= 10.0) return 1.0;
+          if (m >= 160.0) return 0.0;
+          return m < 30.0  ? mix(1.0, 0.9, (m - 10.0) / 20.0)
+               : m < 50.0  ? mix(0.9, 0.8, (m - 30.0) / 20.0)
+               : m < 70.0  ? mix(0.8, 0.7, (m - 50.0) / 20.0)
+               : m < 90.0  ? mix(0.7, 0.6, (m - 70.0) / 20.0)
+               : m < 100.0 ? mix(0.6, 0.5, (m - 90.0) / 10.0)
+               : m < 110.0 ? mix(0.5, 0.4, (m - 100.0) / 10.0)
+               : m < 120.0 ? mix(0.4, 0.3, (m - 110.0) / 10.0)
+               : m < 140.0 ? mix(0.3, 0.2, (m - 120.0) / 20.0)
+               :             mix(0.2, 0.1, (m - 140.0) / 20.0);
+        }`,
+      )
       .replace(
         "#include <project_vertex>",
         `
@@ -99,7 +123,24 @@ function billboardMaterial(
           + vec3(0.0, position.y * bbH, 0.0);
         vec4 mvPosition = viewMatrix * vec4(bbWorld, 1.0);
         gl_Position = projectionMatrix * mvPosition;
+        // LOD opacity from the ground distance to the camera (the player), in m.
+        vOpacity = treeFade(bbLen * float(${METERS_PER_UNIT}));
         `,
+      );
+    // ── FRAGMENT: ordered-dither the LOD opacity (screen-door transparency) ──
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+        varying float vOpacity;
+        // 4×4 ordered Bayer dither in [0,1) — no array indexing (WebGL1/2 safe).
+        float bayer2(vec2 a) { a = floor(a); return fract(a.x / 2.0 + a.y * a.y * 0.75); }
+        float bayer4(vec2 a) { return bayer2(0.5 * a) * 0.25 + bayer2(a); }`,
+      )
+      .replace(
+        "#include <alphatest_fragment>",
+        `#include <alphatest_fragment>
+        if (vOpacity < bayer4(gl_FragCoord.xy)) discard;`,
       );
   };
   // All species share one program (identical code; only uniforms differ).
