@@ -1,0 +1,1822 @@
+{
+  "version": 1,
+  "source": "BE_Ch02-03_Cinematic_Script.md",
+  "generated": "2026-07-14",
+  "note": "GENERATED FILE - do not hand-edit. Edit the .md and re-run parse_script.js",
+  "scenes": [
+    {
+      "id": "ch02_arrival",
+      "number": 2,
+      "title": "ARRIVAL",
+      "beats": [
+        {
+          "id": "2.1.A",
+          "mode": "playable",
+          "rig": "First-person",
+          "steps": [
+            {
+              "kind": "fade",
+              "to": "black",
+              "duration": 0
+            },
+            {
+              "kind": "control",
+              "mode": "fp",
+              "allow": [
+                "look",
+                "sprint"
+              ]
+            },
+            {
+              "kind": "vfx",
+              "id": "dream_grade",
+              "params": {
+                "saturation": 0.4,
+                "vignette": 0.7
+              }
+            },
+            {
+              "kind": "sfx",
+              "id": "breath_panic",
+              "loop": true
+            },
+            {
+              "kind": "sfx",
+              "id": "pursuit_crash",
+              "loop": true
+            }
+          ]
+        },
+        {
+          "id": "2.1.B",
+          "mode": "playable",
+          "rig": "Scripted look-back",
+          "steps": [
+            {
+              "kind": "gate",
+              "id": "dream_look_back",
+              "type": "player_look_behind"
+            },
+            {
+              "kind": "vfx",
+              "id": "eyes_reveal",
+              "params": {
+                "color": "gold"
+              }
+            },
+            {
+              "kind": "sfx",
+              "id": "dilo_roar_dream"
+            }
+          ]
+        },
+        {
+          "id": "2.1.C",
+          "mode": "cinematic",
+          "rig": "Scripted fail",
+          "steps": [
+            {
+              "kind": "control",
+              "mode": "cinematic"
+            },
+            {
+              "kind": "anim",
+              "actor": "jack",
+              "id": "stumble_fall",
+              "await": true
+            },
+            {
+              "kind": "camera",
+              "moment": "climax",
+              "cut": true
+            },
+            {
+              "kind": "anim",
+              "actor": "dream_predator",
+              "id": "lunge"
+            },
+            {
+              "kind": "fade",
+              "to": "white",
+              "duration": 0.15
+            }
+          ]
+        },
+        {
+          "id": "2.2.A",
+          "mode": "cinematic",
+          "rig": "CornerCam",
+          "steps": [
+            {
+              "kind": "fade",
+              "to": "scene",
+              "duration": 1.2
+            },
+            {
+              "kind": "camera",
+              "moment": "establishing",
+              "cut": true,
+              "targets": {
+                "primary": "jack",
+                "weight": 1
+              }
+            },
+            {
+              "kind": "sfx",
+              "id": "waves_calm",
+              "loop": true
+            },
+            {
+              "kind": "sfx",
+              "id": "gasp_wake"
+            },
+            {
+              "kind": "vfx",
+              "id": "heat_shimmer"
+            },
+            {
+              "kind": "say",
+              "actor": "narrator",
+              "clip": "arr_narr_01",
+              "text": "Day one. I don't know where we are. I don't know how we got here."
+            },
+            {
+              "kind": "say",
+              "actor": "narrator",
+              "clip": "arr_narr_02",
+              "text": "I know we're alive."
+            },
+            {
+              "kind": "say",
+              "actor": "narrator",
+              "clip": "arr_narr_03",
+              "text": "For now, that's enough."
+            }
+          ]
+        },
+        {
+          "id": "2.2.B",
+          "mode": "playable",
+          "rig": "First-person, degraded",
+          "steps": [
+            {
+              "kind": "control",
+              "mode": "fp",
+              "allow": [
+                "look",
+                "walk"
+              ],
+              "speed_mult": 0.5
+            },
+            {
+              "kind": "vfx",
+              "id": "disorient",
+              "params": {
+                "blur": 0.5,
+                "tilt": true
+              }
+            },
+            {
+              "kind": "objective",
+              "id": "find_sarah",
+              "state": "hidden"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_01",
+              "text": "SARAH!",
+              "direction": "raw, ragged"
+            },
+            {
+              "kind": "objective",
+              "id": "find_sarah",
+              "text": "Find Sarah",
+              "state": "active"
+            },
+            {
+              "kind": "vfx",
+              "id": "disorient",
+              "params": {
+                "blur": 0
+              }
+            },
+            {
+              "kind": "control",
+              "speed_mult": 1
+            }
+          ]
+        },
+        {
+          "id": "2.2.C",
+          "mode": "playable",
+          "rig": "The run",
+          "steps": [
+            {
+              "kind": "gate",
+              "id": "reach_sarah",
+              "type": "proximity",
+              "target": "sarah_body",
+              "radius": 2
+            },
+            {
+              "kind": "sfx",
+              "id": "sand_drag_run"
+            }
+          ]
+        },
+        {
+          "id": "2.3.A",
+          "mode": "cinematic",
+          "rig": "MidpointCam",
+          "steps": [
+            {
+              "kind": "control",
+              "mode": "cinematic"
+            },
+            {
+              "kind": "camera",
+              "moment": "midpoint",
+              "targets": {
+                "primary": "jack",
+                "secondary": "sarah",
+                "weight": 0.7
+              }
+            },
+            {
+              "kind": "anim",
+              "actor": "jack",
+              "id": "kneel",
+              "await": true
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_02",
+              "text": "Sarah. Wake up."
+            },
+            {
+              "kind": "anim",
+              "actor": "jack",
+              "id": "touch_shoulder"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_03",
+              "text": "Come on. I need you to wake up."
+            }
+          ]
+        },
+        {
+          "id": "2.3.B",
+          "mode": "cinematic",
+          "rig": "MidpointCam",
+          "steps": [
+            {
+              "kind": "anim",
+              "actor": "sarah",
+              "id": "eyes_open",
+              "await": true
+            },
+            {
+              "kind": "face",
+              "actor": "sarah",
+              "at": "jack",
+              "amount": 1
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_01",
+              "text": "Jack."
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_04",
+              "text": "Yeah. It's me. Don't try to move yet."
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_02",
+              "text": "My head is killing me."
+            }
+          ]
+        },
+        {
+          "id": "2.3.C",
+          "mode": "cinematic",
+          "rig": "OrbitCam",
+          "steps": [
+            {
+              "kind": "camera",
+              "moment": "orbit",
+              "targets": {
+                "primary": "sarah",
+                "secondary": "jack",
+                "weight": 0.5
+              }
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_03",
+              "text": "Where are we?"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_05",
+              "text": "I don't know."
+            },
+            {
+              "kind": "face",
+              "actor": "sarah",
+              "at": "jack",
+              "amount": 1
+            },
+            {
+              "kind": "anim",
+              "actor": "sarah",
+              "id": "head_snap"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_04",
+              "text": "What do you mean you don't know? We were in the lab. The accelerator was overloading. I told you to get out."
+            },
+            {
+              "kind": "wait",
+              "duration": 0.8
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_05",
+              "text": "You didn't leave."
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_06",
+              "text": "Obviously not."
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_06",
+              "text": "The vortex. Jack, there was a vortex."
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_07",
+              "text": "I was there."
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_07",
+              "text": "It pulled us through something. This isn't Colorado."
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_08",
+              "text": "No."
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_08",
+              "text": "This isn't anywhere near Colorado."
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_09",
+              "text": "Also no."
+            }
+          ]
+        },
+        {
+          "id": "2.3.D",
+          "mode": "cinematic",
+          "rig": "OrbitCam (continuous)",
+          "steps": [
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_10",
+              "text": "Either I'm dreaming, or—"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_09",
+              "text": "You're not dreaming."
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_11",
+              "text": "How do you know?"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_10",
+              "text": "Because if this were your dream, we'd have ended up somewhere with better coffee."
+            },
+            {
+              "kind": "anim",
+              "actor": "jack",
+              "id": "almost_laugh"
+            },
+            {
+              "kind": "anim",
+              "actor": "sarah",
+              "id": "almost_laugh"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_12",
+              "text": "Not in Kansas anymore."
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_11",
+              "text": "Did you seriously just quote The Wizard of Oz?"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_13",
+              "text": "Would you prefer Star Trek?"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_12",
+              "text": "I'd prefer you help me figure out where we are."
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_14",
+              "text": "Right. Science first. Movie quotes later."
+            }
+          ]
+        },
+        {
+          "id": "2.4.A",
+          "mode": "playable",
+          "rig": "First-person",
+          "steps": [
+            {
+              "kind": "control",
+              "mode": "fp",
+              "allow": [
+                "look",
+                "walk",
+                "inventory"
+              ]
+            },
+            {
+              "kind": "objective",
+              "id": "assess",
+              "text": "Assess the situation",
+              "state": "active"
+            }
+          ]
+        },
+        {
+          "id": "2.4.B",
+          "mode": "cinematic",
+          "rig": "MidpointCam",
+          "steps": [
+            {
+              "kind": "camera",
+              "moment": "midpoint",
+              "targets": {
+                "primary": "sarah",
+                "secondary": "jack",
+                "weight": 0.6
+              }
+            },
+            {
+              "kind": "anim",
+              "actor": "jack",
+              "id": "look_down_self"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_13",
+              "text": "Okay. We assess the situation. What do we have?"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_15",
+              "text": "The clothes on our backs."
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_14",
+              "text": "What do we know?"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_16",
+              "text": "We're alive. We're on a beach. It's warm."
+            },
+            {
+              "kind": "wait",
+              "duration": 0.6
+            },
+            {
+              "kind": "camera",
+              "moment": "climax"
+            },
+            {
+              "kind": "vfx",
+              "id": "sky_saturate",
+              "params": {
+                "amount": 1.4,
+                "duration": 2
+              }
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_17",
+              "text": "The sky is the wrong color."
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_15",
+              "text": "Atmospheric composition might be different. Higher oxygen content would deepen the apparent color. More—"
+            }
+          ]
+        },
+        {
+          "id": "2.5.A",
+          "mode": "cinematic",
+          "rig": "CornerCam",
+          "steps": [
+            {
+              "kind": "camera",
+              "moment": "establishing",
+              "cut": true,
+              "targets": {
+                "primary": "bob",
+                "weight": 1
+              }
+            },
+            {
+              "kind": "sfx",
+              "id": "undergrowth_rustle_small"
+            },
+            {
+              "kind": "spawn",
+              "actor": "bob",
+              "at": "jungle_edge_01"
+            }
+          ]
+        },
+        {
+          "id": "2.5.B",
+          "mode": "cinematic",
+          "rig": "MidpointCam",
+          "steps": [
+            {
+              "kind": "camera",
+              "moment": "midpoint",
+              "targets": {
+                "primary": "bob",
+                "secondary": "jack",
+                "weight": 0.7
+              }
+            },
+            {
+              "kind": "move",
+              "actor": "bob",
+              "to": "bob_approach_01",
+              "duration": 4
+            },
+            {
+              "kind": "anim",
+              "actor": "bob",
+              "id": "waddle",
+              "loop": true
+            },
+            {
+              "kind": "sfx",
+              "id": "bob_coo_confused"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_18",
+              "text": "What is that?"
+            },
+            {
+              "kind": "face",
+              "actor": "sarah",
+              "at": "bob",
+              "amount": 1
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_16",
+              "text": "That's a Dodo.",
+              "direction": "thin, strange"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_19",
+              "text": "A what?"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_17",
+              "text": "Raphus cucullatus. It's been extinct for over three hundred years."
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_20",
+              "text": "Well. Nobody told him that."
+            }
+          ]
+        },
+        {
+          "id": "2.5.C",
+          "mode": "cinematic",
+          "rig": "MidpointCam",
+          "steps": [
+            {
+              "kind": "sfx",
+              "id": "bob_coo_louder"
+            },
+            {
+              "kind": "move",
+              "actor": "bob",
+              "to": "bob_approach_02",
+              "duration": 2
+            },
+            {
+              "kind": "sfx",
+              "id": "dilo_hiss_offscreen",
+              "params": {
+                "reverb": "high"
+              }
+            },
+            {
+              "kind": "vfx",
+              "id": "jungle_birds_scatter"
+            },
+            {
+              "kind": "anim",
+              "actor": "bob",
+              "id": "head_snap"
+            },
+            {
+              "kind": "anim",
+              "actor": "bob",
+              "id": "panic_flee",
+              "await": false
+            },
+            {
+              "kind": "sfx",
+              "id": "bob_squawk_panic"
+            },
+            {
+              "kind": "despawn",
+              "actor": "bob",
+              "after": 2.5
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_18",
+              "text": "What just scared a Dodo?",
+              "direction": "whisper"
+            }
+          ]
+        },
+        {
+          "id": "2.6.A",
+          "mode": "cinematic",
+          "rig": "FramingCam",
+          "steps": [
+            {
+              "kind": "camera",
+              "moment": "climax",
+              "cut": true,
+              "targets": {
+                "primary": "zara",
+                "secondary": "jack",
+                "weight": 0.8
+              }
+            },
+            {
+              "kind": "spawn",
+              "actor": "zara",
+              "at": "jungle_edge_02"
+            },
+            {
+              "kind": "sfx",
+              "id": "dilo_hiss_rattle",
+              "loop": true
+            },
+            {
+              "kind": "move",
+              "actor": "zara",
+              "to": "zara_reveal",
+              "duration": 3,
+              "await": true
+            },
+            {
+              "kind": "vfx",
+              "id": "eyes_gold_lock"
+            }
+          ]
+        },
+        {
+          "id": "2.6.B",
+          "mode": "cinematic",
+          "rig": "FramingCam",
+          "steps": [
+            {
+              "kind": "face",
+              "actor": "sarah",
+              "at": "zara",
+              "amount": 1
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_19",
+              "text": "That's a Dilophosaurus.",
+              "direction": "breathed"
+            },
+            {
+              "kind": "anim",
+              "actor": "zara",
+              "id": "crest_flare_slow"
+            },
+            {
+              "kind": "vfx",
+              "id": "venom_gather"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "arr_jack_21",
+              "text": "Sarah. Tell me that's not what I think it is."
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_20",
+              "text": "It's exactly what you think it is."
+            },
+            {
+              "kind": "move",
+              "actor": "zara",
+              "to": "zara_step_01",
+              "duration": 1.2
+            },
+            {
+              "kind": "move",
+              "actor": "zara",
+              "to": "zara_step_02",
+              "duration": 1.2
+            },
+            {
+              "kind": "sfx",
+              "id": "dilo_throat_rattle"
+            },
+            {
+              "kind": "anim",
+              "actor": "zara",
+              "id": "crest_flare_full"
+            },
+            {
+              "kind": "anim",
+              "actor": "zara",
+              "id": "jaws_open"
+            },
+            {
+              "kind": "sfx",
+              "id": "dilo_shriek"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "arr_sarah_21",
+              "text": "RUN!"
+            }
+          ]
+        },
+        {
+          "id": "2.6.C",
+          "mode": "playable",
+          "rig": "Chase begins",
+          "steps": [
+            {
+              "kind": "control",
+              "mode": "fp",
+              "allow": [
+                "look",
+                "sprint"
+              ]
+            },
+            {
+              "kind": "objective",
+              "id": "escape_dilo",
+              "text": "Run",
+              "state": "active"
+            },
+            {
+              "kind": "sfx",
+              "id": "dilo_shriek_pursuit"
+            },
+            {
+              "kind": "fade",
+              "to": "scene"
+            }
+          ]
+        }
+      ],
+      "slug": "EXT. BEACH / JUNGLE — DAY"
+    },
+    {
+      "id": "ch03_chase",
+      "number": 3,
+      "title": "THE CHASE",
+      "beats": [
+        {
+          "id": "3.1.A",
+          "mode": "cinematic",
+          "rig": "VO over playable",
+          "steps": [
+            {
+              "kind": "control",
+              "mode": "fp",
+              "allow": [
+                "look",
+                "sprint"
+              ]
+            },
+            {
+              "kind": "say",
+              "actor": "narrator",
+              "clip": "chase_narr_01",
+              "text": "Still Day One. We've been here less than an hour. Something already tried to kill us. This island has teeth."
+            }
+          ]
+        },
+        {
+          "id": "3.1.B",
+          "mode": "playable",
+          "rig": "Sprint",
+          "steps": [
+            {
+              "kind": "sfx",
+              "id": "dilo_shriek_close"
+            },
+            {
+              "kind": "vfx",
+              "id": "branch_whip",
+              "params": {
+                "rate": "high"
+              }
+            },
+            {
+              "kind": "move",
+              "actor": "sarah",
+              "to": "chase_path_01",
+              "duration": 6,
+              "mode": "escort"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "chase_sarah_01",
+              "text": "Don't look back!",
+              "direction": "gasping"
+            },
+            {
+              "kind": "gate",
+              "id": "chase_look_back",
+              "type": "player_look_behind",
+              "optional": true
+            }
+          ]
+        },
+        {
+          "id": "3.1.C",
+          "mode": "cinematic",
+          "rig": "Look-back shot (conditional)",
+          "steps": [
+            {
+              "kind": "camera",
+              "moment": "follow",
+              "cut": true,
+              "targets": {
+                "primary": "zara",
+                "weight": 1
+              }
+            },
+            {
+              "kind": "anim",
+              "actor": "zara",
+              "id": "full_sprint"
+            },
+            {
+              "kind": "wait",
+              "duration": 1.5
+            },
+            {
+              "kind": "control",
+              "mode": "fp"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_01",
+              "text": "FASTER!"
+            },
+            {
+              "kind": "anim",
+              "actor": "jack",
+              "id": "grab_hand"
+            },
+            {
+              "kind": "move",
+              "actor": "sarah",
+              "to": "chase_path_02",
+              "mode": "towed"
+            }
+          ]
+        },
+        {
+          "id": "3.1.D",
+          "mode": "playable",
+          "rig": "The thick",
+          "steps": [
+            {
+              "kind": "vfx",
+              "id": "foliage_dense",
+              "params": {
+                "visibility": 3
+              }
+            },
+            {
+              "kind": "sfx",
+              "id": "thorn_tear"
+            },
+            {
+              "kind": "vfx",
+              "id": "damage_scratch",
+              "params": {
+                "accumulate": true
+              }
+            },
+            {
+              "kind": "sfx",
+              "id": "sarah_shout"
+            },
+            {
+              "kind": "gate",
+              "id": "reach_ravine",
+              "type": "proximity",
+              "target": "ravine_edge"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "chase_sarah_02",
+              "text": "There!"
+            },
+            {
+              "kind": "control",
+              "mode": "cinematic"
+            },
+            {
+              "kind": "camera",
+              "moment": "climax",
+              "cut": true,
+              "targets": {
+                "primary": "jack",
+                "secondary": "ravine",
+                "weight": 0.5
+              }
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_02",
+              "text": "We have to go around!"
+            }
+          ]
+        },
+        {
+          "id": "3.2.B",
+          "mode": "cinematic",
+          "rig": "Zara arrives",
+          "steps": [
+            {
+              "kind": "camera",
+              "moment": "follow",
+              "targets": {
+                "primary": "zara",
+                "weight": 1
+              }
+            },
+            {
+              "kind": "spawn",
+              "actor": "zara",
+              "at": "ravine_behind"
+            },
+            {
+              "kind": "anim",
+              "actor": "zara",
+              "id": "crest_flare_full"
+            },
+            {
+              "kind": "vfx",
+              "id": "venom_gather",
+              "params": {
+                "intensity": "high"
+              }
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "chase_sarah_03",
+              "text": "It's going to spit! JUMP!"
+            }
+          ]
+        },
+        {
+          "id": "3.2.C",
+          "mode": "playable",
+          "rig": "The jump",
+          "steps": [
+            {
+              "kind": "control",
+              "mode": "fp",
+              "allow": [
+                "look",
+                "sprint",
+                "jump"
+              ]
+            },
+            {
+              "kind": "gate",
+              "id": "ravine_jump",
+              "type": "timed_jump",
+              "window": 1.2,
+              "fail": "ravine_fall"
+            },
+            {
+              "kind": "vfx",
+              "id": "slowmo",
+              "params": {
+                "scale": 0.4,
+                "duration": 0.8
+              }
+            }
+          ]
+        },
+        {
+          "id": "3.2.D",
+          "mode": "cinematic",
+          "rig": "Pulling her up",
+          "steps": [
+            {
+              "kind": "control",
+              "mode": "cinematic"
+            },
+            {
+              "kind": "camera",
+              "moment": "midpoint",
+              "cut": true,
+              "targets": {
+                "primary": "jack",
+                "secondary": "sarah",
+                "weight": 0.5
+              }
+            },
+            {
+              "kind": "anim",
+              "actor": "sarah",
+              "id": "slip_ledge"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_03",
+              "text": "I've got you!"
+            },
+            {
+              "kind": "anim",
+              "actor": "jack",
+              "id": "grab_wrist_pull",
+              "await": true
+            },
+            {
+              "kind": "camera",
+              "moment": "establishing",
+              "targets": {
+                "primary": "zara",
+                "weight": 1
+              }
+            },
+            {
+              "kind": "anim",
+              "actor": "zara",
+              "id": "pace_frustrated"
+            },
+            {
+              "kind": "sfx",
+              "id": "dilo_hiss_frustrated"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_04",
+              "text": "Move! It'll find a way around."
+            }
+          ]
+        },
+        {
+          "id": "3.3.A",
+          "mode": "playable",
+          "rig": null,
+          "steps": [
+            {
+              "kind": "control",
+              "mode": "fp",
+              "allow": [
+                "look",
+                "sprint"
+              ]
+            },
+            {
+              "kind": "vfx",
+              "id": "canopy_close",
+              "params": {
+                "light": 0.3,
+                "tint": "green"
+              }
+            },
+            {
+              "kind": "sfx",
+              "id": "river_rush",
+              "params": {
+                "distance": "falloff"
+              }
+            }
+          ]
+        },
+        {
+          "id": "3.3.B",
+          "mode": "cinematic",
+          "rig": "Trapped",
+          "steps": [
+            {
+              "kind": "gate",
+              "id": "reach_river",
+              "type": "proximity",
+              "target": "river_bank"
+            },
+            {
+              "kind": "control",
+              "mode": "cinematic"
+            },
+            {
+              "kind": "camera",
+              "moment": "climax",
+              "cut": true,
+              "targets": {
+                "primary": "river",
+                "secondary": "jack",
+                "weight": 0.5
+              }
+            },
+            {
+              "kind": "anim",
+              "actor": "sarah",
+              "id": "spin_search"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "chase_sarah_04",
+              "text": "No, no, no."
+            },
+            {
+              "kind": "sfx",
+              "id": "branches_breaking_behind"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_05",
+              "text": "Along the bank! We follow the river!"
+            }
+          ]
+        },
+        {
+          "id": "3.3.C",
+          "mode": "playable",
+          "rig": "The bank",
+          "steps": [
+            {
+              "kind": "control",
+              "mode": "fp",
+              "allow": [
+                "look",
+                "sprint"
+              ]
+            },
+            {
+              "kind": "vfx",
+              "id": "footing_loose",
+              "params": {
+                "slip_chance": 0.15
+              }
+            },
+            {
+              "kind": "sfx",
+              "id": "rocks_slip"
+            },
+            {
+              "kind": "spawn",
+              "actor": "zara",
+              "at": "treeline_parallel"
+            },
+            {
+              "kind": "anim",
+              "actor": "zara",
+              "id": "pace_parallel"
+            }
+          ]
+        },
+        {
+          "id": "3.4.A",
+          "mode": "playable",
+          "rig": "The spit",
+          "steps": [
+            {
+              "kind": "anim",
+              "actor": "zara",
+              "id": "spit_windup"
+            },
+            {
+              "kind": "gate",
+              "id": "venom_dodge",
+              "type": "timed_duck",
+              "window": 1,
+              "fail": "venom_hit"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_06",
+              "text": "DOWN!"
+            },
+            {
+              "kind": "anim",
+              "actor": "jack",
+              "id": "tackle_sarah",
+              "await": true
+            },
+            {
+              "kind": "vfx",
+              "id": "venom_projectile"
+            },
+            {
+              "kind": "sfx",
+              "id": "venom_impact_sizzle"
+            },
+            {
+              "kind": "vfx",
+              "id": "acid_bark",
+              "params": {
+                "smoke": true
+              }
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_07",
+              "text": "Go go go!"
+            }
+          ]
+        },
+        {
+          "id": "3.4.B",
+          "mode": "playable",
+          "rig": "Wounded",
+          "steps": [
+            {
+              "kind": "vfx",
+              "id": "sarah_limp"
+            },
+            {
+              "kind": "vfx",
+              "id": "damage_knee",
+              "params": {
+                "blood": true
+              }
+            },
+            {
+              "kind": "control",
+              "speed_mult": 0.85
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "chase_sarah_05",
+              "text": "There!"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_08",
+              "text": "That's our shot!"
+            }
+          ]
+        },
+        {
+          "id": "3.5.A",
+          "mode": "playable",
+          "rig": "Final sprint",
+          "steps": [
+            {
+              "kind": "vfx",
+              "id": "tunnel_vision",
+              "params": {
+                "ramp": true
+              }
+            },
+            {
+              "kind": "sfx",
+              "id": "heartbeat_loud",
+              "loop": true
+            },
+            {
+              "kind": "sfx",
+              "id": "dilo_shriek_lunge"
+            },
+            {
+              "kind": "sfx",
+              "id": "jaws_snap_close",
+              "params": {
+                "pan": "behind"
+              }
+            },
+            {
+              "kind": "vfx",
+              "id": "breath_on_neck"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "chase_sarah_06",
+              "text": "NOW!"
+            }
+          ]
+        },
+        {
+          "id": "3.5.B",
+          "mode": "playable",
+          "rig": "The dive",
+          "steps": [
+            {
+              "kind": "gate",
+              "id": "boulder_dive",
+              "type": "timed_action",
+              "window": 1,
+              "fail": "caught"
+            },
+            {
+              "kind": "anim",
+              "actor": "jack",
+              "id": "dive_gap",
+              "await": true
+            },
+            {
+              "kind": "sfx",
+              "id": "rock_scrape"
+            },
+            {
+              "kind": "vfx",
+              "id": "damage_shoulder"
+            },
+            {
+              "kind": "sfx",
+              "id": "impact_massive"
+            },
+            {
+              "kind": "vfx",
+              "id": "screen_shake",
+              "params": {
+                "intensity": 0.8
+              }
+            },
+            {
+              "kind": "vfx",
+              "id": "dust_rain"
+            },
+            {
+              "kind": "control",
+              "mode": "fp",
+              "allow": [
+                "look",
+                "crawl"
+              ],
+              "speed_mult": 0.4
+            },
+            {
+              "kind": "gate",
+              "id": "enter_cave",
+              "type": "proximity",
+              "target": "cave_mouth"
+            }
+          ]
+        },
+        {
+          "id": "3.6.A",
+          "mode": "cinematic",
+          "rig": "CornerCam",
+          "steps": [
+            {
+              "kind": "control",
+              "mode": "cinematic"
+            },
+            {
+              "kind": "camera",
+              "moment": "establishing",
+              "cut": true,
+              "targets": {
+                "primary": "cave_mouth",
+                "weight": 1
+              }
+            },
+            {
+              "kind": "sfx",
+              "id": "dilo_rage_loop"
+            },
+            {
+              "kind": "vfx",
+              "id": "venom_splash_stone"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_09",
+              "text": "Get back!"
+            },
+            {
+              "kind": "vfx",
+              "id": "gold_eye_in_gap"
+            }
+          ]
+        },
+        {
+          "id": "3.6.B",
+          "mode": "cinematic",
+          "rig": "The retreat",
+          "steps": [
+            {
+              "kind": "sfx",
+              "id": "dilo_rage_fade",
+              "params": {
+                "duration": 8
+              }
+            },
+            {
+              "kind": "sfx",
+              "id": "footsteps_retreat",
+              "params": {
+                "pattern": "deliberate"
+              }
+            },
+            {
+              "kind": "sfx",
+              "id": "silence_total"
+            },
+            {
+              "kind": "wait",
+              "duration": 2
+            }
+          ]
+        },
+        {
+          "id": "3.7.A",
+          "mode": "cinematic",
+          "rig": "MidpointCam",
+          "steps": [
+            {
+              "kind": "camera",
+              "moment": "midpoint",
+              "cut": true,
+              "targets": {
+                "primary": "jack",
+                "secondary": "sarah",
+                "weight": 0.5
+              }
+            },
+            {
+              "kind": "vfx",
+              "id": "cave_light_dim",
+              "params": {
+                "source": "gap"
+              }
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_10",
+              "text": "Are you okay?",
+              "direction": "gasping"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "chase_sarah_07",
+              "text": "I'll live. You?",
+              "direction": "voice shaking"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_11",
+              "text": "Same."
+            }
+          ]
+        },
+        {
+          "id": "3.7.B",
+          "mode": "cinematic",
+          "rig": "OrbitCam",
+          "steps": [
+            {
+              "kind": "camera",
+              "moment": "orbit",
+              "targets": {
+                "primary": "jack",
+                "secondary": "sarah",
+                "weight": 0.5
+              }
+            },
+            {
+              "kind": "anim",
+              "actor": "jack",
+              "id": "sit_up_slow"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_12",
+              "text": "What just happened?"
+            },
+            {
+              "kind": "anim",
+              "actor": "sarah",
+              "id": "examine_shoulder"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "chase_sarah_08",
+              "text": "We got chased by a Dilophosaurus."
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_13",
+              "text": "We got chased by something that's been extinct for one hundred and ninety million years."
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "chase_sarah_09",
+              "text": "Yes."
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_14",
+              "text": "And we're on a beach. With a jungle. And a Dodo."
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "chase_sarah_10",
+              "text": "Yes."
+            },
+            {
+              "kind": "anim",
+              "actor": "jack",
+              "id": "laugh_hysterical"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "chase_sarah_11",
+              "text": "We're losing it."
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_15",
+              "text": "Can you blame us? We just got hunted by a dinosaur. An actual dinosaur."
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "chase_sarah_12",
+              "text": "I know. Trust me. I know."
+            },
+            {
+              "kind": "anim",
+              "actor": "sarah",
+              "id": "lean_wall_eyes_closed"
+            }
+          ]
+        },
+        {
+          "id": "3.8.A",
+          "mode": "cinematic",
+          "rig": "FramingCam",
+          "steps": [
+            {
+              "kind": "camera",
+              "moment": "climax",
+              "cut": true,
+              "targets": {
+                "primary": "jack",
+                "secondary": "sarah",
+                "weight": 0.5
+              }
+            },
+            {
+              "kind": "sfx",
+              "id": "roar_distant_massive",
+              "params": {
+                "sub_bass": true
+              }
+            },
+            {
+              "kind": "vfx",
+              "id": "screen_shake",
+              "params": {
+                "intensity": 0.4,
+                "duration": 4
+              }
+            },
+            {
+              "kind": "vfx",
+              "id": "dust_ceiling_rain"
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "chase_sarah_13",
+              "text": "What was that?",
+              "direction": "whisper"
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_16",
+              "text": "I don't know. But I think we're going to find out."
+            },
+            {
+              "kind": "sfx",
+              "id": "roar_distant_massive",
+              "params": {
+                "distance": "closer"
+              }
+            },
+            {
+              "kind": "say",
+              "actor": "sarah",
+              "clip": "chase_sarah_14",
+              "text": "We need to stay here. At least until dark. Give whatever that is time to move on."
+            },
+            {
+              "kind": "say",
+              "actor": "jack",
+              "clip": "chase_jack_17",
+              "text": "Agreed."
+            }
+          ]
+        },
+        {
+          "id": "3.9.A",
+          "mode": "cinematic",
+          "rig": "MidpointCam",
+          "steps": [
+            {
+              "kind": "camera",
+              "moment": "midpoint",
+              "targets": {
+                "primary": "jack",
+                "secondary": "sarah",
+                "weight": 0.5
+              }
+            },
+            {
+              "kind": "vfx",
+              "id": "time_lapse_light",
+              "params": {
+                "duration": 6,
+                "to": "dusk"
+              }
+            },
+            {
+              "kind": "sfx",
+              "id": "jungle_night_ambient",
+              "loop": true
+            },
+            {
+              "kind": "objective",
+              "id": "escape_dilo",
+              "state": "complete"
+            },
+            {
+              "kind": "anim",
+              "actor": "sarah",
+              "id": "shiver"
+            },
+            {
+              "kind": "anim",
+              "actor": "jack",
+              "id": "arm_around",
+              "await": true
+            },
+            {
+              "kind": "anim",
+              "actor": "sarah",
+              "id": "lean_into"
+            }
+          ]
+        },
+        {
+          "id": "3.9.B",
+          "mode": "cinematic",
+          "rig": "CornerCam",
+          "steps": [
+            {
+              "kind": "camera",
+              "moment": "establishing",
+              "targets": {
+                "primary": "jack",
+                "weight": 1
+              }
+            },
+            {
+              "kind": "vfx",
+              "id": "fire_none",
+              "params": {
+                "note": "no firelight yet — dark cave"
+              }
+            },
+            {
+              "kind": "objective",
+              "id": "day_two",
+              "text": "Survive the night",
+              "state": "active"
+            },
+            {
+              "kind": "fade",
+              "to": "black",
+              "duration": 3
+            }
+          ]
+        }
+      ],
+      "slug": "EXT. JUNGLE — DAY"
+    }
+  ]
+}
