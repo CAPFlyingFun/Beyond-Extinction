@@ -49,13 +49,13 @@ const SPECIES: Species[] = [
   // Beach: palms are the sparse landmark (~20%); the smaller plants carpet it
   // (~40-50%). A shore->treeline ramp (below) thins ALL of them right at the
   // water and thickens them toward the tree line.
-  { file: "palm", height: 13 * M, minH: 0.25 * S, maxH: 3.5 * S, density: 0.24, sway: 1.4 },
-  { file: "cycad", height: 6 * M, minH: 0.3 * S, maxH: 6 * S, density: 0.48, sway: 0.5 },
-  { file: "sago", height: 6.5 * M, minH: 0.4 * S, maxH: 6 * S, density: 0.44, sway: 0.5 },
-  { file: "fern", height: 4.5 * M, minH: 1 * S, maxH: 9 * S, density: 0.6, sway: 0.8 },
+  { file: "palm", height: 13 * M, minH: 0.25 * S, maxH: 3.5 * S, density: 0.16, sway: 1.4 },
+  { file: "cycad", height: 6 * M, minH: 0.3 * S, maxH: 6 * S, density: 0.32, sway: 0.5 },
+  { file: "sago", height: 6.5 * M, minH: 0.4 * S, maxH: 6 * S, density: 0.3, sway: 0.5 },
+  { file: "fern", height: 4.5 * M, minH: 1 * S, maxH: 11 * S, density: 0.62, sway: 0.8 },
   // Inland / highland: the dense forest proper (unaffected by the shore ramp).
-  { file: "aspen", height: 12 * M, minH: 5 * S, maxH: 17 * S, density: 0.44, sway: 1.2 },
-  { file: "conifer", height: 14 * M, minH: 12 * S, maxH: VOLCANO_ROCK_H, density: 0.7, sway: 1.3 },
+  { file: "aspen", height: 12 * M, minH: 4 * S, maxH: 18 * S, density: 0.64, sway: 1.2 },
+  { file: "conifer", height: 14 * M, minH: 11 * S, maxH: VOLCANO_ROCK_H, density: 0.86, sway: 1.3 },
 ];
 
 /** Smoothstep — smooth 0->1 ramp between edges e0 and e1. */
@@ -69,7 +69,7 @@ function smoothstep(e0: number, e1: number, x: number): number {
  *  proper wall at the beach edge instead of staying sparse. Only the open sand
  *  at the shore is thinned; inland/highland forest is full. */
 function shoreRamp(h: number): number {
-  return smoothstep(0.2 * S, 1.2 * S, h);
+  return smoothstep(0.4 * S, 2.4 * S, h);
 }
 
 // Same stable hash as islandTrees/islandFoliage so stands stay reload-invariant.

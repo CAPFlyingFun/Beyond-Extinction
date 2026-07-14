@@ -431,6 +431,7 @@ const WATER_VERT = /* glsl */ `
   uniform float uWaveFreq;
   varying vec3 vWorld;
   varying float vCrest;
+  varying vec3 vNormal;
   float waves(vec2 pin) {
     vec2 p = pin * uWaveFreq;
     float h = 0.0;
@@ -438,12 +439,21 @@ const WATER_VERT = /* glsl */ `
     h += sin(dot(p, vec2(-0.4, 0.9)) * 0.16 + uTime * 0.9) * 0.16;
     h += sin(dot(p, vec2( 0.3,-0.7)) * 0.24 + uTime * 1.5) * 0.10;
     h += sin(dot(p, vec2(-0.7, 0.3)) * 0.33 + uTime * 1.8) * 0.06;
+    // Fine ripples — mostly for the surface NORMAL (small amplitude) so the
+    // water catches sun glints and sky reflection instead of reading flat.
+    h += sin(dot(p, vec2( 0.9,-0.2)) * 0.70 + uTime * 2.6) * 0.030;
+    h += sin(dot(p, vec2(-0.2, 0.95)) * 0.95 + uTime * 3.1) * 0.020;
     return h * uWaveAmp;
   }
   void main() {
     vec3 p = position;
     float h = waves(p.xz);
     p.y += h;
+    // Surface normal from finite differences of the height field.
+    float e = 6.0;
+    float hx = waves(p.xz + vec2(e, 0.0));
+    float hz = waves(p.xz + vec2(0.0, e));
+    vNormal = normalize(vec3(h - hx, e, h - hz));
     vCrest = clamp((h / max(uWaveAmp, 0.001)) * 1.4 + 0.5, 0.0, 1.0);
     vec4 wp = modelMatrix * vec4(p, 1.0);
     vWorld = wp.xyz;
@@ -457,18 +467,39 @@ const WATER_FRAG = /* glsl */ `
   uniform float uDeepDist;
   varying vec3 vWorld;
   varying float vCrest;
+  varying vec3 vNormal;
   void main() {
-    vec3 deep    = vec3(0.03, 0.12, 0.28);
-    vec3 shallow = vec3(0.10, 0.50, 0.52);
-    vec3 surf    = vec3(0.62, 0.88, 0.90);
+    vec3 nrm = normalize(vNormal);
+    vec3 viewDir = normalize(uCamPos - vWorld);
+    vec3 sunDir = normalize(vec3(0.35, 0.72, 0.28));
+
+    // Base water colour by distance (reads as depth).
+    vec3 deep    = vec3(0.02, 0.10, 0.24);
+    vec3 shallow = vec3(0.08, 0.42, 0.50);
     float dist = length(vWorld.xz - uCamPos.xz);
     float depthT = smoothstep(uShallow, uDeepDist, dist);
-    vec3 col = mix(shallow, deep, depthT);
-    float foam = smoothstep(0.74, 0.92, vCrest);
-    col = mix(col, surf, foam);
-    float alpha = mix(0.78, 0.97, depthT);
-    alpha = max(alpha, foam);
-    gl_FragColor = vec4(col, alpha);
+    vec3 water = mix(shallow, deep, depthT);
+
+    // Fresnel: at grazing angles the surface mirrors the sky, head-on it shows
+    // the water colour — the single biggest cue that sells a real surface.
+    float fres = pow(clamp(1.0 - max(dot(nrm, viewDir), 0.0), 0.0, 1.0), 4.0);
+    vec3 sky = vec3(0.45, 0.66, 0.92);
+    vec3 col = mix(water, sky, fres * 0.65);
+
+    // Wave shading + a tight sun specular glint riding the ripple normals.
+    float diff = 0.72 + 0.28 * max(dot(nrm, sunDir), 0.0);
+    col *= diff;
+    vec3 halfv = normalize(sunDir + viewDir);
+    float spec = pow(max(dot(nrm, halfv), 0.0), 220.0);
+    col += vec3(1.0, 0.97, 0.88) * spec * 0.9;
+
+    // Softer crest foam (less streaky than the old hard band).
+    float foam = smoothstep(0.85, 0.99, vCrest);
+    col = mix(col, vec3(0.86, 0.94, 0.96), foam * 0.7);
+
+    float alpha = mix(0.82, 0.98, depthT);
+    alpha = max(alpha, max(foam * 0.9, fres * 0.5));
+    gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
   }
 `;
 

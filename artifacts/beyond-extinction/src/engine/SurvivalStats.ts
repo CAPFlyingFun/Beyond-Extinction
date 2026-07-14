@@ -56,6 +56,8 @@ const STAMINA_JUMP_COST = 8;
 const STAMINA_REGEN_IDLE = 8;
 const STAMINA_REGEN_REST = 14; // crouched + stationary ("rest")
 const STAMINA_REGEN_WALK = 4;
+// Seconds after the last sprint/jump frame before stamina starts recovering.
+const STAMINA_REGEN_DELAY = 1.2;
 const FOOD_DRAIN = 0.07; // ~24 real minutes from full to empty
 const WATER_DRAIN = 0.11; // thirst bites first, like ARK
 const EXERTION_MULT = 1.6; // food/water drain faster while running
@@ -70,6 +72,8 @@ type Listener = (s: SurvivalSnapshot) => void;
 export class SurvivalStats {
   health = 100;
   stamina = 100;
+  /** Countdown before stamina may regen again (set while sprinting/jumping). */
+  private regenCd = 0;
   food = 100;
   water = 100;
 
@@ -157,16 +161,27 @@ export class SurvivalStats {
       this.day += 1;
     }
 
-    // Stamina.
-    if (flags.jumped) this.stamina = clamp(this.stamina - STAMINA_JUMP_COST);
+    // Stamina. Draining (sprint/jump) blocks regen for a short "catch your
+    // breath" delay so a sustained sprint actually empties the bar to 0 instead
+    // of the fast idle regen topping it back up the instant you slow down.
+    if (flags.jumped) {
+      this.stamina = clamp(this.stamina - STAMINA_JUMP_COST);
+      this.regenCd = STAMINA_REGEN_DELAY;
+    }
     if (flags.running) {
       this.stamina = clamp(this.stamina - STAMINA_RUN_DRAIN * dt);
-    } else if (!flags.moving && (flags.crouching || flags.crawling)) {
-      this.stamina = clamp(this.stamina + STAMINA_REGEN_REST * dt);
-    } else if (!flags.moving) {
-      this.stamina = clamp(this.stamina + STAMINA_REGEN_IDLE * dt);
+      this.regenCd = STAMINA_REGEN_DELAY;
     } else {
-      this.stamina = clamp(this.stamina + STAMINA_REGEN_WALK * dt);
+      this.regenCd = Math.max(0, this.regenCd - dt);
+      if (this.regenCd <= 0) {
+        const rate =
+          !flags.moving && (flags.crouching || flags.crawling)
+            ? STAMINA_REGEN_REST
+            : !flags.moving
+              ? STAMINA_REGEN_IDLE
+              : STAMINA_REGEN_WALK;
+        this.stamina = clamp(this.stamina + rate * dt);
+      }
     }
 
     // Hunger / thirst.
