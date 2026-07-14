@@ -46,13 +46,31 @@ const S = HEIGHT_SCALE;
 // carpet the low jungle, a few gold deciduous punctuate the mid slopes, conifers
 // crown the highland.
 const SPECIES: Species[] = [
-  { file: "palm", height: 13 * M, minH: 0.3 * S, maxH: 3.5 * S, density: 0.62, sway: 1.4 },
-  { file: "cycad", height: 6 * M, minH: 0.4 * S, maxH: 6 * S, density: 0.58, sway: 0.5 },
-  { file: "sago", height: 6.5 * M, minH: 0.6 * S, maxH: 6 * S, density: 0.5, sway: 0.5 },
-  { file: "fern", height: 4.5 * M, minH: 1.5 * S, maxH: 9 * S, density: 0.72, sway: 0.8 },
-  { file: "aspen", height: 12 * M, minH: 5 * S, maxH: 17 * S, density: 0.42, sway: 1.2 },
-  { file: "conifer", height: 14 * M, minH: 12 * S, maxH: VOLCANO_ROCK_H, density: 0.66, sway: 1.3 },
+  // Beach: palms are the sparse landmark (~20%); the smaller plants carpet it
+  // (~40-50%). A shore->treeline ramp (below) thins ALL of them right at the
+  // water and thickens them toward the tree line.
+  { file: "palm", height: 13 * M, minH: 0.25 * S, maxH: 3.5 * S, density: 0.24, sway: 1.4 },
+  { file: "cycad", height: 6 * M, minH: 0.3 * S, maxH: 6 * S, density: 0.48, sway: 0.5 },
+  { file: "sago", height: 6.5 * M, minH: 0.4 * S, maxH: 6 * S, density: 0.44, sway: 0.5 },
+  { file: "fern", height: 4.5 * M, minH: 1 * S, maxH: 9 * S, density: 0.6, sway: 0.8 },
+  // Inland / highland: the dense forest proper (unaffected by the shore ramp).
+  { file: "aspen", height: 12 * M, minH: 5 * S, maxH: 17 * S, density: 0.44, sway: 1.2 },
+  { file: "conifer", height: 14 * M, minH: 12 * S, maxH: VOLCANO_ROCK_H, density: 0.7, sway: 1.3 },
 ];
+
+/** Smoothstep — smooth 0->1 ramp between edges e0 and e1. */
+function smoothstep(e0: number, e1: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+}
+
+/** Density multiplier by elevation: ~0 right at the waterline, full by the tree
+ *  line (~3× HEIGHT_SCALE up). Keeps the open sand at the shore and thickens the
+ *  planting inland, per the "greater chance at the tree line, not the shore" note.
+ *  Above the tree line it's 1, so it never thins the inland/highland forest. */
+function shoreRamp(h: number): number {
+  return smoothstep(0.3 * S, 3 * S, h);
+}
 
 // Same stable hash as islandTrees/islandFoliage so stands stay reload-invariant.
 function hash(i: number, j: number, salt: number): number {
@@ -198,7 +216,8 @@ export async function loadIslandBillboardTrees(): Promise<IslandTrees> {
       if (!eligible.length) continue;
       const pick = eligible[Math.floor(hash(i, j, 23) * eligible.length) % eligible.length];
       const baked = loaded[pick.s];
-      if (hash(i, j, 24) > pick.sp.density || !baked) continue;
+      // Thin the planting toward the shoreline (open sand), thicken it inland.
+      if (hash(i, j, 24) > pick.sp.density * shoreRamp(h) || !baked) continue;
       // Feet a hair below ground so trunks never float; slight scale variety.
       const scale = 0.82 + hash(i, j, 28) * 0.42;
       dummy.position.set(px, h - 0.4, pz);

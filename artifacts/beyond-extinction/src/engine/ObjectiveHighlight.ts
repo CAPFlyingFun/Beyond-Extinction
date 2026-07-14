@@ -78,9 +78,11 @@ export class ObjectiveHighlight {
       map: makeMarkerTexture(colorHex, opts.icon),
       transparent: true,
       depthWrite: false,
+      depthTest: false, // show through terrain/trees so it reads as a quest beacon
     });
     this.marker = new THREE.Sprite(markerMat);
     this.marker.scale.setScalar(1.6);
+    this.marker.renderOrder = 999;
     this.group.add(this.marker);
 
     anchor.getWorldPosition(this.worldPos);

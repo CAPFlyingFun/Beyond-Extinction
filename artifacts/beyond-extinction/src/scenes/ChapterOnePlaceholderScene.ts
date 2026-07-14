@@ -3,6 +3,7 @@ import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { loadModel, loadTexture } from "../engine/assets";
 import { updateBillboardsYAxis } from "../engine/Billboard";
 import { loadIslandBillboardTrees } from "../engine/islandBillboardTrees";
+import { HudMarker } from "../engine/HudMarker";
 import { Navigator } from "../engine/Navigator";
 import { PlayerController } from "../engine/PlayerController";
 import { InventoryOverlay } from "../engine/InventoryOverlay";
@@ -216,6 +217,10 @@ class ChapterOnePlaceholderScene implements IScene {
   // the treeline; NOT part of the fauna streamer). Armed once Sarah is found;
   // walking up to the treeline fires the reveal cutscene once.
   private dilo?: StoryDilo;
+  /** On-screen quest pointer (replaces the hard boundary — guides, not walls). */
+  private objMarker?: HudMarker;
+  /** Whether the gated story-grid wall is active (off = open island). */
+  private storyBoundaryOn = false;
   private diloArmed = false;
   private diloRevealStarted = false;
   private readonly diloTreeline = new THREE.Vector3();
@@ -416,27 +421,33 @@ class ChapterOnePlaceholderScene implements IScene {
     const sarahSpawn = savedSpawns.sarah ?? ChapterOnePlaceholderScene.SARAH_SPAWN;
     this.jackFacingDeg = jackSpawn.rot;
 
-    // Story grid: a fixed CHAPTER_GRID_M box around the arrival, the play area
-    // until Unlimited Mode unlocks. Dev override: ?unlimited=1 / =0 (dev builds).
+    // Chapters 1–3 play OPEN — no hard story-grid wall. Objectives can sit
+    // anywhere (e.g. Sarah at the waterline), and the on-screen HUD marker guides
+    // the player instead of a cage. clampToPlay still fences the island edge so
+    // you can't wander off into open ocean. STORY_BOUNDARY re-enables the gated
+    // grid later; Dev override ?unlimited=1/=0 still applies.
+    const STORY_BOUNDARY = false;
+    this.storyBoundaryOn = STORY_BOUNDARY;
     if (import.meta.env.DEV) {
       const u = new URLSearchParams(location.search).get("unlimited");
       if (u === "1") Progression.setUnlimited(true);
       else if (u === "0") Progression.setUnlimited(false);
     }
-    // Shift the box inland (toward the island centre) so only ~WATER_MARGIN_M of
-    // ocean is inside it — the arrival waterline stays reachable for a wade, but
-    // the play area is mostly shore + inland rather than half sea.
-    const spanU = ChapterOnePlaceholderScene.CHAPTER_GRID_M / METERS_PER_UNIT;
-    const waterU = 50 / METERS_PER_UNIT; // seaward margin
-    const inlandX = ISLAND_CENTER.x - jackSpawn.x;
-    const inlandZ = ISLAND_CENTER.z - jackSpawn.z;
-    this.gridBounds = {
-      minX: inlandX >= 0 ? jackSpawn.x - waterU : jackSpawn.x - (spanU - waterU),
-      maxX: inlandX >= 0 ? jackSpawn.x + (spanU - waterU) : jackSpawn.x + waterU,
-      minZ: inlandZ >= 0 ? jackSpawn.z - waterU : jackSpawn.z - (spanU - waterU),
-      maxZ: inlandZ >= 0 ? jackSpawn.z + (spanU - waterU) : jackSpawn.z + waterU,
-    };
-    this.buildBoundary(scene);
+    if (STORY_BOUNDARY) {
+      const spanU = ChapterOnePlaceholderScene.CHAPTER_GRID_M / METERS_PER_UNIT;
+      const waterU = 50 / METERS_PER_UNIT; // seaward margin
+      const inlandX = ISLAND_CENTER.x - jackSpawn.x;
+      const inlandZ = ISLAND_CENTER.z - jackSpawn.z;
+      this.gridBounds = {
+        minX: inlandX >= 0 ? jackSpawn.x - waterU : jackSpawn.x - (spanU - waterU),
+        maxX: inlandX >= 0 ? jackSpawn.x + (spanU - waterU) : jackSpawn.x + waterU,
+        minZ: inlandZ >= 0 ? jackSpawn.z - waterU : jackSpawn.z - (spanU - waterU),
+        maxZ: inlandZ >= 0 ? jackSpawn.z + (spanU - waterU) : jackSpawn.z + waterU,
+      };
+      this.buildBoundary(scene);
+    } else {
+      this.gridBounds = ChapterOnePlaceholderScene.ISLAND; // open to the island
+    }
 
     // Jack, just come to on the sand — standing dazed (no lying clip; tipping
     // him would snap upright when he first walks).
@@ -637,6 +648,10 @@ class ChapterOnePlaceholderScene implements IScene {
     // temperature/day values. One instance per scene entry; stats reset fresh.
     this.stats = new SurvivalStats();
     this.stats.onDeath = () => void this.onPlayerDeath();
+
+    // On-screen objective pointer (guides the player now that the play area is
+    // open — no hard boundary). Aimed at the active objective below.
+    this.objMarker = new HudMarker(this.ctx.uiLayer);
 
     // Jack's inventory (badge + coffee) + the DEV tab, same ARK overlay as the
     // prologue. Opening it freezes movement; closing restores it.
@@ -1004,6 +1019,7 @@ class ChapterOnePlaceholderScene implements IScene {
     // ── 4. Objective: find her (the proximity trigger lives in update()).
     this.ctx.quest.setObjective("Find Sarah");
     this.interactions.get("find-sarah")?.highlight.setVisible(true);
+    this.objMarker?.set(this.sarah.position, "Sarah", "🧭", 8);
     this.findSarahArmed = true;
   }
 
@@ -1194,6 +1210,7 @@ class ChapterOnePlaceholderScene implements IScene {
    *  reunion dialogue is the next port milestone; free roam continues.) */
   private async sarahFound(): Promise<void> {
     this.interactions.get("find-sarah")?.highlight.setVisible(false);
+    this.objMarker?.set(null); // reached her — clear until the next objective
     this.faceTowards(this.sarah, this.jack.position);
     await this.wake(this.sarah, 1100);
     if (this.disposed) return;
@@ -1208,9 +1225,11 @@ class ChapterOnePlaceholderScene implements IScene {
       if (this.disposed) return;
       this.ctx.dialogue.hideSubtitle();
       this.ctx.quest.setObjective("Head inland — reach the treeline");
+      this.objMarker?.set(this.diloTreeline, "Treeline", "🌴", 10);
       this.diloArmed = true;
     } else {
       this.ctx.quest.setObjective("Assess the situation");
+      this.objMarker?.set(null);
     }
   }
 
@@ -1229,6 +1248,7 @@ class ChapterOnePlaceholderScene implements IScene {
     this.ctx.input.setEnabled(false);
     this.player?.setActive(false);
     this.ctx.quest.clear();
+    this.objMarker?.set(null);
     this.ctx.overlays.hideHint();
 
     const eye = this.camera.position.clone();
@@ -1889,7 +1909,9 @@ class ChapterOnePlaceholderScene implements IScene {
       : this.gridBounds;
     const x = THREE.MathUtils.clamp(nx, p.minX, p.maxX);
     const z = THREE.MathUtils.clamp(nz, p.minZ, p.maxZ);
-    if ((x !== nx || z !== nz) && !Progression.unlimitedMode) this.boundaryHit();
+    if ((x !== nx || z !== nz) && this.storyBoundaryOn && !Progression.unlimitedMode) {
+      this.boundaryHit();
+    }
     return { x, z };
   }
 
@@ -2294,6 +2316,7 @@ class ChapterOnePlaceholderScene implements IScene {
       this.dilo?.update(dt);
       this.treesUpdate?.(dt, this.camera.position);
       for (const h of this.highlights) h.update(dt);
+      this.objMarker?.update(this.camera);
       updateBillboardsYAxis(this.billboards, this.camera.position);
       // The dodo's baked Walking cycle (via this.mixers) is its whole animation
       // now — no procedural hop/sway. It stays put until it bolts on the hiss.
@@ -2378,6 +2401,7 @@ class ChapterOnePlaceholderScene implements IScene {
     setHudEditorContext("lab"); // island HUD leaves with the scene
     this.seaCreatures?.dispose();
     this.dilo?.dispose();
+    this.objMarker?.dispose();
     this.hurtEl?.remove();
     this.unsubFeed?.();
     this.feedBtnEl?.remove();
