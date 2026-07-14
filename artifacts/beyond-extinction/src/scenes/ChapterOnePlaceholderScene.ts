@@ -606,6 +606,23 @@ class ChapterOnePlaceholderScene implements IScene {
       this.unsubClick = this.ctx.input.onClick(() => this.handleClick());
     }
 
+    // Dev: ?nocine=1 skips the arrival cinematic straight into free roam — for
+    // grabbing gameplay screenshots / driving the HUD in a headless browser.
+    const noCine =
+      import.meta.env.DEV &&
+      new URLSearchParams(location.search).get("nocine") === "1";
+    if (this.firstPerson && freshArrival && noCine) {
+      await this.ctx.overlays.fadeFromBlack(200);
+      this.buildFpHud();
+      this.ctx.input.setEnabled(true);
+      this.player?.setActive(true);
+      this.ctx.quest.setObjective("Find Sarah");
+      this.objMarker?.set(this.sarah.position, "Sarah", "🧭", 8);
+      this.islandMap?.setObjective({ x: this.sarah.position.x, z: this.sarah.position.z });
+      this.interactions.get("find-sarah")?.highlight.setVisible(true);
+      this.findSarahArmed = true;
+      return;
+    }
     if (this.firstPerson && freshArrival) {
       // Day One — Arrival: the journal page (opaque, layered above the fade
       // veil) owns the black screen; the flyover fades the world in itself.
@@ -665,6 +682,8 @@ class ChapterOnePlaceholderScene implements IScene {
     // temperature/day values. One instance per scene entry; stats reset fresh.
     this.stats = new SurvivalStats();
     this.stats.onDeath = () => void this.onPlayerDeath();
+    // Dev hook so a headless browser can poke stamina and read the live bar.
+    if (import.meta.env.DEV) (window as unknown as { __beHud?: unknown }).__beHud = this.stats;
 
     // On-screen objective pointer (guides the player now that the play area is
     // open — no hard boundary). Aimed at the active objective below.
@@ -2285,8 +2304,11 @@ class ChapterOnePlaceholderScene implements IScene {
           crawling: this.ctx.input.isCrawling(),
           jumped,
         });
-        // Drive the quick bars from the LIVE value every frame so the fill
-        // tracks exactly and reaches 0 (the 5 Hz notify path can look laggy).
+      }
+      // Drive the quick bars from the LIVE value EVERY frame (outside the input
+      // guard) so the fill always tracks the value — even mid-drain — and reaches
+      // 0. Previously this sat inside the guard and the bar could freeze.
+      if (this.stats) {
         this.survivalHud?.setBars(this.stats.health, this.stats.stamina, this.stats.water);
       }
       // Throttled nearest-location poll (~0.5 s) → minimap location pill.

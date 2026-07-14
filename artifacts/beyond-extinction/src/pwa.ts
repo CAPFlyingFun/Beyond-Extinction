@@ -17,8 +17,28 @@ export function registerServiceWorker(): void {
   window.addEventListener("load", () => {
     const base = import.meta.env.BASE_URL ?? "/";
     const swUrl = `${base}sw.js`;
-    navigator.serviceWorker.register(swUrl, { scope: base }).catch((err) => {
-      console.warn("[Beyond Extinction] Service worker registration failed:", err);
+
+    // Auto-refresh on a new deploy: when a newly-installed worker takes control,
+    // reload ONCE so the page runs the fresh code. Guarded to only fire when a
+    // controller already existed (an update, not the first-ever install), so we
+    // never reload on a first visit. This is what stops a home-screen PWA from
+    // getting stuck on a stale JS bundle across deploys.
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!hadController || reloaded) return;
+      reloaded = true;
+      window.location.reload();
     });
+
+    navigator.serviceWorker
+      .register(swUrl, { scope: base })
+      .then((reg) => {
+        // Check for a newer worker right now (and let the browser keep checking).
+        reg.update().catch(() => {});
+      })
+      .catch((err) => {
+        console.warn("[Beyond Extinction] Service worker registration failed:", err);
+      });
   });
 }
