@@ -634,7 +634,7 @@ export class SeaCreatures {
   creatureUnderRay(
     origin: THREE.Vector3,
     dir: THREE.Vector3,
-    maxM = 140,
+    maxM = 100,
   ): { name: string; tracked: boolean } | null {
     const c = this.pickUnderRay(origin, dir, maxM);
     return c ? { name: speciesName(c.species.id), tracked: c.tracked } : null;
@@ -643,7 +643,7 @@ export class SeaCreatures {
   trackUnderRay(
     origin: THREE.Vector3,
     dir: THREE.Vector3,
-    maxM = 140,
+    maxM = 100,
   ): { name: string; tracked: boolean } | null {
     const best = this.pickUnderRay(origin, dir, maxM);
     if (!best) return null;

@@ -2566,11 +2566,9 @@ body {
   display: block;
   height: 100%;
   border-radius: 5px;
-  /* Match the ~5 Hz (0.2s) stat notify with a LINEAR ramp so the fill drains as
-     one smooth continuous bar. An eased 0.3s transition (longer than the update
-     interval) restarted every tick, which stop-started and looked like two
-     stamina bars handing off. */
-  transition: width 0.2s linear;
+  /* No transition: the scene drives these every frame from the live value, so
+     the fill tracks exactly and always reaches 0. A width transition here made
+     the bar lag behind and appear to stop short of empty. */
 }
 /* Vertical (top-down) sheen so a partial bar reads as ONE glossy bar. A
    horizontal gradient split into a light + dark half that looked like two

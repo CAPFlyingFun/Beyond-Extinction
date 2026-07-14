@@ -186,6 +186,19 @@ export class SurvivalHud {
     }
   }
 
+  /** Set the on-foot quick bars directly. The scene calls this every frame from
+   *  the LIVE stats so the fill tracks the exact value and always reaches 0 —
+   *  the throttled (5 Hz) onStats path could lag and appear to stop short. */
+  setBars(health: number, stamina: number, water: number): void {
+    if (this.mountedCreature !== null) return;
+    this.healthBar.style.width = `${health}%`;
+    this.stamBar.style.width = `${stamina}%`;
+    this.waterBar.style.width = `${water}%`;
+    this.healthBarWrap.classList.toggle("is-low", health < 25);
+    this.stamBarWrap.classList.toggle("is-low", stamina < 25);
+    this.waterBarWrap.classList.toggle("is-low", water < 25);
+  }
+
   /** Reflect the current input latches on the ring buttons (call after any
    *  external change, e.g. keyboard C/Shift or a stamina auto-cancel). */
   syncRing(): void {
@@ -472,12 +485,7 @@ export class SurvivalHud {
     }
 
     // On-foot mode: update the player's quick bars and hotbar.
-    this.healthBar.style.width = `${s.health}%`;
-    this.stamBar.style.width = `${s.stamina}%`;
-    this.waterBar.style.width = `${s.water}%`;
-    this.healthBarWrap.classList.toggle("is-low", s.health < 25);
-    this.stamBarWrap.classList.toggle("is-low", s.stamina < 25);
-    this.waterBarWrap.classList.toggle("is-low", s.water < 25);
+    this.setBars(s.health, s.stamina, s.water);
 
     // Stamina hit zero → auto-cancel the sprint latch so the UI stays honest.
     if (s.stamina <= 0 && this.opts.input.runLatched) {

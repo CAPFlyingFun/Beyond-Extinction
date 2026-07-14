@@ -498,13 +498,28 @@ class ChapterOnePlaceholderScene implements IScene {
     // +Z of the arrival spawn), hidden until the reveal. Only for a fresh
     // first-person arrival (a resume drops the player back into free roam).
     if (this.firstPerson && freshArrival) {
-      const inlandU = 40 / METERS_PER_UNIT; // 40 m up the beach, at the trees
-      this.diloTreeline.set(
-        jackSpawn.x + 8 / METERS_PER_UNIT,
-        0,
-        jackSpawn.z + inlandU,
+      // March inland (toward the island centre) from the arrival point until the
+      // terrain first rises to tree-line elevation — so the Dilo/objective sits
+      // at the actual edge of the trees, not out on the open sand.
+      const inlandDir = new THREE.Vector2(
+        ISLAND_CENTER.x - jackSpawn.x,
+        ISLAND_CENTER.z - jackSpawn.z,
       );
-      this.diloTreeline.y = beachHeight(this.diloTreeline.x, this.diloTreeline.z);
+      if (inlandDir.lengthSq() < 1e-6) inlandDir.set(0, 1);
+      inlandDir.normalize();
+      const stepU = 2 / METERS_PER_UNIT; // 2 m probes
+      const maxU = 260 / METERS_PER_UNIT; // give up after ~260 m
+      const treelineH = 1.1 * HEIGHT_SCALE; // where sand gives way to trees
+      let tx = jackSpawn.x + inlandDir.x * (30 / METERS_PER_UNIT);
+      let tz = jackSpawn.z + inlandDir.y * (30 / METERS_PER_UNIT);
+      for (let d = 30 / METERS_PER_UNIT; d <= maxU; d += stepU) {
+        const nx = jackSpawn.x + inlandDir.x * d;
+        const nz = jackSpawn.z + inlandDir.y * d;
+        tx = nx;
+        tz = nz;
+        if (beachHeight(nx, nz) >= treelineH) break;
+      }
+      this.diloTreeline.set(tx, beachHeight(tx, tz), tz);
       this.dilo = new StoryDilo();
       await this.dilo.load(ChapterOnePlaceholderScene.DILO_HEIGHT);
       if (this.disposed) return;
@@ -1034,6 +1049,7 @@ class ChapterOnePlaceholderScene implements IScene {
     this.ctx.quest.setObjective("Find Sarah");
     this.interactions.get("find-sarah")?.highlight.setVisible(true);
     this.objMarker?.set(this.sarah.position, "Sarah", "🧭", 8);
+    this.islandMap?.setObjective({ x: this.sarah.position.x, z: this.sarah.position.z });
     this.findSarahArmed = true;
   }
 
@@ -1225,6 +1241,7 @@ class ChapterOnePlaceholderScene implements IScene {
   private async sarahFound(): Promise<void> {
     this.interactions.get("find-sarah")?.highlight.setVisible(false);
     this.objMarker?.set(null); // reached her — clear until the next objective
+    this.islandMap?.setObjective(null);
     this.faceTowards(this.sarah, this.jack.position);
     await this.wake(this.sarah, 1100);
     if (this.disposed) return;
@@ -1240,10 +1257,12 @@ class ChapterOnePlaceholderScene implements IScene {
       this.ctx.dialogue.hideSubtitle();
       this.ctx.quest.setObjective("Head inland — reach the treeline");
       this.objMarker?.set(this.diloTreeline, "Treeline", "🌴", 10);
+      this.islandMap?.setObjective({ x: this.diloTreeline.x, z: this.diloTreeline.z });
       this.diloArmed = true;
     } else {
       this.ctx.quest.setObjective("Assess the situation");
       this.objMarker?.set(null);
+      this.islandMap?.setObjective(null);
     }
   }
 
@@ -1263,6 +1282,7 @@ class ChapterOnePlaceholderScene implements IScene {
     this.player?.setActive(false);
     this.ctx.quest.clear();
     this.objMarker?.set(null);
+    this.islandMap?.setObjective(null);
     this.ctx.overlays.hideHint();
 
     const eye = this.camera.position.clone();
@@ -2265,6 +2285,9 @@ class ChapterOnePlaceholderScene implements IScene {
           crawling: this.ctx.input.isCrawling(),
           jumped,
         });
+        // Drive the quick bars from the LIVE value every frame so the fill
+        // tracks exactly and reaches 0 (the 5 Hz notify path can look laggy).
+        this.survivalHud?.setBars(this.stats.health, this.stats.stamina, this.stats.water);
       }
       // Throttled nearest-location poll (~0.5 s) → minimap location pill.
       this.locNameAcc += dt;

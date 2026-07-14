@@ -54,6 +54,8 @@ export class IslandMap {
   private px = 0;
   private pz = 0;
   private yaw = 0;
+  /** Active objective world position, plotted on the minimap (null = none). */
+  private objective: { x: number; z: number } | null = null;
   private acc = 0; // redraw throttle
 
   private revealed = new Set<string>();
@@ -139,6 +141,11 @@ export class IslandMap {
     this.pz = z;
     this.yaw = yaw;
     this.reveal(x, z);
+  }
+
+  /** Plot (or clear) the current objective on the minimap. */
+  setObjective(world: { x: number; z: number } | null): void {
+    this.objective = world;
   }
 
   update(dt: number): void {
@@ -429,6 +436,40 @@ export class IslandMap {
     c.closePath();
     c.fill();
     c.stroke();
+
+    // Objective marker (heading-up, same projection as the map layers). Clamps
+    // to the disc edge as a pointer when the objective is beyond minimap range.
+    if (this.objective) {
+      const frac = MINIMAP_RANGE_M / METERS_PER_UNIT / ISLAND_SPAN;
+      const po = worldToIslandUV(this.objective.x, this.objective.z);
+      const pp = worldToIslandUV(this.px, this.pz);
+      const k = cc / frac;
+      const cyw = Math.cos(this.yaw);
+      const syw = Math.sin(this.yaw);
+      const lx = (po.u - pp.u) * k;
+      const ly = (po.v - pp.v) * k;
+      let mx = cyw * lx - syw * ly;
+      let my = syw * lx + cyw * ly;
+      const r = Math.hypot(mx, my);
+      const rmax = cc - 7;
+      if (r > rmax && r > 0) {
+        mx = (mx / r) * rmax;
+        my = (my / r) * rmax;
+      }
+      const dx = cc + mx;
+      const dy = cc + my;
+      c.fillStyle = "rgba(255,213,74,0.98)";
+      c.strokeStyle = "rgba(0,0,0,0.6)";
+      c.lineWidth = 1.5;
+      c.beginPath();
+      c.moveTo(dx, dy - 6);
+      c.lineTo(dx + 5, dy);
+      c.lineTo(dx, dy + 6);
+      c.lineTo(dx - 5, dy);
+      c.closePath();
+      c.fill();
+      c.stroke();
+    }
   }
 
   // ── full-screen map ────────────────────────────────────────────────────────

@@ -64,12 +64,12 @@ function smoothstep(e0: number, e1: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
-/** Density multiplier by elevation: ~0 right at the waterline, full by the tree
- *  line (~3× HEIGHT_SCALE up). Keeps the open sand at the shore and thickens the
- *  planting inland, per the "greater chance at the tree line, not the shore" note.
- *  Above the tree line it's 1, so it never thins the inland/highland forest. */
+/** Density multiplier by elevation: ~0 right at the waterline, ramping to FULL
+ *  by the tree line (~1.2× HEIGHT_SCALE up) so the trees actually thicken into a
+ *  proper wall at the beach edge instead of staying sparse. Only the open sand
+ *  at the shore is thinned; inland/highland forest is full. */
 function shoreRamp(h: number): number {
-  return smoothstep(0.3 * S, 3 * S, h);
+  return smoothstep(0.2 * S, 1.2 * S, h);
 }
 
 // Same stable hash as islandTrees/islandFoliage so stands stay reload-invariant.
@@ -192,7 +192,7 @@ export async function loadIslandBillboardTrees(): Promise<IslandTrees> {
   // calls scale with CHUNK count, not tree count), and the 200 m LOD dither caps
   // how many pixels the far field can cost.
   const PLANT = MAP_SCALE / 5.2;
-  const STEP = 3.5 * PLANT; // denser still (fuller island, per feedback)
+  const STEP = 3.0 * PLANT; // denser still (fuller island, per feedback)
   const AX = 150 * MAP_SCALE;
   const CX = ISLAND_CENTER.x;
   const CZ = ISLAND_CENTER.z;
