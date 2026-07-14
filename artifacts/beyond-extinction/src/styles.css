@@ -2513,11 +2513,11 @@ body {
   border-radius: 4px;
   transition: width 0.3s ease;
 }
-.be-sh-vital--health i { background: linear-gradient(90deg, #c9403f, #ff6b6b); }
-.be-sh-vital--stamina i { background: linear-gradient(90deg, #3fae63, #7dffb0); }
-.be-sh-vital--food i { background: linear-gradient(90deg, #c9812f, #f0a94a); }
-.be-sh-vital--water i { background: linear-gradient(90deg, #2f76c9, #4aa8f0); }
-.be-sh-vital--weight i { background: linear-gradient(90deg, #8f6fc9, #c9a7f0); }
+.be-sh-vital--health i { background: linear-gradient(180deg, #ff6b6b, #c9403f); }
+.be-sh-vital--stamina i { background: linear-gradient(180deg, #7dffb0, #3fae63); }
+.be-sh-vital--food i { background: linear-gradient(180deg, #f0a94a, #c9812f); }
+.be-sh-vital--water i { background: linear-gradient(180deg, #4aa8f0, #2f76c9); }
+.be-sh-vital--weight i { background: linear-gradient(180deg, #c9a7f0, #8f6fc9); }
 .be-sh-vital__val {
   font: 700 0.6rem/1 ui-monospace, monospace;
   color: #cfe8ff;
@@ -2572,9 +2572,12 @@ body {
      stamina bars handing off. */
   transition: width 0.2s linear;
 }
-.be-sh-bars__bar--health i { background: linear-gradient(90deg, #c9403f, #ff6b6b); }
-.be-sh-bars__bar--stam i { background: linear-gradient(90deg, #3fae63, #7dffb0); }
-.be-sh-bars__bar--water i { background: linear-gradient(90deg, #2f76c9, #4aa8f0); }
+/* Vertical (top-down) sheen so a partial bar reads as ONE glossy bar. A
+   horizontal gradient split into a light + dark half that looked like two
+   overlapping bars (esp. stamina's mid-green -> bright-mint). */
+.be-sh-bars__bar--health i { background: linear-gradient(180deg, #ff6b6b, #c9403f); }
+.be-sh-bars__bar--stam i { background: linear-gradient(180deg, #7dffb0, #3fae63); }
+.be-sh-bars__bar--water i { background: linear-gradient(180deg, #4aa8f0, #2f76c9); }
 .be-sh-bars__bar.is-low i { animation: be-sh-lowpulse 0.9s ease-in-out infinite; }
 
 /* ── Bottom-center: ARK hotbar ── */

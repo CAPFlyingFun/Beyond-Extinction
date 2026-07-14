@@ -176,7 +176,9 @@ class ChapterOnePlaceholderScene implements IScene {
   // pre-"true aerial view" coords — see worldToIslandUV — with headings
   // mirrored to match (H' = 180 − H; mesh yaw θ' = π − θ).
   private static readonly JACK_SPAWN = { x: -106 * MAP_SCALE, z: 182 * MAP_SCALE, rot: 240 };
-  private static readonly SARAH_SPAWN = { x: -108 * MAP_SCALE, z: 176 * MAP_SCALE, rot: Math.PI / 2 };
+  // ~80 m down the beach from Jack (was ~170 m — too far to walk to for the
+  // opening "Find Sarah" beat). Same SSW shoreline direction.
+  private static readonly SARAH_SPAWN = { x: -106.9 * MAP_SCALE, z: 179.2 * MAP_SCALE, rot: Math.PI / 2 };
   private jackFacingDeg = ChapterOnePlaceholderScene.JACK_SPAWN.rot;
   // Vertical physics for first person: the eye rests on the ground but isn't
   // locked to it — gravity pulls it down, jump pushes it up, you fall off ledges.
