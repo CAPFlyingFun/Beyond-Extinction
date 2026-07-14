@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { beachHeight, METERS_PER_UNIT } from "./beachTerrain";
+import { assetUrl } from "./assets";
 
 /**
  * ChaseSetDressing — the procedural set pieces the Chapter Three chase runs
@@ -33,6 +34,7 @@ export class ChaseSetDressing {
 
   private readonly geos: THREE.BufferGeometry[] = [];
   private readonly mats: THREE.Material[] = [];
+  private readonly textures: THREE.Texture[] = [];
   private riverMat?: THREE.MeshStandardMaterial;
   private riverTime = 0;
 
@@ -146,17 +148,44 @@ export class ChaseSetDressing {
       const gz = fx;
       const yaw = Math.atan2(fx, fz); // faces the runners (+fx)
 
-      // Shared dark interior materials. `darkMat` is BackSide so it is only
-      // ever seen looking *into* the throat/room (front faces culled); `floorMat`
-      // is a flat dark ground so bright sand never shows through the opening.
-      const darkMat = new THREE.MeshStandardMaterial({
-        color: 0x080605,
+      // Interior materials, painted with the real cave rock textures (Godot
+      // asset pack). All BackSide/interior, so only seen looking *into* the
+      // throat or room. The dark base colours (map × colour) keep the mouth
+      // reading as depth-in-shadow while the rock detail still shows: the throat
+      // stays dimmest (it is what you see from outside in daylight), the room a
+      // touch lighter (the ember glow lights it), and the floor darker still.
+      const throatMat = new THREE.MeshStandardMaterial({
+        color: 0x2a241d,
         roughness: 1,
         metalness: 0,
         side: THREE.BackSide,
       });
-      const floorMat = new THREE.MeshStandardMaterial({ color: 0x1c160f, roughness: 1 });
-      this.mats.push(darkMat, floorMat);
+      const roomMat = new THREE.MeshStandardMaterial({
+        color: 0x4b4238,
+        roughness: 1,
+        metalness: 0,
+        side: THREE.BackSide,
+      });
+      const floorMat = new THREE.MeshStandardMaterial({ color: 0x413828, roughness: 1 });
+      this.mats.push(throatMat, roomMat, floorMat);
+
+      // Load the cave textures async; the flat base colours above stand in until
+      // they decode. Tiling repeat is per-material, so cave-wall loads twice.
+      const texLoader = new THREE.TextureLoader();
+      const paint = (rel: string, repeat: number, onto: THREE.MeshStandardMaterial): void => {
+        texLoader.load(assetUrl(rel), (t) => {
+          t.wrapS = t.wrapT = THREE.RepeatWrapping;
+          t.colorSpace = THREE.SRGBColorSpace;
+          t.repeat.set(repeat, repeat);
+          t.anisotropy = 4;
+          onto.map = t;
+          onto.needsUpdate = true;
+          this.textures.push(t);
+        });
+      };
+      paint("assets/textures/godot/cave/cave-wall.jpg", 3, throatMat);
+      paint("assets/textures/godot/cave/cave-wall.jpg", 2, roomMat);
+      paint("assets/textures/godot/cave/cave-floor.jpg", 2, floorMat);
 
       // Structural block: a rock primitive with *controlled* orientation. The
       // `rock` pile helper randomises rotation, which is wrong for the pillars
@@ -197,7 +226,7 @@ export class ChaseSetDressing {
       this.geos.push(throatGeo);
       const axis = new THREE.Vector3(fx, 0, fz).normalize();
       const throatQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
-      const throat = new THREE.Mesh(throatGeo, darkMat);
+      const throat = new THREE.Mesh(throatGeo, throatMat);
       throat.quaternion.copy(throatQ);
       const tcx = x + fx * (M(1.4) - throatLen / 2); // front rim ~1.4 m out
       const tcz = z + fz * (M(1.4) - throatLen / 2);
@@ -220,7 +249,7 @@ export class ChaseSetDressing {
       const domeCz = z - fz * M(7);
       const domeGeo = new THREE.SphereGeometry(M(4.6), 16, 12);
       this.geos.push(domeGeo);
-      const dome = new THREE.Mesh(domeGeo, darkMat);
+      const dome = new THREE.Mesh(domeGeo, roomMat);
       dome.position.set(domeCx, y + M(1.0), domeCz);
       this.group.add(dome);
       const floorGeo = new THREE.CircleGeometry(M(4.4), 20);
@@ -283,6 +312,7 @@ export class ChaseSetDressing {
 
   dispose(): void {
     this.group.removeFromParent();
+    for (const t of this.textures) t.dispose();
     for (const g of this.geos) g.dispose();
     for (const m of this.mats) m.dispose();
   }

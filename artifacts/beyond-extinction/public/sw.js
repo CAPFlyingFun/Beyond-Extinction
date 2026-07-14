@@ -18,7 +18,7 @@
  *
  * Bump VERSION whenever the caching logic changes to retire old caches.
  */
-const VERSION = "v40";
+const VERSION = "v41";
 const CACHE = `beyond-extinction-${VERSION}`;
 
 // Base path this SW is served from, e.g. "/Beyond-Extinction/" or "/".
@@ -62,6 +62,9 @@ const OPTIONAL = [
   BASE + "assets/models/trees/banyan.glb",
   BASE + "assets/models/trees/monkeypuzzle.glb",
   BASE + "assets/models/trees/conifer.glb",
+  // Cave rock textures — cached best-effort so the Chapter 3 cave works offline.
+  BASE + "assets/textures/godot/cave/cave-wall.jpg",
+  BASE + "assets/textures/godot/cave/cave-floor.jpg",
 ];
 
 self.addEventListener("install", (event) => {
