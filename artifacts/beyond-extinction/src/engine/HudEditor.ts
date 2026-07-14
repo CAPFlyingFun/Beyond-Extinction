@@ -304,6 +304,7 @@ export function openHudEditor({ parent, audio, onClose, mode }: OpenOptions): vo
         p.innerHTML = `
           <div class="be-sh-bars__row"><span class="be-sh-bars__icon">❤</span><div class="be-sh-bars__bar be-sh-bars__bar--health"><i style="transform:scaleX(0.92)"></i></div></div>
           <div class="be-sh-bars__row"><span class="be-sh-bars__icon">⚡</span><div class="be-sh-bars__bar be-sh-bars__bar--stam"><i style="transform:scaleX(0.76)"></i></div></div>
+          <div class="be-sh-bars__row"><span class="be-sh-bars__icon">🍖</span><div class="be-sh-bars__bar be-sh-bars__bar--food"><i style="transform:scaleX(0.67)"></i></div></div>
           <div class="be-sh-bars__row"><span class="be-sh-bars__icon">💧</span><div class="be-sh-bars__bar be-sh-bars__bar--water"><i style="transform:scaleX(0.58)"></i></div></div>`;
         break;
       }

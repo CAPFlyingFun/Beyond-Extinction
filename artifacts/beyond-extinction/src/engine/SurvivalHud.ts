@@ -79,6 +79,7 @@ const ITEM_GLYPHS: Record<string, string> = {
   keycard: "🪪",
   flashlight: "🔦",
   meat: "🥩",
+  berries: "🫐",
 };
 
 const HOTBAR_SLOTS = 6;
@@ -109,9 +110,11 @@ export class SurvivalHud {
   private trackerList!: HTMLDivElement;
   private healthBar!: HTMLElement;
   private stamBar!: HTMLElement;
+  private foodBar!: HTMLElement;
   private waterBar!: HTMLElement;
   private healthBarWrap!: HTMLDivElement;
   private stamBarWrap!: HTMLDivElement;
+  private foodBarWrap!: HTMLDivElement;
   private waterBarWrap!: HTMLDivElement;
   private hotbarSlotContainer!: HTMLDivElement;
   private daytimeEl!: HTMLDivElement;
@@ -189,7 +192,7 @@ export class SurvivalHud {
   /** Set the on-foot quick bars directly. The scene calls this every frame from
    *  the LIVE stats so the fill tracks the exact value and always reaches 0 —
    *  the throttled (5 Hz) onStats path could lag and appear to stop short. */
-  setBars(health: number, stamina: number, water: number): void {
+  setBars(health: number, stamina: number, food: number, water: number): void {
     if (this.mountedCreature !== null) return;
     // scaleX, not width: iOS Safari promotes the fill to its own compositing
     // layer the moment the is-low pulse animation starts, and layout-driven
@@ -198,9 +201,11 @@ export class SurvivalHud {
     // always repaint.
     this.healthBar.style.transform = `scaleX(${clamp01(health / 100)})`;
     this.stamBar.style.transform = `scaleX(${clamp01(stamina / 100)})`;
+    this.foodBar.style.transform = `scaleX(${clamp01(food / 100)})`;
     this.waterBar.style.transform = `scaleX(${clamp01(water / 100)})`;
     this.healthBarWrap.classList.toggle("is-low", health < 25);
     this.stamBarWrap.classList.toggle("is-low", stamina < 25);
+    this.foodBarWrap.classList.toggle("is-low", food < 25);
     this.waterBarWrap.classList.toggle("is-low", water < 25);
   }
 
@@ -309,13 +314,16 @@ export class SurvivalHud {
     el.innerHTML = `
       <div class="be-sh-bars__row"><span class="be-sh-bars__icon">❤</span><div class="be-sh-bars__bar be-sh-bars__bar--health"><i></i></div></div>
       <div class="be-sh-bars__row"><span class="be-sh-bars__icon">⚡</span><div class="be-sh-bars__bar be-sh-bars__bar--stam"><i></i></div></div>
+      <div class="be-sh-bars__row"><span class="be-sh-bars__icon">🍖</span><div class="be-sh-bars__bar be-sh-bars__bar--food"><i></i></div></div>
       <div class="be-sh-bars__row"><span class="be-sh-bars__icon">💧</span><div class="be-sh-bars__bar be-sh-bars__bar--water"><i></i></div></div>`;
     this.barsEl = el;
     this.healthBarWrap = el.querySelector(".be-sh-bars__bar--health")!;
     this.stamBarWrap = el.querySelector(".be-sh-bars__bar--stam")!;
+    this.foodBarWrap = el.querySelector(".be-sh-bars__bar--food")!;
     this.waterBarWrap = el.querySelector(".be-sh-bars__bar--water")!;
     this.healthBar = this.healthBarWrap.querySelector("i")!;
     this.stamBar = this.stamBarWrap.querySelector("i")!;
+    this.foodBar = this.foodBarWrap.querySelector("i")!;
     this.waterBar = this.waterBarWrap.querySelector("i")!;
     this.mount("bars", el);
   }
@@ -490,7 +498,7 @@ export class SurvivalHud {
     }
 
     // On-foot mode: update the player's quick bars and hotbar.
-    this.setBars(s.health, s.stamina, s.water);
+    this.setBars(s.health, s.stamina, s.food, s.water);
 
     // Stamina hit zero → auto-cancel the sprint latch so the UI stays honest.
     if (s.stamina <= 0 && this.opts.input.runLatched) {
@@ -589,6 +597,17 @@ export class SurvivalHud {
         this.renderHotbar(true);
       } else {
         this.toast("Not thirsty right now");
+      }
+      return;
+    }
+    if (item === "berries") {
+      if (this.opts.stats.eat(25)) {
+        PlayerInventory.drop("berries");
+        this.opts.audio?.playSfx("ui-select");
+        this.toast("You eat a handful of berries (+food)");
+        this.renderHotbar(true);
+      } else {
+        this.toast("Not hungry right now");
       }
       return;
     }

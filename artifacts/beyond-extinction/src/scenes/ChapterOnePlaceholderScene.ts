@@ -53,6 +53,9 @@ import { spawnSceneMarkers } from "../engine/MarkerEditor";
 import { AnimStore } from "../engine/AnimStore";
 import { RIGS, bakeHumanoidClips, STD_CLIPS } from "../engine/proceduralAnimator";
 import { StoryDilo } from "../engine/StoryDilo";
+import { BerryBushes, BERRIES_PER_FORAGE } from "../engine/BerryBushes";
+import { CompanionFollow } from "../engine/CompanionFollow";
+import { ChaseSetDressing, type ChaseAnchors } from "../engine/ChaseSetDressing";
 
 /** The animation actions a rigged character drives (idle/walk crossfade). */
 interface CharacterActions {
@@ -116,6 +119,20 @@ class ChapterOnePlaceholderScene implements IScene {
   private jack!: THREE.Group;
   private sarah!: THREE.Group;
   private jackNav!: Navigator;
+  // Sarah's free-roam follower AI — enabled once she's woken (sarahFound).
+  private companion?: CompanionFollow;
+  // Chapter Three chase cinematic: set pieces, anchors, and the per-frame
+  // shot tick (non-null while the chase owns the camera and the actors).
+  private chaseDressing?: ChaseSetDressing;
+  private chaseAnchors?: ChaseAnchors;
+  private chaseTickFn: ((dt: number) => void) | null = null;
+  private chaseSkip = false;
+  private chaseSkipUnsub?: () => void;
+  private hemi?: THREE.HemisphereLight;
+  // Chapter 3 complete (the chase ended at the cave). Persisted in the save's
+  // flags so a resume lands in the aftermath — Sarah standing + following,
+  // dusk light, forage objective — instead of the day-one beach state.
+  private ch3Done = false;
   private mixers: THREE.AnimationMixer[] = [];
   private readonly clipLibrary = new ClipLibrary();
 
@@ -139,6 +156,11 @@ class ChapterOnePlaceholderScene implements IScene {
   private feedWindowT = 0;
   private unsubFeed?: () => void;
   private static readonly FEED_RANGE_M = 5;
+  // Forageable berry bushes: contextual Forage button near a ripe bush.
+  private berryBushes?: BerryBushes;
+  private forageBtnEl?: HTMLButtonElement;
+  private unsubForage?: () => void;
+  private static readonly FORAGE_RANGE_M = 4;
   // Track button: mark the creature under the crosshair to follow it (label +
   // no-cull) and persist it through save/resume.
   private trackBtnEl?: HTMLButtonElement;
@@ -310,6 +332,7 @@ class ChapterOnePlaceholderScene implements IScene {
       // Tracked / part-tamed creatures ride along in the save's flags.
       const fauna = resume.flags?.fauna;
       if (Array.isArray(fauna)) this.resumeFauna = fauna as FaunaSaveEntry[];
+      this.ch3Done = resume.flags?.chapter3Done === true;
     } else {
       // Fresh arrival through the portal: set Jack's carry-over loadout
       // explicitly (the prologue's end-state inventory is unreliable). Jack keeps
@@ -329,6 +352,7 @@ class ChapterOnePlaceholderScene implements IScene {
         hasBadge: PlayerInventory.hasBadge,
         heldItems: [...PlayerInventory.heldItems],
       },
+      flags: { chapter3Done: this.ch3Done },
     });
 
     const scene = this.scene;
@@ -342,6 +366,7 @@ class ChapterOnePlaceholderScene implements IScene {
 
     const hemi = new THREE.HemisphereLight(0xbfe4ff, 0xc8b78a, 1.0);
     scene.add(hemi);
+    this.hemi = hemi; // dimmed to dusk after the chase ends at the cave
     const sun = new THREE.DirectionalLight(0xfff2d6, 2.3);
     sun.castShadow = true;
     // A directional shadow can't cover an 8 km island at usable resolution, so
@@ -470,7 +495,11 @@ class ChapterOnePlaceholderScene implements IScene {
     this.sarah.position.set(sarahSpawn.x, beachHeight(sarahSpawn.x, sarahSpawn.z), sarahSpawn.z);
     this.sarah.rotation.y = sarahSpawn.rot;
     scene.add(this.sarah);
-    this.setProne(this.sarah, true);
+    // Prone on the sand only until she's found (day one). Past the chase she
+    // resumes on her feet at the cave, following again.
+    if (!this.ch3Done) this.setProne(this.sarah, true);
+    this.companion = new CompanionFollow(this.sarah, (nx, nz) => this.clampToPlay(nx, nz));
+    if (this.ch3Done) this.companion.enabled = true;
 
     // A curious dodo nearby (set-dressing positions scale with the world).
     this.dodo = await this.buildDodo();
@@ -493,6 +522,61 @@ class ChapterOnePlaceholderScene implements IScene {
     scene.add(driftwood);
 
     this.registerInteractions(driftwood);
+
+    // Forageable berry bushes — the island's first food source. A cluster up
+    // the sand toward the treeline (off the story lane, so nothing blocks the
+    // Dilo reveal approach) and a patch by the First Cave for Chapter Three.
+    this.berryBushes = new BerryBushes();
+    {
+      const inland = new THREE.Vector2(
+        ISLAND_CENTER.x - jackSpawn.x,
+        ISLAND_CENTER.z - jackSpawn.z,
+      );
+      if (inland.lengthSq() < 1e-6) inland.set(0, 1);
+      inland.normalize();
+      const side = new THREE.Vector2(-inland.y, inland.x); // perpendicular
+      const mU = 1 / METERS_PER_UNIT;
+      const plant = (alongM: number, sideM: number, seed: number) =>
+        this.berryBushes!.add(
+          jackSpawn.x + inland.x * alongM * mU + side.x * sideM * mU,
+          jackSpawn.z + inland.y * alongM * mU + side.y * sideM * mU,
+          seed,
+        );
+      plant(38, -14, 1);
+      plant(46, -22, 2);
+      plant(52, 18, 3);
+      plant(60, 26, 4);
+      const cave = ISLAND_LOCATIONS.find((l) => l.name === "First Cave");
+      if (cave) {
+        const w = locationWorld(cave);
+        this.berryBushes.add(w.x + 10 * mU, w.z + 8 * mU, 5);
+        this.berryBushes.add(w.x - 12 * mU, w.z + 14 * mU, 6);
+        this.berryBushes.add(w.x + 4 * mU, w.z - 16 * mU, 7);
+      }
+    }
+    scene.add(this.berryBushes.group);
+
+    // Chapter Three chase set pieces: the ravine at "Chase Jungle & Ravine",
+    // a river halfway to the cave, and the boulder pile + cave mouth at
+    // "First Cave". Built every visit — they're free-roam landmarks too.
+    {
+      const chaseLoc = ISLAND_LOCATIONS.find((l) => l.name === "Chase Jungle & Ravine");
+      const caveLoc = ISLAND_LOCATIONS.find((l) => l.name === "First Cave");
+      if (chaseLoc && caveLoc) {
+        const R = locationWorld(chaseLoc);
+        const C = locationWorld(caveLoc);
+        const d2 = new THREE.Vector2(C.x - R.x, C.z - R.z);
+        if (d2.lengthSq() < 1e-6) d2.set(-1, 0);
+        d2.normalize();
+        this.chaseAnchors = {
+          ravine: { x: R.x, z: R.z, ax: -d2.y, az: d2.x },
+          river: { x: (R.x + C.x) / 2, z: (R.z + C.z) / 2, ax: -d2.y, az: d2.x },
+          cave: { x: C.x, z: C.z, fx: -d2.x, fz: -d2.y },
+        };
+        this.chaseDressing = new ChaseSetDressing(this.chaseAnchors);
+        scene.add(this.chaseDressing.group);
+      }
+    }
 
     // The scripted first predator — hand-placed just inside the treeline (inland,
     // +Z of the arrival spawn), hidden until the reveal. Only for a fresh
@@ -600,7 +684,15 @@ class ChapterOnePlaceholderScene implements IScene {
       this.registerSpawnTools();
       // HUD chrome (inventory + minimap): immediately on a resume; a fresh
       // arrival builds it after the cinematic so nothing floats over the journal.
-      if (!freshArrival) this.buildFpHud();
+      if (!freshArrival) {
+        this.buildFpHud();
+        // Resuming past the chase: restore the Chapter 3 aftermath — dusk
+        // light, cave glow, and the forage objective.
+        if (this.ch3Done) {
+          this.applyChaseDusk();
+          this.setForageObjective(this.jack.position.x, this.jack.position.z);
+        }
+      }
     } else {
       // Legacy directed-gameplay path (click-to-move + cinematic story).
       this.unsubClick = this.ctx.input.onClick(() => this.handleClick());
@@ -738,6 +830,20 @@ class ChapterOnePlaceholderScene implements IScene {
     this.buildFeedUI();
     // The E key / long-press interact also feeds when a croc is basking nearby.
     this.unsubFeed = this.ctx.input.onInteract(() => this.tryFeed());
+
+    // Contextual Forage button (berry bushes) + E-key forage.
+    const forage = document.createElement("button");
+    forage.type = "button";
+    forage.className = "be-forage-btn";
+    forage.textContent = "🫐 Forage berries";
+    forage.style.display = "none";
+    forage.addEventListener("click", (e) => {
+      e.preventDefault();
+      this.tryForage();
+    });
+    this.ctx.uiLayer.appendChild(forage);
+    this.forageBtnEl = forage;
+    this.unsubForage = this.ctx.input.onInteract(() => this.tryForage());
   }
 
   // ---------- Passive taming ----------
@@ -890,8 +996,43 @@ class ChapterOnePlaceholderScene implements IScene {
         hasBadge: PlayerInventory.hasBadge,
         heldItems: [...PlayerInventory.heldItems],
       },
-      flags: { fauna: this.seaCreatures?.serialize() ?? [] },
+      flags: {
+        fauna: this.seaCreatures?.serialize() ?? [],
+        chapter3Done: this.ch3Done,
+      },
     });
+  }
+
+  /** Strip the nearest ripe berry bush (Forage button / E key). */
+  private tryForage(): void {
+    if (this.disposed || this.respawning || !this.berryBushes) return;
+    if (!this.ctx.input.inputEnabled) return;
+    const idx = this.berryBushes.nearestRipe(
+      this.camera.position.x,
+      this.camera.position.z,
+      ChapterOnePlaceholderScene.FORAGE_RANGE_M / METERS_PER_UNIT,
+    );
+    if (idx < 0 || !this.berryBushes.forage(idx)) return;
+    for (let i = 0; i < BERRIES_PER_FORAGE; i++) PlayerInventory.hold("berries");
+    this.ctx.audio.playSfx("badge-pickup");
+    this.ctx.overlays.showToast(`+${BERRIES_PER_FORAGE} berries — tap 🫐 in the hotbar to eat`);
+    if (this.forageBtnEl) this.forageBtnEl.style.display = "none";
+    this.persistIsland();
+  }
+
+  /** Per-frame: show the Forage prompt when a ripe bush is in reach. */
+  private updateForageUI(active: boolean): void {
+    const btn = this.forageBtnEl;
+    if (!btn || !this.berryBushes) return;
+    const show =
+      active &&
+      this.berryBushes.nearestRipe(
+        this.camera.position.x,
+        this.camera.position.z,
+        ChapterOnePlaceholderScene.FORAGE_RANGE_M / METERS_PER_UNIT,
+      ) >= 0;
+    const want = show ? "block" : "none";
+    if (btn.style.display !== want) btn.style.display = want;
   }
 
   /** Feed the nearest basking croc (Feed button / E key). */
@@ -1264,6 +1405,8 @@ class ChapterOnePlaceholderScene implements IScene {
     this.faceTowards(this.sarah, this.jack.position);
     await this.wake(this.sarah, 1100);
     if (this.disposed) return;
+    // From here on Sarah is a companion — she trails Jack in free roam.
+    if (this.companion) this.companion.enabled = true;
     // With the Dilo staged, point the player toward the treeline — walking up to
     // it springs the first-encounter reveal. Otherwise, plain free roam.
     if (this.dilo) {
@@ -1341,13 +1484,634 @@ class ChapterOnePlaceholderScene implements IScene {
     }
     if (this.disposed) return;
 
-    // 4) Hard cut to black + the far, giant roar — "what was THAT?"
-    this.ctx.overlays.setBlackInstant(true);
-    audio.playSfx("roar-distant");
-    await this.waitMs(1700);
-    if (this.disposed) return;
+    // 4) Smash cut off the lunge — straight into the Chapter Three chase,
+    //    which runs all the way to the First Cave. (The old vertical-slice
+    //    ending — cut to black + end card — is gone.)
     this.revealLook = null;
-    this.showEndCard();
+    await this.runChase();
+  }
+
+  // ---------- Chapter Three: the chase (hard-cut shot list) ----------
+
+  /** One hard-cut shot: `tick(u, dt)` poses actors + camera each frame. The
+   *  tick stays installed after the shot resolves (it clamps at u = 1), so
+   *  dialogue holds between shots keep the last framing alive. Once the
+   *  player has skipped, the shot fires a single tick(1) and returns — every
+   *  shot still leaves the world in its end state. */
+  private async playShot(secs: number, tick: (u: number, dt: number) => void): Promise<void> {
+    let t = 0;
+    this.chaseTickFn = (dt) => {
+      t = Math.min(t + dt, secs);
+      tick(secs > 0 ? t / secs : 1, dt);
+    };
+    if (this.chaseSkip || this.disposed) {
+      tick(1, 0);
+      return;
+    }
+    await this.chaseWait(secs * 1000);
+    tick(1, 0);
+  }
+
+  /** waitMs that bails early when the chase is skipped or the scene dies. */
+  private chaseWait(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const t0 = performance.now();
+      const iv = window.setInterval(() => {
+        if (this.disposed || this.chaseSkip || performance.now() - t0 >= ms) {
+          clearInterval(iv);
+          resolve();
+        }
+      }, 50);
+    });
+  }
+
+  /**
+   * The Chapter Three chase — a full cinematic from the Dilo's lunge on the
+   * beach to the First Cave: treeline sprint → ravine jump over venom →
+   * deep jungle → the river bank → the dodged spit → the boulder pile dive →
+   * the cave, the two-hander, the giant roar, nightfall — then the island is
+   * handed back in first person at the cave. Any key or tap skips ahead.
+   */
+  private async runChase(): Promise<void> {
+    const audio = this.ctx.audio;
+    const dress = this.chaseDressing;
+    const A = this.chaseAnchors;
+    const dilo = this.dilo;
+    if (!dress || !A || !dilo) {
+      // Set pieces missing (shouldn't happen) — the old cut-to-black ending.
+      this.ctx.overlays.setBlackInstant(true);
+      audio.playSfx("roar-distant");
+      await this.waitMs(1700);
+      if (!this.disposed) this.showEndCard();
+      return;
+    }
+
+    this.chaseSkip = false;
+    const skip = () => {
+      this.chaseSkip = true;
+    };
+    window.addEventListener("keydown", skip);
+    window.addEventListener("pointerdown", skip);
+    this.chaseSkipUnsub = () => {
+      window.removeEventListener("keydown", skip);
+      window.removeEventListener("pointerdown", skip);
+    };
+
+    // The camera films Jack from outside now — give him his head back, and
+    // Sarah stops being a follower until the cave handback.
+    this.setHeadBonesHidden(this.jack, false);
+    if (this.companion) this.companion.enabled = false;
+    this.ctx.overlays.hideHint();
+
+    const jack = this.jack;
+    const sarah = this.sarah;
+    const cam = this.camera;
+    const m = (metres: number) => metres / METERS_PER_UNIT;
+
+    // Frames: each set piece gets a base point + a travel direction `d` and a
+    // sideways axis `a`; L() = ground point (y carries an optional lift),
+    // P() = absolute camera point (terrain + lift).
+    const f = new THREE.Vector3(A.cave.fx, 0, A.cave.fz); // out of the cave
+    const dir = f.clone().multiplyScalar(-1); // chase travel (ravine → cave)
+    const axis = new THREE.Vector3(A.ravine.ax, 0, A.ravine.az);
+    const gAxis = new THREE.Vector3(-A.cave.fz, 0, A.cave.fx);
+    const tl = this.diloTreeline;
+    const dirT = new THREE.Vector3(A.ravine.x - tl.x, 0, A.ravine.z - tl.z).normalize();
+    const axisT = new THREE.Vector3(-dirT.z, 0, dirT.x);
+    interface Frame {
+      bx: number;
+      bz: number;
+      d: THREE.Vector3;
+      a: THREE.Vector3;
+    }
+    const FT: Frame = { bx: tl.x, bz: tl.z, d: dirT, a: axisT };
+    const FR: Frame = { bx: A.ravine.x, bz: A.ravine.z, d: dir, a: axis };
+    const FV: Frame = { bx: A.river.x, bz: A.river.z, d: dir, a: axis };
+    const FC: Frame = { bx: A.cave.x, bz: A.cave.z, d: f, a: gAxis }; // along = metres OUT of the cave
+    const L = (fr: Frame, along: number, side: number, lift = 0) =>
+      new THREE.Vector3(
+        fr.bx + fr.d.x * m(along) + fr.a.x * m(side),
+        lift,
+        fr.bz + fr.d.z * m(along) + fr.a.z * m(side),
+      );
+    const P = (fr: Frame, along: number, side: number, lift: number) => {
+      const v = L(fr, along, side);
+      v.y = beachHeight(v.x, v.z) + m(lift);
+      return v;
+    };
+
+    // Shot runner: straight-line tracks for the three actors + a camera dolly.
+    interface ShotTrack {
+      g: THREE.Group;
+      from: THREE.Vector3;
+      to: THREE.Vector3;
+    }
+    const diloLook = new THREE.Vector3();
+    const camLook = new THREE.Vector3();
+    let shake = 0; // camera shake amplitude (world units), decays per frame
+    const shot = (
+      secs: number,
+      tracks: ShotTrack[],
+      camFrom: THREE.Vector3,
+      camTo: THREE.Vector3,
+      lookAt: THREE.Group | THREE.Vector3,
+      extra?: (u: number, dt: number) => void,
+    ) =>
+      this.playShot(secs, (u, dt) => {
+        let humanMoving = false;
+        for (const tr of tracks) {
+          const x = THREE.MathUtils.lerp(tr.from.x, tr.to.x, u);
+          const z = THREE.MathUtils.lerp(tr.from.z, tr.to.z, u);
+          const lift = THREE.MathUtils.lerp(tr.from.y, tr.to.y, u);
+          const still = tr.from.distanceToSquared(tr.to) < 1e-6;
+          if (tr.g === dilo.group) {
+            dilo.placeAt(x, z);
+            if (!still && u < 1) {
+              diloLook.set(tr.to.x, dilo.group.position.y, tr.to.z);
+              dilo.faceToward(diloLook);
+            }
+          } else {
+            tr.g.position.set(x, beachHeight(x, z) + lift, z);
+            if (!still) {
+              humanMoving = true;
+              if (u < 1) tr.g.rotation.y = Math.atan2(tr.to.x - tr.from.x, tr.to.z - tr.from.z);
+            }
+          }
+        }
+        this.applyLocomotion(jack, humanMoving && u < 1, dt);
+        this.applyLocomotion(sarah, humanMoving && u < 1, dt);
+        cam.position.lerpVectors(camFrom, camTo, u);
+        const lt =
+          lookAt instanceof THREE.Vector3
+            ? lookAt
+            : camLook.set(lookAt.position.x, lookAt.position.y + m(1.5), lookAt.position.z);
+        extra?.(u, dt);
+        if (shake > 0) {
+          cam.position.x += (Math.random() - 0.5) * shake;
+          cam.position.y += (Math.random() - 0.5) * shake * 0.7;
+          shake = Math.max(0, shake - dt * m(0.6));
+        }
+        cam.lookAt(lt);
+      });
+
+    const say = async (speaker: string, text: string, ms: number) => {
+      if (this.disposed || this.chaseSkip) return;
+      this.ctx.dialogue.showSubtitle({ speaker, text });
+      await this.chaseWait(ms);
+      this.ctx.dialogue.hideSubtitle();
+    };
+
+    // ── Smash cut to black off the lunge; the chase opens at full sprint.
+    this.ctx.overlays.setBlackInstant(true);
+    audio.playSfx("dilo-call");
+    await this.chaseWait(650);
+    if (this.disposed) return;
+
+    dilo.play("Run", 0.15);
+    const jw = (jack.userData.actions as CharacterActions | undefined)?.walk;
+    const sw = (sarah.userData.actions as CharacterActions | undefined)?.walk;
+    if (jw) jw.timeScale = 1.9; // walk clip double-time = the sprint read
+    if (sw) sw.timeScale = 1.9;
+
+    // S1 — they hit the treeline at full speed, the Dilo crashing in behind.
+    this.ctx.overlays.setBlackInstant(false);
+    audio.playSfx("jungle-crash");
+    void say("Sarah", "Don't look back!", 2400);
+    await shot(
+      4.2,
+      [
+        { g: jack, from: L(FT, 4, 1.5), to: L(FT, 30, 1.5) },
+        { g: sarah, from: L(FT, 7, -1.5), to: L(FT, 33, -1.5) },
+        { g: dilo.group, from: L(FT, -12, 0), to: L(FT, 15, 0) },
+      ],
+      P(FT, 15, 10, 2.6),
+      P(FT, 27, 9, 2.2),
+      jack,
+    );
+    if (this.disposed) return;
+
+    // S2 — deep jungle, frontal: the animal gains in the background.
+    void say("Jack", "FASTER!", 1800);
+    audio.playSfx("large-creature-hiss");
+    await shot(
+      3.8,
+      [
+        { g: jack, from: L(FR, -232, 1.5), to: L(FR, -198, 1.5) },
+        { g: sarah, from: L(FR, -230, -1.5), to: L(FR, -196, -1.5) },
+        { g: dilo.group, from: L(FR, -248, 0), to: L(FR, -210, 0) },
+      ],
+      P(FR, -191, 0, 2.1),
+      P(FR, -189, 0, 2.3),
+      jack,
+    );
+    if (this.disposed) return;
+
+    // S3 — they skid up to the ravine lip.
+    void say("Jack", "A ravine — we have to go around!", 2500);
+    await shot(
+      3.4,
+      [
+        { g: jack, from: L(FR, -28, 1.5), to: L(FR, -6.5, 1.5) },
+        { g: sarah, from: L(FR, -26, -1.5), to: L(FR, -6.5, -1.5) },
+        { g: dilo.group, from: L(FR, -62, 0), to: L(FR, -36, 0) },
+      ],
+      P(FR, -15, 12, 2.2),
+      P(FR, -9, 11, 1.9),
+      jack,
+    );
+    if (this.disposed) return;
+
+    // S4 — no time: it bursts out behind them, throat pulsing.
+    void say("Sarah", "It's going to spit! JUMP!", 2500);
+    await shot(
+      2.9,
+      [
+        { g: jack, from: L(FR, -6.5, 1.5), to: L(FR, -6.5, 1.5) },
+        { g: sarah, from: L(FR, -6.5, -1.5), to: L(FR, -6.5, -1.5) },
+        { g: dilo.group, from: L(FR, -36, 0), to: L(FR, -15, 0) },
+      ],
+      P(FR, -3, 3.5, 2.3),
+      P(FR, -3.5, 3, 2.2),
+      dilo.group,
+    );
+    if (this.disposed) return;
+
+    // S5 — the leap, in profile; venom streaks over their heads.
+    audio.playSfx("dilo-spit");
+    await shot(
+      2.8,
+      [
+        { g: jack, from: L(FR, -5, 1.5), to: L(FR, 6, 1.5) },
+        { g: sarah, from: L(FR, -5, -1.5), to: L(FR, 6, -1.5) },
+        { g: dilo.group, from: L(FR, -15, 0), to: L(FR, -8, 0) },
+      ],
+      P(FR, 0.5, 15, 2.0),
+      P(FR, 0.5, 13, 1.6),
+      jack,
+      (u) => {
+        const arc = Math.sin(Math.PI * u) * m(2.4);
+        jack.position.y += arc;
+        sarah.position.y += arc * 0.92;
+      },
+    );
+    if (this.disposed) return;
+
+    // S6 — it paces the far edge, furious; they scramble back from the lip.
+    dilo.play("Walk", 0.3);
+    audio.playSfx("large-creature-hiss");
+    void say("Jack", "Move! It'll find a way around.", 2600);
+    await shot(
+      4.2,
+      [
+        { g: jack, from: L(FR, 6, 1.5), to: L(FR, 14, 1) },
+        { g: sarah, from: L(FR, 6, -1.5), to: L(FR, 14, -1) },
+        { g: dilo.group, from: L(FR, -7, -6), to: L(FR, -7, 6) },
+      ],
+      P(FR, 16, 2, 2.4),
+      P(FR, 15, 2.5, 2.3),
+      dilo.group,
+    );
+    if (this.disposed) return;
+
+    // S7 — deep jungle again; rushing water getting louder ahead.
+    dilo.play("Run", 0.2);
+    audio.playSfx("jungle-crash");
+    await shot(
+      4.2,
+      [
+        { g: jack, from: L(FV, -55, 2), to: L(FV, -10, 2) },
+        { g: sarah, from: L(FV, -53, -1), to: L(FV, -9, -1) },
+        { g: dilo.group, from: L(FV, -82, -4), to: L(FV, -40, -4) },
+      ],
+      P(FV, -42, 11, 2.8),
+      P(FV, -18, 9, 2.4),
+      jack,
+    );
+    if (this.disposed) return;
+
+    // S8 — dead stop at the bank: too deep, too fast.
+    void say("Sarah", "A river — it's too fast to swim!", 2400);
+    await shot(
+      2.6,
+      [
+        { g: jack, from: L(FV, -10, 2), to: L(FV, -4.5, 2) },
+        { g: sarah, from: L(FV, -9, -1), to: L(FV, -4.5, -0.5) },
+        { g: dilo.group, from: L(FV, -40, -4), to: L(FV, -40, -4) },
+      ],
+      P(FV, 4, 0, 1.9),
+      P(FV, 3.5, 0.5, 1.9),
+      jack,
+    );
+    if (this.disposed) return;
+
+    // S9 — Jack picks the bank.
+    void say("Jack", "Along the bank! We follow the river!", 2400);
+    await shot(
+      2.4,
+      [
+        { g: jack, from: L(FV, -4.5, 2), to: L(FV, -5, 9) },
+        { g: sarah, from: L(FV, -4.5, -0.5), to: L(FV, -5.5, 6) },
+        { g: dilo.group, from: L(FV, -40, -4), to: L(FV, -30, -2) },
+      ],
+      P(FV, 3.5, 0.5, 1.9),
+      P(FV, 4, 6, 2.2),
+      jack,
+    );
+    if (this.disposed) return;
+
+    // S10 — the riverbank sprint, shot from across the water; it paces them
+    // through the trees, waiting for them to tire.
+    await shot(
+      4.8,
+      [
+        { g: jack, from: L(FV, -5, 9), to: L(FV, -5, 48) },
+        { g: sarah, from: L(FV, -5.5, 6), to: L(FV, -5.5, 45) },
+        { g: dilo.group, from: L(FV, -18, 0), to: L(FV, -18, 38) },
+      ],
+      P(FV, 9, 16, 3.4),
+      P(FV, 9, 40, 2.8),
+      jack,
+    );
+    if (this.disposed) return;
+
+    // S11 — the spit: the head snaps sideways; they hit the dirt and the
+    // venom sizzles against a trunk behind them.
+    audio.playSfx("dilo-spit");
+    void say("Jack", "DOWN!", 1300);
+    await shot(
+      2.2,
+      [
+        { g: jack, from: L(FV, -5, 48), to: L(FV, -5, 54) },
+        { g: sarah, from: L(FV, -5.5, 45), to: L(FV, -5.5, 52) },
+        { g: dilo.group, from: L(FV, -18, 38), to: L(FV, -18, 44) },
+      ],
+      P(FV, 0, 58, 1.4),
+      P(FV, -1, 57, 1.3),
+      jack,
+      (u) => {
+        const duck = Math.sin(Math.PI * Math.min(u * 1.4, 1)) * m(0.7);
+        jack.position.y -= duck;
+        sarah.position.y -= duck;
+      },
+    );
+    if (this.disposed) return;
+    void say("Jack", "Go, go, go!", 1400);
+
+    // S12 — hard cut: the boulder pile at the base of the cliff.
+    void say("Sarah", "There! The rocks — that's our shot!", 2400);
+    await shot(
+      3.8,
+      [
+        { g: jack, from: L(FC, 52, 2), to: L(FC, 22, 2) },
+        { g: sarah, from: L(FC, 50, -2), to: L(FC, 21, -1) },
+        { g: dilo.group, from: L(FC, 66, 0), to: L(FC, 31, 0) },
+      ],
+      P(FC, 38, 15, 2.8),
+      P(FC, 27, 11, 2.2),
+      jack,
+    );
+    if (this.disposed) return;
+
+    // S13 — final sprint: hot breath at the back of the neck; it lunges.
+    audio.playSfx("dilo-snarl");
+    void say("Sarah", "NOW!", 1300);
+    let lunged = false;
+    await shot(
+      3.0,
+      [
+        { g: jack, from: L(FC, 22, 2), to: L(FC, 6.5, 1) },
+        { g: sarah, from: L(FC, 21, -1), to: L(FC, 6.5, -1) },
+        { g: dilo.group, from: L(FC, 31, 0), to: L(FC, 12, 0) },
+      ],
+      P(FC, 34, -4, 1.3),
+      P(FC, 20, -3, 1.5),
+      jack,
+      (u) => {
+        if (u > 0.72 && !lunged) {
+          lunged = true;
+          dilo.playOnce("Lunge");
+        }
+      },
+    );
+    if (this.disposed) return;
+
+    // S14 — the dive through the gap; the animal slams into the boulders.
+    const inr = dress.caveInterior;
+    const mouth = dress.caveMouth;
+    const diveJ = new THREE.Vector3(inr.x + gAxis.x * m(0.9), 0, inr.z + gAxis.z * m(0.9));
+    const diveS = new THREE.Vector3(inr.x - gAxis.x * m(0.9), 0, inr.z - gAxis.z * m(0.9));
+    let slammed = false;
+    await shot(
+      2.6,
+      [
+        { g: jack, from: L(FC, 6.5, 1), to: diveJ },
+        { g: sarah, from: L(FC, 6.5, -1), to: diveS },
+        { g: dilo.group, from: L(FC, 12, 0), to: L(FC, 3, 0) },
+      ],
+      P(FC, 6, 8, 1.7),
+      P(FC, 5, 7, 1.5),
+      new THREE.Vector3(mouth.x, mouth.y + m(1.2), mouth.z),
+      (u) => {
+        if (u > 0.78 && !slammed) {
+          slammed = true;
+          audio.playSfx("jungle-crash");
+          shake = m(0.5);
+        }
+      },
+    );
+    if (this.disposed) return;
+
+    // S15 — inside: collapsed on the cave floor while the gap boils. Venom
+    // sprays in and sizzles on the stone inches from their feet.
+    dress.setCaveGlow(true);
+    this.setProne(jack, true);
+    this.setProne(sarah, true);
+    dilo.play("Idle", 0.2);
+    audio.playSfx("dilo-spit");
+    audio.playSfx("large-creature-hiss");
+    const camIn = new THREE.Vector3(
+      inr.x - f.x * m(2.2),
+      beachHeight(inr.x, inr.z) + m(1.1),
+      inr.z - f.z * m(2.2),
+    );
+    const lookGap = new THREE.Vector3(mouth.x, mouth.y + m(0.8), mouth.z);
+    void say("Jack", "Get back! Get away from the gap!", 2400);
+    await shot(
+      4.4,
+      [
+        { g: jack, from: diveJ, to: diveJ },
+        { g: sarah, from: diveS, to: diveS },
+        { g: dilo.group, from: L(FC, 3.2, 0), to: L(FC, 3.2, 0) },
+      ],
+      camIn,
+      camIn.clone(),
+      lookGap,
+    );
+    if (this.disposed) return;
+
+    // S16 — it gives up. For now. Heavy, patient footsteps back into the green.
+    dilo.play("Walk", 0.4);
+    void say("", "The clawing stops. Its footsteps retreat into the jungle — patient. It will be back.", 3600);
+    await shot(
+      4.0,
+      [
+        { g: jack, from: diveJ, to: diveJ },
+        { g: sarah, from: diveS, to: diveS },
+        { g: dilo.group, from: L(FC, 4, 0), to: L(FC, 34, 10) },
+      ],
+      P(FC, 8, 6, 2.0),
+      P(FC, 9, 5, 2.2),
+      dilo.group,
+    );
+    if (this.disposed) return;
+    dilo.setVisible(false);
+
+    // S17 — the cave two-hander. They pick themselves up, face each other.
+    this.setProne(jack, false);
+    this.setProne(sarah, false);
+    jack.position.set(diveJ.x, beachHeight(diveJ.x, diveJ.z), diveJ.z);
+    sarah.position.set(diveS.x, beachHeight(diveS.x, diveS.z), diveS.z);
+    jack.rotation.y = Math.atan2(diveS.x - diveJ.x, diveS.z - diveJ.z);
+    sarah.rotation.y = Math.atan2(diveJ.x - diveS.x, diveJ.z - diveS.z);
+    const camTwo = new THREE.Vector3(
+      inr.x - f.x * m(1.6) + gAxis.x * m(2.6),
+      beachHeight(inr.x, inr.z) + m(1.35),
+      inr.z - f.z * m(1.6) + gAxis.z * m(2.6),
+    );
+    const lookMid = new THREE.Vector3(inr.x, beachHeight(inr.x, inr.z) + m(1.2), inr.z);
+    await shot(
+      0.6,
+      [
+        { g: jack, from: jack.position.clone().setY(0), to: jack.position.clone().setY(0) },
+        { g: sarah, from: sarah.position.clone().setY(0), to: sarah.position.clone().setY(0) },
+      ],
+      camTwo,
+      camTwo.clone(),
+      lookMid,
+    );
+    await say("Jack", "Are you okay?", 2000);
+    await say("Sarah", "I'll live. You?", 2000);
+    await say("Jack", "Same.", 1500);
+    await say("Jack", "What just happened?", 2100);
+    await say("Sarah", "We got chased by a Dilophosaurus.", 2600);
+    await say("Jack", "By something that's been extinct for a hundred and ninety million years.", 3200);
+    await say("Sarah", "Yes.", 1400);
+    await say("Jack", "We just got hunted by a dinosaur. An actual dinosaur.", 2800);
+    await say("Sarah", "I know. Trust me. I know.", 2400);
+    if (!this.disposed && !this.chaseSkip) {
+      // The giant roar — the whole cave shakes, dust in the light.
+      audio.playSfx("roar-distant");
+      shake = m(0.4);
+      await this.chaseWait(2400);
+    }
+    await say("Sarah", "What was that?", 1900);
+    await say("Jack", "I don't know. But I think we're going to find out.", 2800);
+    await say("Sarah", "We stay here until dark. Give whatever that is time to move on.", 3200);
+    await say("Jack", "Agreed.", 1400);
+    if (this.disposed) return;
+
+    // ── Night falls; the island comes back in first person, at the cave.
+    if (jw) jw.timeScale = 1;
+    if (sw) sw.timeScale = 1;
+    await this.ctx.overlays.fadeToBlack(1100);
+    if (this.disposed) return;
+    this.finishChase();
+    await this.ctx.overlays.fadeFromBlack(1000);
+    if (this.disposed) return;
+    this.ctx.dialogue.showSubtitle({
+      speaker: "",
+      text: "Night falls. Jack keeps watch — because something out there is bigger than a Dilophosaurus.",
+    });
+    window.setTimeout(() => {
+      if (!this.disposed) this.ctx.dialogue.hideSubtitle();
+    }, 5600);
+    this.ctx.input.setEnabled(true);
+    this.player?.setActive(true);
+  }
+
+  /** The chase handback: dusk light, actors seated at the cave, respawn point
+   *  moved to the cave, survival pressure on, and the forage objective set. */
+  private finishChase(): void {
+    const dress = this.chaseDressing;
+    const A = this.chaseAnchors;
+    if (!dress || !A) return;
+    this.chaseTickFn = null;
+    this.chaseSkipUnsub?.();
+    this.chaseSkipUnsub = undefined;
+    this.ctx.dialogue.hideSubtitle();
+    // Swap the chase score for the quiet beach ambience (dusk free roam).
+    this.ctx.audio.playMusic("beach-dawn");
+    this.applyChaseDusk();
+
+    // Jack stands just inside the mouth looking out; Sarah settles beside him
+    // and goes back to companion-following once he moves.
+    const m = (metres: number) => metres / METERS_PER_UNIT;
+    const f = new THREE.Vector3(A.cave.fx, 0, A.cave.fz);
+    const g = new THREE.Vector3(-A.cave.fz, 0, A.cave.fx);
+    const inr = dress.caveInterior;
+    const jx = inr.x + f.x * m(1.5);
+    const jz = inr.z + f.z * m(1.5);
+    const sx = inr.x + g.x * m(1.3);
+    const sz = inr.z + g.z * m(1.3);
+    const deg = THREE.MathUtils.radToDeg(Math.atan2(f.x, -f.z));
+    this.jack.position.set(jx, beachHeight(jx, jz), jz);
+    this.jackFacingDeg = deg;
+    this.sarah.position.set(sx, beachHeight(sx, sz), sz);
+    this.sarah.rotation.y = Math.atan2(f.x, f.z);
+    SpawnStore.setJack({ x: jx, z: jz, rot: deg });
+    SpawnStore.setSarah({ x: sx, z: sz, rot: this.sarah.rotation.y });
+    if (this.companion) this.companion.enabled = true;
+
+    // The day cost them everything they had: hungry and thirsty — and the
+    // berry patch right outside the cave is the way back up.
+    if (this.stats) {
+      this.stats.food = Math.min(this.stats.food, 25);
+      this.stats.water = Math.min(this.stats.water, 30);
+    }
+
+    // First-person handback (the flyover recipe).
+    this.setHeadBonesHidden(this.jack, true);
+    this.applyFov();
+    if (this.player) {
+      this.player.placeAt(jx, jz, deg);
+      this.camY = beachHeight(jx, jz) + this.eyeOffset;
+      this.vy = 0;
+      this.onGround = true;
+    }
+
+    this.setForageObjective(jx, jz);
+    this.ch3Done = true;
+    this.persistIsland();
+  }
+
+  /** Chapter 3 aftermath light: cooler dim sun, bluer fog, cave glow lit.
+   *  Used by finishChase and by a resume that lands past the chase. */
+  private applyChaseDusk(): void {
+    if (this.sun) {
+      this.sun.intensity = 1.0;
+      this.sun.color.set(0xcfd8ff);
+    }
+    if (this.hemi) this.hemi.intensity = 0.45;
+    const fog = this.scene.fog as THREE.Fog | null;
+    if (fog) fog.color.set(0x40536e);
+    this.scene.background = new THREE.Color(0x1c2a44);
+    this.chaseDressing?.setCaveGlow(true);
+  }
+
+  /** Point the quest HUD + minimap at the nearest ripe berry bush. */
+  private setForageObjective(nearX: number, nearZ: number): void {
+    this.ctx.quest.setObjective("Forage berries — food is running low");
+    const bi = this.berryBushes?.nearestRipe(nearX, nearZ, 1e9) ?? -1;
+    const bp = bi >= 0 ? this.berryBushes?.bushAt(bi) : null;
+    if (bp) {
+      this.objMarker?.set(
+        new THREE.Vector3(bp.x, beachHeight(bp.x, bp.z), bp.z),
+        "Berries",
+        "\u{1FAD0}",
+        6,
+      );
+      this.islandMap?.setObjective({ x: bp.x, z: bp.z });
+    }
   }
 
   // ---------- Story ----------
@@ -2018,7 +2782,10 @@ class ChapterOnePlaceholderScene implements IScene {
         hasBadge: PlayerInventory.hasBadge,
         heldItems: [...PlayerInventory.heldItems],
       },
-      flags: { fauna: this.seaCreatures?.serialize() ?? [] },
+      flags: {
+        fauna: this.seaCreatures?.serialize() ?? [],
+        chapter3Done: this.ch3Done,
+      },
     };
     SaveManager.save("manual-1", snap);
     SaveManager.autosave(snap); // resume picks the autosave — keep it in sync
@@ -2206,6 +2973,9 @@ class ChapterOnePlaceholderScene implements IScene {
       !this.respawning &&
       this.ctx.input.inputEnabled;
     this.updateFeedUI(dt, feedActive);
+    // Berry bushes: regrow cooldowns + the contextual Forage prompt.
+    this.berryBushes?.update(dt);
+    this.updateForageUI(feedActive);
     this.elapsed = elapsed;
     this.oceanUniforms.uTime.value = elapsed;
 
@@ -2219,6 +2989,20 @@ class ChapterOnePlaceholderScene implements IScene {
       this.applyLocomotion(this.sarah, false, dt);
       for (const m of this.mixers) m.update(dt);
       this.dilo?.update(dt);
+      this.treesUpdate?.(dt, this.camera.position);
+      updateBillboardsYAxis(this.billboards, this.camera.position);
+      return;
+    }
+
+    if (this.chaseTickFn) {
+      // Chase cinematic: the hard-cut shots own the camera and all three
+      // actors; the world still breathes underneath (ocean, sun, trees).
+      this.chaseTickFn(dt);
+      this.oceanUniforms.uCamPos.value.copy(this.camera.position);
+      this.updateSun();
+      for (const mx of this.mixers) mx.update(dt);
+      this.dilo?.update(dt);
+      this.chaseDressing?.update(dt);
       this.treesUpdate?.(dt, this.camera.position);
       updateBillboardsYAxis(this.billboards, this.camera.position);
       return;
@@ -2309,7 +3093,12 @@ class ChapterOnePlaceholderScene implements IScene {
       // guard) so the fill always tracks the value — even mid-drain — and reaches
       // 0. Previously this sat inside the guard and the bar could freeze.
       if (this.stats) {
-        this.survivalHud?.setBars(this.stats.health, this.stats.stamina, this.stats.water);
+        this.survivalHud?.setBars(
+          this.stats.health,
+          this.stats.stamina,
+          this.stats.food,
+          this.stats.water,
+        );
       }
       // Throttled nearest-location poll (~0.5 s) → minimap location pill.
       this.locNameAcc += dt;
@@ -2370,7 +3159,15 @@ class ChapterOnePlaceholderScene implements IScene {
       // forward view while looking down still reveals your own body.
       this.camera.position.x -= Math.sin(yaw) * ChapterOnePlaceholderScene.CAM_FWD;
       this.camera.position.z -= Math.cos(yaw) * ChapterOnePlaceholderScene.CAM_FWD;
-      this.applyLocomotion(this.sarah, false, dt);
+      // Sarah the companion: follow Jack (walk/run with hysteresis); the walk
+      // clip double-times when she breaks into a run.
+      const sFlags = this.companion?.update(dt, cx, cz) ?? {
+        moving: false,
+        running: false,
+      };
+      const sWalk = (this.sarah.userData.actions as CharacterActions | undefined)?.walk;
+      if (sWalk) sWalk.timeScale = sFlags.running ? 1.7 : 1;
+      this.applyLocomotion(this.sarah, sFlags.moving, dt);
       for (const m of this.mixers) m.update(dt);
       this.dilo?.update(dt);
       this.treesUpdate?.(dt, this.camera.position);
@@ -2464,6 +3261,12 @@ class ChapterOnePlaceholderScene implements IScene {
     this.hurtEl?.remove();
     this.unsubFeed?.();
     this.feedBtnEl?.remove();
+    this.unsubForage?.();
+    this.forageBtnEl?.remove();
+    this.berryBushes?.dispose();
+    this.chaseSkipUnsub?.();
+    this.chaseTickFn = null;
+    this.chaseDressing?.dispose();
     this.feedBarEl?.remove();
     this.trackBtnEl?.remove();
     this.petBtnEl?.remove();

@@ -46,6 +46,7 @@ export interface SurvivalSnapshot {
 const ITEM_KG: Record<string, number> = {
   coffee: 0.4,
   flashlight: 0.6,
+  berries: 0.3,
 };
 const BADGE_KG = 0.2;
 const MAX_WEIGHT_KG = 50;

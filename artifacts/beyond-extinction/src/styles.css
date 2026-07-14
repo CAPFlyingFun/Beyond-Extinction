@@ -1522,6 +1522,29 @@ body {
   animation: be-feed-pulse 1.4s ease-in-out infinite;
 }
 .be-feed-btn:active { transform: translateX(-50%) translateY(1px); filter: brightness(1.2); }
+/* Forage button — same contextual pill as Feed, berry-toned, sits one row up
+   so the two can coexist if a croc ever basks next to a bush. */
+.be-forage-btn {
+  position: fixed;
+  left: 50%;
+  bottom: calc(202px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 42;
+  padding: 10px 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(160, 140, 255, 0.6);
+  background: linear-gradient(180deg, rgba(40, 30, 80, 0.92), rgba(20, 14, 44, 0.92));
+  color: #e6e0ff;
+  font: 700 0.9rem/1 "Inter", sans-serif;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 3px rgba(160, 140, 255, 0.14);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.be-forage-btn:active { transform: translateX(-50%) translateY(1px); filter: brightness(1.2); }
 @keyframes be-feed-pulse {
   0%, 100% { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 3px rgba(120, 240, 150, 0.14); }
   50% { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 5px rgba(120, 240, 150, 0.32); }
@@ -2587,6 +2610,7 @@ body {
    overlapping bars (esp. stamina's mid-green -> bright-mint). */
 .be-sh-bars__bar--health i { background: linear-gradient(180deg, #ff6b6b, #c9403f); }
 .be-sh-bars__bar--stam i { background: linear-gradient(180deg, #7dffb0, #3fae63); }
+.be-sh-bars__bar--food i { background: linear-gradient(180deg, #ffb35c, #d97a2a); }
 .be-sh-bars__bar--water i { background: linear-gradient(180deg, #4aa8f0, #2f76c9); }
 .be-sh-bars__bar.is-low i { animation: be-sh-lowpulse 0.9s ease-in-out infinite; }
 
