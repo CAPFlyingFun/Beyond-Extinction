@@ -4,6 +4,7 @@ import { loadModel, loadTexture } from "../engine/assets";
 import { updateBillboardsYAxis } from "../engine/Billboard";
 import { loadIslandBillboardTrees } from "../engine/islandBillboardTrees";
 import { PerfHud } from "../engine/PerfHud";
+import { LodManager } from "../engine/LodManager";
 import { HudMarker } from "../engine/HudMarker";
 import { Navigator } from "../engine/Navigator";
 import { PlayerController } from "../engine/PlayerController";
@@ -20,7 +21,6 @@ import {
   getSettings,
   subscribeSettings,
   type GameplaySettings,
-  type GraphicsQuality,
 } from "../engine/Settings";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 import { closeHudEditor, setHudEditorContext } from "../engine/HudEditor";
@@ -114,9 +114,10 @@ class ChapterOnePlaceholderScene implements IScene {
   private billboards: THREE.Mesh[] = [];
   // Wind + adaptive-LOD tick for the instanced tree species. Takes the smoothed
   // fps (from perfHud) so the forest draw range tracks the framerate.
-  private treesUpdate?: (dt: number, camPos: THREE.Vector3, fps?: number) => number;
-  // Set the forest's graphics-quality preset (fixed tier distance or "auto").
-  private treesSetQuality?: (q: GraphicsQuality) => void;
+  private treesUpdate?: (dt: number, camPos: THREE.Vector3, fadeEndM?: number) => void;
+  // Global draw-distance owner: trees read its range, bushes/props register with
+  // it. The graphics-quality setting flows here (see the settings subscription).
+  private worldLod = new LodManager();
   // On-screen framerate readout; also the source of the smoothed fps above.
   private perfHud?: PerfHud;
   // Forced on by ?fps=1 regardless of the Show FPS setting (dev convenience).
@@ -333,6 +334,7 @@ class ChapterOnePlaceholderScene implements IScene {
         new URLSearchParams(location.search).get("fps") === "1";
       this.perfHud = new PerfHud(this.fpsForced || this.settings.showFps);
     }
+    this.worldLod.setQuality(this.settings.graphicsQuality);
   }
 
   async enter(): Promise<void> {
@@ -544,7 +546,7 @@ class ChapterOnePlaceholderScene implements IScene {
     // Forageable berry bushes — the island's first food source. A cluster up
     // the sand toward the treeline (off the story lane, so nothing blocks the
     // Dilo reveal approach) and a patch by the First Cave for Chapter Three.
-    this.berryBushes = new BerryBushes();
+    this.berryBushes = new BerryBushes(this.worldLod);
     {
       const inland = new THREE.Vector2(
         ISLAND_CENTER.x - jackSpawn.x,
@@ -652,7 +654,7 @@ class ChapterOnePlaceholderScene implements IScene {
     this.unsubSettings = subscribeSettings((s) => {
       this.settings = s;
       this.applyFov();
-      this.treesSetQuality?.(s.graphicsQuality);
+      this.worldLod.setQuality(s.graphicsQuality);
       this.perfHud?.setVisible(this.fpsForced || s.showFps);
       this.maybeAutoAdvance();
     });
@@ -2440,8 +2442,6 @@ class ChapterOnePlaceholderScene implements IScene {
     if (this.disposed) return;
     this.scene.add(trees.group);
     this.treesUpdate = trees.update;
-    this.treesSetQuality = trees.setQuality;
-    trees.setQuality(this.settings.graphicsQuality);
     console.info(`[Beyond Extinction] island billboard trees placed: ${trees.count}`);
   }
 
@@ -2955,6 +2955,14 @@ class ChapterOnePlaceholderScene implements IScene {
 
   // ---------- Loop ----------
 
+  /** Advance the global LOD (eases the draw range, culls registered props) and
+   *  feed the resulting distance to the forest. One call drives everything that
+   *  goes through the world LOD. */
+  private tickLod(dt: number): void {
+    const range = this.worldLod.update(dt, this.camera.position, this.perfHud?.fps ?? 60);
+    this.treesUpdate?.(dt, this.camera.position, range);
+  }
+
   update(dt: number, elapsed: number): void {
     // Framerate readout + smoothed fps for the adaptive tree LOD (every mode).
     this.perfHud?.tick(dt);
@@ -3013,7 +3021,7 @@ class ChapterOnePlaceholderScene implements IScene {
       this.applyLocomotion(this.sarah, false, dt);
       for (const m of this.mixers) m.update(dt);
       this.dilo?.update(dt);
-      this.treesUpdate?.(dt, this.camera.position, this.perfHud?.fps);
+      this.tickLod(dt);
       updateBillboardsYAxis(this.billboards, this.camera.position);
       return;
     }
@@ -3027,7 +3035,7 @@ class ChapterOnePlaceholderScene implements IScene {
       for (const mx of this.mixers) mx.update(dt);
       this.dilo?.update(dt);
       this.chaseDressing?.update(dt);
-      this.treesUpdate?.(dt, this.camera.position, this.perfHud?.fps);
+      this.tickLod(dt);
       updateBillboardsYAxis(this.billboards, this.camera.position);
       return;
     }
@@ -3048,7 +3056,7 @@ class ChapterOnePlaceholderScene implements IScene {
       this.applyLocomotion(this.sarah, false, dt);
       for (const mx of this.mixers) mx.update(dt);
       this.dilo?.update(dt);
-      this.treesUpdate?.(dt, this.camera.position, this.perfHud?.fps);
+      this.tickLod(dt);
       updateBillboardsYAxis(this.billboards, this.camera.position);
       return;
     }
@@ -3194,7 +3202,7 @@ class ChapterOnePlaceholderScene implements IScene {
       this.applyLocomotion(this.sarah, sFlags.moving, dt);
       for (const m of this.mixers) m.update(dt);
       this.dilo?.update(dt);
-      this.treesUpdate?.(dt, this.camera.position, this.perfHud?.fps);
+      this.tickLod(dt);
       for (const h of this.highlights) h.update(dt);
       this.objMarker?.update(this.camera);
       updateBillboardsYAxis(this.billboards, this.camera.position);
@@ -3212,7 +3220,7 @@ class ChapterOnePlaceholderScene implements IScene {
     // Keep the walking hero on the terrain surface (Sarah is static until reached).
     if (this.jack) this.jack.position.y = beachHeight(this.jack.position.x, this.jack.position.z);
     for (const m of this.mixers) m.update(dt);
-    this.treesUpdate?.(dt, this.camera.position, this.perfHud?.fps);
+    this.tickLod(dt);
 
     this.cameraDirector?.update(this.cameraState(), dt);
     for (const h of this.highlights) h.update(dt);
@@ -3289,6 +3297,7 @@ class ChapterOnePlaceholderScene implements IScene {
     this.unsubForage?.();
     this.forageBtnEl?.remove();
     this.berryBushes?.dispose();
+    this.worldLod.clear();
     this.chaseSkipUnsub?.();
     this.chaseTickFn = null;
     this.chaseDressing?.dispose();

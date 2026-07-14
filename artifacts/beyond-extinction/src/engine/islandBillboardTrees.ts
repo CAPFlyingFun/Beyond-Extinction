@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { loadTexture } from "./assets";
-import { TREE_RANGE_M, type GraphicsQuality } from "./Settings";
+import { TREE_RANGE_M } from "./Settings";
 import {
   beachHeight,
   ISLAND_CENTER,
@@ -164,52 +164,19 @@ function billboardMaterial(
 
 export interface IslandTrees {
   group: THREE.Group;
-  /** Set the graphics-quality preset (fixed tier distance, or "auto"). */
-  setQuality(q: GraphicsQuality): void;
-  /** Advance wind + LOD. `fps` (smoothed) is only used in "auto". Returns the
-   *  current fade-end distance in metres. */
-  update(dt: number, camPos: THREE.Vector3, fps?: number): number;
+  /** Advance wind + apply the LOD band. `fadeEndM` is the draw distance in
+   *  metres, owned by the LodManager (a single source of truth for the scene). */
+  update(dt: number, camPos: THREE.Vector3, fadeEndM?: number): void;
   count: number;
-}
-
-/** "auto" framerate → tree fade-end distance (metres), anchored to the fixed
- *  tier distances so Auto glides through the same values by framerate:
- *  ≤20 fps → 50 (minimal), 30 → 80 (low), 40 → 120 (medium), 50 → 175
- *  (medium-high), 60 → 225 (high), ≥72 → 300 (ultra). Lerped between. */
-const AUTO_ANCHORS: ReadonlyArray<readonly [number, number]> = [
-  [20, TREE_RANGE_M.minimal],
-  [30, TREE_RANGE_M.low],
-  [40, TREE_RANGE_M.medium],
-  [50, TREE_RANGE_M["medium-high"]],
-  [60, TREE_RANGE_M.high],
-  [72, TREE_RANGE_M.ultra],
-];
-
-function autoRangeForFps(fps: number): number {
-  if (fps <= AUTO_ANCHORS[0][0]) return AUTO_ANCHORS[0][1];
-  for (let i = 1; i < AUTO_ANCHORS.length; i++) {
-    const [f1, d1] = AUTO_ANCHORS[i];
-    if (fps <= f1) {
-      const [f0, d0] = AUTO_ANCHORS[i - 1];
-      return d0 + (d1 - d0) * ((fps - f0) / (f1 - f0));
-    }
-  }
-  return AUTO_ANCHORS[AUTO_ANCHORS.length - 1][1];
-}
-
-/** Target fade-end distance (metres) for a quality setting. */
-function rangeForQuality(q: GraphicsQuality, fps: number): number {
-  return q === "auto" ? autoRangeForFps(fps) : TREE_RANGE_M[q];
 }
 
 export async function loadIslandBillboardTrees(): Promise<IslandTrees> {
   const group = new THREE.Group();
   group.name = "island-billboard-trees";
   const uTime = { value: 0 };
-  // LOD band (metres), shared by every species material. Driven by the quality
-  // preset; update() eases uFadeEnd toward the tier (or fps-mapped) target and
-  // keeps trees solid to 75% of it, dithering out over the far 25%.
-  let quality: GraphicsQuality = "high";
+  // LOD band (metres), shared by every species material. The fade-end is handed
+  // in each frame by the LodManager; trees stay solid to 75% of it and dither
+  // out over the far 25%.
   const uFadeEnd = { value: TREE_RANGE_M.high };
   const uFadeStart = { value: uFadeEnd.value * 0.75 };
 
@@ -303,30 +270,23 @@ export async function loadIslandBillboardTrees(): Promise<IslandTrees> {
   return {
     group,
     count,
-    setQuality(q: GraphicsQuality) {
-      quality = q;
-    },
-    update(dt: number, camPos: THREE.Vector3, fps = 60): number {
+    update(dt: number, camPos: THREE.Vector3, fadeEndM = TREE_RANGE_M.high): void {
       uTime.value += dt;
 
-      // Target fade-end from the quality preset (a fixed tier distance, or the
-      // fps-mapped distance for "auto"). Ease toward it (~1 s time constant) so
-      // switching tiers — or, in Auto, a wandering framerate — doesn't pop.
-      const target = rangeForQuality(quality, fps);
-      const k = dt > 0 ? 1 - Math.exp(-dt / 1.0) : 1;
-      uFadeEnd.value += (target - uFadeEnd.value) * k;
-      uFadeStart.value = uFadeEnd.value * 0.75; // solid to 75%, dither the far 25%
+      // The LodManager owns the draw distance (already eased); trees just apply
+      // it: solid to 75% of the range, dithering out over the far 25%.
+      uFadeEnd.value = fadeEndM;
+      uFadeStart.value = fadeEndM * 0.75;
 
       // Cull a whole chunk only once its entire bounding sphere is past the fade
       // end, so nothing that could still be drawing ever pops out.
-      const rangeU = uFadeEnd.value / METERS_PER_UNIT;
+      const rangeU = fadeEndM / METERS_PER_UNIT;
       for (const c of chunks) {
         const dx = c.center.x - camPos.x;
         const dz = c.center.z - camPos.z;
         const lim = rangeU + c.radius;
         c.im.visible = dx * dx + dz * dz < lim * lim;
       }
-      return uFadeEnd.value;
     },
   };
 }

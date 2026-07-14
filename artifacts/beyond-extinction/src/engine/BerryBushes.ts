@@ -1,24 +1,28 @@
 import * as THREE from "three";
 import { beachHeight, METERS_PER_UNIT } from "./beachTerrain";
+import { loadTexture } from "./assets";
+import type { LodManager } from "./LodManager";
 
 /**
- * BerryBushes — cheap procedural forage bushes for the island survival loop.
+ * BerryBushes — textured billboard forage bushes for the island survival loop.
  *
- * Each bush is a cluster of dark-green flat-shaded blobs with a handful of
- * berry spheres dotted over the foliage. Walking up to a RIPE bush shows the
- * contextual "Forage" button (wired by the scene, mirroring the Feed button);
- * foraging hides the berries and starts a regrow cooldown, after which the
- * berries pop back. Purely set-dressing physics-wise — bushes never collide,
- * so they can sit near story lanes without trapping anyone.
+ * Each bush is three crossed camera-independent quads (a "star" impostor, so it
+ * reads as a 3-D mound from any angle without billboarding) cut from a painted
+ * blueberry-bush texture. A RIPE bush shows the berry texture; foraging swaps it
+ * to the berry-less "bare" texture and starts a regrow cooldown. Bushes never
+ * collide, so they can sit near story lanes without trapping anyone, and they
+ * register with the LodManager so they cull with the global draw distance.
  */
 
 interface Bush {
   group: THREE.Group;
-  berries: THREE.Group;
+  meshes: THREE.Mesh[];
   x: number;
   z: number;
+  ripe: boolean;
   /** Seconds until the berries regrow; 0 = ripe now. */
   cooldown: number;
+  unregister?: () => void;
 }
 
 const REGROW_SECS = 90;
@@ -30,26 +34,37 @@ export class BerryBushes {
   readonly group = new THREE.Group();
 
   private readonly bushes: Bush[] = [];
-  private readonly leafGeo: THREE.IcosahedronGeometry;
-  private readonly leafMat: THREE.MeshStandardMaterial;
-  private readonly berryGeo: THREE.SphereGeometry;
-  private readonly berryMat: THREE.MeshStandardMaterial;
+  private readonly quad: THREE.PlaneGeometry;
+  private readonly ripeMat: THREE.MeshBasicMaterial;
+  private readonly bareMat: THREE.MeshBasicMaterial;
 
-  constructor() {
+  constructor(private readonly lod?: LodManager) {
     this.group.name = "berry-bushes";
-    this.leafGeo = new THREE.IcosahedronGeometry(1, 1);
-    this.leafMat = new THREE.MeshStandardMaterial({
-      color: 0x2c5b2a,
-      roughness: 0.95,
-      flatShading: true,
-    });
-    this.berryGeo = new THREE.SphereGeometry(0.3, 8, 8);
-    this.berryMat = new THREE.MeshStandardMaterial({
-      color: 0x5a4fcf,
-      roughness: 0.35,
-      emissive: 0x1a1060,
-      emissiveIntensity: 0.35,
-    });
+    // Bottom-pivoted unit quad so instance placement plants the base on terrain.
+    this.quad = new THREE.PlaneGeometry(1, 1);
+    this.quad.translate(0, 0.5, 0);
+    const mk = (): THREE.MeshBasicMaterial =>
+      new THREE.MeshBasicMaterial({
+        alphaTest: 0.5,
+        side: THREE.DoubleSide,
+        transparent: false,
+        fog: true,
+      });
+    this.ripeMat = mk();
+    this.bareMat = mk();
+    // Painted textures (bled to kill black-edge halos, like the trees). Loaded
+    // async; the quads exist immediately and get their map when it decodes.
+    void this.loadTex("assets/foliage/bush-ripe.png", this.ripeMat);
+    void this.loadTex("assets/foliage/bush-bare.png", this.bareMat);
+  }
+
+  private async loadTex(rel: string, mat: THREE.MeshBasicMaterial): Promise<void> {
+    const tex = await loadTexture(rel);
+    if (!tex) return;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    mat.map = tex;
+    mat.needsUpdate = true;
   }
 
   /** Plant a bush at world XZ (terrain height sampled here). */
@@ -57,42 +72,29 @@ export class BerryBushes {
     const g = new THREE.Group();
     const rand = mulberry(seed * 7919 + this.bushes.length * 104729 + 13);
 
-    // Foliage: 4–5 overlapping blobs, ~1.2 m tall in world units.
-    const blobCount = 4 + Math.floor(rand() * 2);
-    const H = 1.2 / METERS_PER_UNIT; // bush height in units
-    for (let i = 0; i < blobCount; i++) {
-      const r = H * (0.34 + rand() * 0.22);
-      const blob = new THREE.Mesh(this.leafGeo, this.leafMat);
-      blob.scale.setScalar(r);
-      blob.position.set(
-        (rand() - 0.5) * H * 0.9,
-        r * 0.8 + rand() * H * 0.35,
-        (rand() - 0.5) * H * 0.9,
-      );
-      blob.castShadow = true;
-      g.add(blob);
+    // Three crossed quads at 60° give volume from any viewing angle.
+    const size = (1.25 + rand() * 0.5) / METERS_PER_UNIT; // ~1.25–1.75 m
+    const meshes: THREE.Mesh[] = [];
+    for (let i = 0; i < 3; i++) {
+      const m = new THREE.Mesh(this.quad, this.ripeMat);
+      m.scale.set(size, size, 1);
+      m.rotation.y = (i / 3) * Math.PI + rand() * 0.3;
+      m.castShadow = false; // flat cards cast unconvincing shadows
+      meshes.push(m);
+      g.add(m);
     }
 
-    // Berries: a dozen small spheres dotted over the canopy, toggled as one.
-    const berries = new THREE.Group();
-    for (let i = 0; i < 12; i++) {
-      const b = new THREE.Mesh(this.berryGeo, this.berryMat);
-      const a = rand() * Math.PI * 2;
-      const rr = H * (0.35 + rand() * 0.35);
-      b.scale.setScalar(0.14 / METERS_PER_UNIT / 0.3); // ~14 cm berries
-      b.position.set(
-        Math.cos(a) * rr,
-        H * (0.45 + rand() * 0.55),
-        Math.sin(a) * rr,
-      );
-      berries.add(b);
-    }
-    g.add(berries);
-
-    g.position.set(x, beachHeight(x, z), z);
-    g.rotation.y = rand() * Math.PI * 2;
+    g.position.set(x, beachHeight(x, z) - 0.15 / METERS_PER_UNIT, z);
     this.group.add(g);
-    this.bushes.push({ group: g, berries, x, z, cooldown: 0 });
+    const bush: Bush = { group: g, meshes, x, z, ripe: true, cooldown: 0 };
+    // Ground detail: cull a touch earlier than the full world range (0.7×).
+    bush.unregister = this.lod?.register(g, {
+      x,
+      z,
+      radius: size,
+      rangeScale: 0.7,
+    });
+    this.bushes.push(bush);
   }
 
   /** Tick regrow cooldowns (cheap — a few numbers). */
@@ -102,9 +104,16 @@ export class BerryBushes {
       bush.cooldown -= dt;
       if (bush.cooldown <= 0) {
         bush.cooldown = 0;
-        bush.berries.visible = true;
+        this.setRipe(bush, true);
       }
     }
+  }
+
+  private setRipe(bush: Bush, ripe: boolean): void {
+    if (bush.ripe === ripe) return;
+    bush.ripe = ripe;
+    const mat = ripe ? this.ripeMat : this.bareMat;
+    for (const m of bush.meshes) m.material = mat;
   }
 
   /** Index of the nearest RIPE bush within `rangeU` world units, or -1. */
@@ -131,21 +140,23 @@ export class BerryBushes {
     return b ? { x: b.x, z: b.z } : null;
   }
 
-  /** Strip a ripe bush (hides berries, starts regrow). False if not ripe. */
+  /** Strip a ripe bush (swaps to the bare texture, starts regrow). False if not ripe. */
   forage(index: number): boolean {
     const bush = this.bushes[index];
     if (!bush || bush.cooldown > 0) return false;
     bush.cooldown = REGROW_SECS;
-    bush.berries.visible = false;
+    this.setRipe(bush, false);
     return true;
   }
 
   dispose(): void {
+    for (const b of this.bushes) b.unregister?.();
     this.group.removeFromParent();
-    this.leafGeo.dispose();
-    this.leafMat.dispose();
-    this.berryGeo.dispose();
-    this.berryMat.dispose();
+    this.quad.dispose();
+    this.ripeMat.map?.dispose();
+    this.bareMat.map?.dispose();
+    this.ripeMat.dispose();
+    this.bareMat.dispose();
     this.bushes.length = 0;
   }
 }
