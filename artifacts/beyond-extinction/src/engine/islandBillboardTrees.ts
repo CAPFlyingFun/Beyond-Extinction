@@ -202,7 +202,7 @@ export async function loadIslandBillboardTrees(): Promise<IslandTrees> {
   // Adaptive LOD band (metres), shared by every species material. Start optimistic
   // (a full 60 fps range); update() eases it toward the framerate-mapped target.
   const uFadeEnd = { value: rangeForFps(60) };
-  const uFadeStart = { value: uFadeEnd.value * 0.4 };
+  const uFadeStart = { value: uFadeEnd.value * 0.75 };
 
   // Unit quad, pivot at bottom-centre so instance placement plants the base.
   const quad = new THREE.PlaneGeometry(1, 1);
@@ -308,7 +308,7 @@ export async function loadIslandBillboardTrees(): Promise<IslandTrees> {
         const k = dt > 0 ? 1 - Math.exp(-dt / 1.0) : 1;
         uFadeEnd.value += (target - uFadeEnd.value) * k;
       }
-      uFadeStart.value = uFadeEnd.value * 0.4; // near 40% stays fully opaque
+      uFadeStart.value = uFadeEnd.value * 0.75; // solid to 75%, dither only the far 25%
 
       // Cull a whole chunk only once its entire bounding sphere is past the fade
       // end, so nothing that could still be drawing ever pops out.

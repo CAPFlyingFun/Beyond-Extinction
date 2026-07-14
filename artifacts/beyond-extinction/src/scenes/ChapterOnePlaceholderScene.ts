@@ -319,9 +319,15 @@ class ChapterOnePlaceholderScene implements IScene {
       0.107,
       60000,
     );
-    // On-screen fps readout (and the smoothed-fps source for the tree LOD).
+    // Smoothed-fps source for the adaptive tree LOD. The visible counter is off
+    // by default — add ?fps=1 to the URL to show it for performance tuning.
     // Guarded so headless/test contexts without a DOM don't throw.
-    if (typeof document !== "undefined") this.perfHud = new PerfHud();
+    if (typeof document !== "undefined") {
+      const showFps =
+        typeof location !== "undefined" &&
+        new URLSearchParams(location.search).get("fps") === "1";
+      this.perfHud = new PerfHud(showFps);
+    }
   }
 
   async enter(): Promise<void> {
