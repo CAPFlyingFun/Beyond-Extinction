@@ -1,6 +1,25 @@
 import * as THREE from "three";
 import { MarkerStore, type MarkerDef } from "./MarkerStore";
 import { MARKER_TYPES, buildMarkerObject, markerLabel } from "./markerCatalog";
+import { CH0203_MARKER_IDS } from "./cinematic/markers";
+
+/** Suggested marker names offered as autocomplete (story-critical ids first).
+ *  Naming a marker one of these is what lets the game wire behaviour to it. */
+const SUGGESTED_NAMES: string[] = [
+  ...CH0203_MARKER_IDS,
+  // Ch02–03 beat checkpoints (see the build spec's coordinate table).
+  "beat_2.2.A",
+  "beat_2.2.C",
+  "beat_2.5.A",
+  "beat_2.6.A",
+  "beat_2.6.C",
+  "beat_3.2.A",
+  "beat_3.3.B",
+  "beat_3.4.A",
+  "beat_3.3.C",
+  "beat_3.5.A",
+  "beat_3.5.B",
+];
 
 /**
  * In-game Marker Editor — the ARK-style "lay down spawn points and objects"
@@ -70,6 +89,7 @@ export class MarkerEditor {
   private root?: HTMLDivElement;
   private countEl?: HTMLSpanElement;
   private selEl?: HTMLDivElement;
+  private listEl?: HTMLDivElement;
   private raycaster = new THREE.Raycaster();
 
   constructor(private deps: MarkerEditorDeps) {}
@@ -196,6 +216,7 @@ export class MarkerEditor {
     const def: MarkerDef = {
       id: MarkerStore.newId(),
       type: this.selectedType,
+      name: "",
       x: round(point.x),
       y: round(point.y),
       z: round(point.z),
@@ -206,6 +227,39 @@ export class MarkerEditor {
     this.spawnLive(def);
     this.select(def.id);
     this.markDirty();
+  }
+
+  /** Rename the selected marker (the key the game wires behaviour to). */
+  private renameSelected(name: string): void {
+    const def = this.working.find((m) => m.id === this.selectedId);
+    if (!def) return;
+    def.name = name.trim();
+    this.markDirty();
+    this.refreshList();
+  }
+
+  /** Set one world-axis of the selected marker from a numeric field, live. */
+  private setAxis(axis: "x" | "y" | "z", value: number): void {
+    if (!this.selectedId || !Number.isFinite(value)) return;
+    const def = this.working.find((m) => m.id === this.selectedId);
+    const obj = this.objById.get(this.selectedId);
+    if (!def || !obj) return;
+    def[axis] = round(value);
+    obj.position.set(def.x, def.y, def.z);
+    this.boxHelper?.update();
+    this.markDirty();
+    this.refreshList();
+  }
+
+  /** Select a marker AND fly the editor camera to look at it (list-click). */
+  private focusMarker(id: string): void {
+    this.select(id);
+    const def = this.working.find((m) => m.id === id);
+    if (!def) return;
+    // Sit back-and-up from the marker, looking at it.
+    this.cam.position.set(def.x, def.y + 6, def.z + 12);
+    this.yaw = 0;
+    this.pitch = -0.35;
   }
 
   private select(id: string | null): void {
@@ -219,6 +273,7 @@ export class MarkerEditor {
       }
     }
     this.refreshSelPanel();
+    this.refreshList();
   }
 
   private deleteSelected(): void {
@@ -257,6 +312,7 @@ export class MarkerEditor {
   private markDirty(): void {
     this.dirty = true;
     if (this.countEl) this.countEl.textContent = `${this.working.length} marker(s) · unsaved`;
+    this.refreshList();
   }
 
   private saveScene(): void {
@@ -428,16 +484,19 @@ export class MarkerEditor {
         <button data-move="d">▶</button>
       </div>
       <div class="be-med__sel"></div>
+      <div class="be-med__list"></div>
       <div class="be-med__actions">
         <button data-act="save">Save</button>
         <button data-act="export">Export JSON</button>
         <button data-act="revert">Revert</button>
       </div>
-      <div class="be-med__hint">Drag to look · WASD/Q/E to fly · tap ground to place · tap a marker to select</div>`;
+      <div class="be-med__hint">Drag to look · WASD/Q/E to fly · tap ground to place · tap a marker or list row to select · name markers to wire them</div>
+      <datalist id="be-med-names">${SUGGESTED_NAMES.map((n) => `<option value="${n}"></option>`).join("")}</datalist>`;
     this.deps.uiLayer.appendChild(el);
     this.root = el;
     this.countEl = el.querySelector<HTMLSpanElement>(".be-med__count") ?? undefined;
     this.selEl = el.querySelector<HTMLDivElement>(".be-med__sel") ?? undefined;
+    this.listEl = el.querySelector<HTMLDivElement>(".be-med__list") ?? undefined;
     if (this.countEl) this.countEl.textContent = `${this.working.length} marker(s)`;
 
     el.querySelectorAll<HTMLButtonElement>(".be-med__type").forEach((btn) => {
@@ -467,6 +526,48 @@ export class MarkerEditor {
     el.querySelector('[data-act="export"]')?.addEventListener("click", () => void this.exportScene());
     el.querySelector('[data-act="revert"]')?.addEventListener("click", () => this.revert());
     this.refreshSelPanel();
+    this.refreshList();
+  }
+
+  /** The browsable list of all placed markers: name/type + coords, sorted by
+   *  name (named first). Click a row to select + fly to it; ✕ removes it. */
+  private refreshList(): void {
+    if (!this.listEl) return;
+    const rows = [...this.working].sort((a, b) => {
+      const an = a.name || "";
+      const bn = b.name || "";
+      if (an && !bn) return -1;
+      if (!an && bn) return 1;
+      return an.localeCompare(bn) || a.id.localeCompare(b.id);
+    });
+    if (!rows.length) {
+      this.listEl.innerHTML = `<span class="be-med__selnone">No markers yet — tap the ground to place one</span>`;
+      return;
+    }
+    this.listEl.innerHTML = rows
+      .map((m) => {
+        const nm = m.name ? escapeHtml(m.name) : `<i>(${markerLabel(m.type)})</i>`;
+        const sel = m.id === this.selectedId ? " on" : "";
+        return `<div class="be-med__row${sel}" data-id="${m.id}">
+          <span class="be-med__rowname">${nm}</span>
+          <span class="be-med__rowxyz">${m.x.toFixed(0)}, ${m.y.toFixed(0)}, ${m.z.toFixed(0)}</span>
+          <button class="be-med__rowdel" data-del="${m.id}" title="Remove">✕</button>
+        </div>`;
+      })
+      .join("");
+    this.listEl.querySelectorAll<HTMLElement>(".be-med__row").forEach((row) => {
+      row.addEventListener("click", (e) => {
+        if ((e.target as HTMLElement).dataset.del) return; // handled below
+        this.focusMarker(row.dataset.id!);
+      });
+    });
+    this.listEl.querySelectorAll<HTMLButtonElement>(".be-med__rowdel").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.select(btn.dataset.del!);
+        this.deleteSelected();
+      });
+    });
   }
 
   private refreshSelPanel(): void {
@@ -478,12 +579,30 @@ export class MarkerEditor {
     const def = this.working.find((m) => m.id === this.selectedId);
     if (!def) return;
     this.selEl.innerHTML = `
-      <span class="be-med__selname">${markerLabel(def.type)}</span>
-      <button data-sel="rotL">⟲</button>
-      <button data-sel="rotR">⟳</button>
-      <button data-sel="up">＋</button>
-      <button data-sel="down">－</button>
-      <button data-sel="del" class="be-med__del">Delete</button>`;
+      <div class="be-med__selrow">
+        <span class="be-med__selname">${markerLabel(def.type)}</span>
+        <input class="be-med__name" list="be-med-names" placeholder="name (e.g. sarah_body)"
+               value="${escapeHtml(def.name ?? "")}" spellcheck="false" autocapitalize="off" />
+      </div>
+      <div class="be-med__xyz">
+        <label>X<input type="number" step="0.5" data-axis="x" value="${def.x}" /></label>
+        <label>Y<input type="number" step="0.5" data-axis="y" value="${def.y}" /></label>
+        <label>Z<input type="number" step="0.5" data-axis="z" value="${def.z}" /></label>
+      </div>
+      <div class="be-med__selbtns">
+        <button data-sel="rotL" title="Rotate">⟲</button>
+        <button data-sel="rotR" title="Rotate">⟳</button>
+        <button data-sel="up" title="Scale up">＋</button>
+        <button data-sel="down" title="Scale down">－</button>
+        <button data-sel="del" class="be-med__del">Delete</button>
+      </div>`;
+    const nameInput = this.selEl.querySelector<HTMLInputElement>(".be-med__name");
+    nameInput?.addEventListener("change", () => this.renameSelected(nameInput.value));
+    this.selEl.querySelectorAll<HTMLInputElement>("[data-axis]").forEach((inp) => {
+      inp.addEventListener("change", () =>
+        this.setAxis(inp.dataset.axis as "x" | "y" | "z", parseFloat(inp.value)),
+      );
+    });
     this.selEl.querySelector('[data-sel="rotL"]')?.addEventListener("click", () => this.nudgeSelected("rotL"));
     this.selEl.querySelector('[data-sel="rotR"]')?.addEventListener("click", () => this.nudgeSelected("rotR"));
     this.selEl.querySelector('[data-sel="up"]')?.addEventListener("click", () => this.nudgeSelected("up"));
@@ -506,6 +625,14 @@ export class MarkerEditor {
 // ── helpers ────────────────────────────────────────────────────────────────────
 function round(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 /** Walk up from a hit object to the tagged marker root, or null if not a marker. */

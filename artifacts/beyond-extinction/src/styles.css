@@ -2112,6 +2112,49 @@ body {
 }
 .be-med__selnone { opacity: 0.5; }
 .be-med__del { color: #ff9a9a !important; border-color: rgba(255, 120, 120, 0.5) !important; }
+
+/* Enriched selection panel: name + x/y/z fields stack vertically. */
+.be-med__sel { flex-direction: column; align-items: stretch; gap: 6px; min-width: 250px; }
+.be-med__selrow { display: flex; align-items: center; gap: 8px; }
+.be-med__name {
+  flex: 1; min-width: 0; height: 30px; padding: 0 8px; border-radius: 7px;
+  background: rgba(255, 255, 255, 0.09); border: 1px solid rgba(120, 200, 255, 0.4);
+  color: #eaf4ff; font: inherit; font-size: 13px;
+}
+.be-med__xyz { display: flex; gap: 6px; }
+.be-med__xyz label {
+  flex: 1; display: flex; align-items: center; gap: 4px;
+  font-size: 12px; opacity: 0.8;
+}
+.be-med__xyz input {
+  width: 100%; min-width: 0; height: 28px; padding: 0 6px; border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #eaf4ff; font: inherit; font-size: 12px;
+}
+.be-med__selbtns { display: flex; gap: 6px; justify-content: center; }
+
+/* Marker list — right-hand browsable/sortable panel. */
+.be-med__list {
+  position: absolute;
+  right: 12px; top: 128px; bottom: 92px; width: 236px;
+  overflow-y: auto; display: flex; flex-direction: column; gap: 4px;
+  padding: 8px; border-radius: 10px;
+  background: rgba(8, 14, 20, 0.86); border: 1px solid rgba(120, 200, 255, 0.24);
+}
+.be-med__row {
+  display: flex; align-items: center; gap: 6px; cursor: pointer;
+  padding: 5px 7px; border-radius: 7px;
+  background: rgba(255, 255, 255, 0.05); border: 1px solid transparent;
+}
+.be-med__row.on { border-color: rgba(255, 225, 74, 0.85); background: rgba(255, 225, 74, 0.12); }
+.be-med__rowname { flex: 1; min-width: 0; font-size: 12px; color: #eaf4ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.be-med__rowname i { opacity: 0.5; }
+.be-med__rowxyz { font-size: 10px; opacity: 0.55; font-variant-numeric: tabular-nums; }
+.be-med__rowdel {
+  width: 22px; height: 22px; flex: none; border-radius: 6px; cursor: pointer;
+  background: rgba(255, 120, 120, 0.12); border: 1px solid rgba(255, 120, 120, 0.4);
+  color: #ff9a9a; font-size: 12px; line-height: 1;
+}
 .be-med__actions {
   position: absolute;
   left: 12px; bottom: 40px;

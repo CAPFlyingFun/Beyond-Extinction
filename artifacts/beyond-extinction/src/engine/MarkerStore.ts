@@ -27,6 +27,9 @@ export interface MarkerDef {
   id: string;
   /** Catalogue type key (see markerCatalog) — decides the mesh + meaning. */
   type: string;
+  /** Author-given name, e.g. "sarah_body" or "jump over ravine". Optional, but
+   *  this is the key the game wires behaviour to (cinematic markers, quests). */
+  name?: string;
   x: number;
   y: number;
   z: number;
@@ -69,6 +72,12 @@ class MarkerStoreImpl {
   /** True once this scene has been edited locally (drives "unsaved" hints). */
   hasLocalEdits(sceneId: string): boolean {
     return Array.isArray(this.local[sceneId]);
+  }
+
+  /** First marker in a scene with the given author name (for wiring by name). */
+  byName(sceneId: string, name: string): MarkerDef | undefined {
+    const m = this.forScene(sceneId).find((d) => d.name === name);
+    return m ? { ...m } : undefined;
   }
 
   /** Replace a scene's markers in the local layer and persist to localStorage. */
