@@ -31,6 +31,15 @@ export interface GameplaySettings {
   /** Which screen corner the island minimap sits in. */
   minimapCorner: MinimapCorner;
   /**
+   * Graphics quality preset. Each fixed tier pins the billboard forest's draw
+   * distance (the range at which a tree has fully faded to 0). "auto" instead
+   * scales that distance with the live framerate between the minimal and ultra
+   * tiers. See TREE_RANGE_M.
+   */
+  graphicsQuality: GraphicsQuality;
+  /** Show the small on-screen FPS readout (top-left). Off by default. */
+  showFps: boolean;
+  /**
    * Custom HUD layout (CODM-style): per-element placement overrides saved from
    * the HUD editor. Key = HUD element id; value = the element's centre point as
    * a percentage of the viewport plus a scale factor. Elements without an entry
@@ -46,6 +55,51 @@ export interface GameplaySettings {
  */
 export type MinimapCorner = "tl" | "tr";
 export const MINIMAP_CORNERS: readonly MinimapCorner[] = ["tl", "tr"];
+
+/**
+ * Graphics quality presets. The value each fixed tier maps to is the tree
+ * draw distance in metres — the range at which a billboard tree has faded fully
+ * to 0 alpha (nearer trees are always solid). "auto" scales between the minimal
+ * (50 m) and ultra (300 m) distances with the measured framerate.
+ */
+export type GraphicsQuality =
+  | "minimal"
+  | "low"
+  | "medium"
+  | "medium-high"
+  | "high"
+  | "ultra"
+  | "auto";
+export const GRAPHICS_QUALITIES: readonly GraphicsQuality[] = [
+  "minimal",
+  "low",
+  "medium",
+  "medium-high",
+  "high",
+  "ultra",
+  "auto",
+];
+/** Fixed tree fade-out distance (metres) per fixed tier. "auto" is computed. */
+export const TREE_RANGE_M: Record<Exclude<GraphicsQuality, "auto">, number> = {
+  minimal: 50,
+  low: 80,
+  medium: 120,
+  "medium-high": 175,
+  high: 225,
+  ultra: 300,
+};
+/** "auto" scales the draw distance across this range by framerate. */
+export const TREE_RANGE_AUTO = { min: TREE_RANGE_M.minimal, max: TREE_RANGE_M.ultra } as const;
+/** Human-readable labels for the quality picker. */
+export const GRAPHICS_QUALITY_LABELS: Record<GraphicsQuality, string> = {
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  "medium-high": "Medium-High",
+  high: "High",
+  ultra: "Ultra",
+  auto: "Auto (by FPS)",
+};
 
 /** HUD elements the layout editor can move/scale. Each id is one draggable
  *  CLUSTER (whole vitals column, whole action ring…), not every tiny piece —
@@ -102,6 +156,9 @@ const DEFAULTS: GameplaySettings = {
   subtitles: false,
   // Top-right by default: the quest/objective card owns the top-left.
   minimapCorner: "tr",
+  // A full forest out of the box; weaker devices can drop this or pick Auto.
+  graphicsQuality: "high",
+  showFps: false,
   hudLayout: {},
 };
 
@@ -142,6 +199,10 @@ function sanitize(raw: Partial<GameplaySettings>): GameplaySettings {
     minimapCorner: MINIMAP_CORNERS.includes(raw.minimapCorner as MinimapCorner)
       ? (raw.minimapCorner as MinimapCorner)
       : DEFAULTS.minimapCorner,
+    graphicsQuality: GRAPHICS_QUALITIES.includes(raw.graphicsQuality as GraphicsQuality)
+      ? (raw.graphicsQuality as GraphicsQuality)
+      : DEFAULTS.graphicsQuality,
+    showFps: typeof raw.showFps === "boolean" ? raw.showFps : DEFAULTS.showFps,
     hudLayout: sanitizeHudLayout(raw.hudLayout),
   };
 }

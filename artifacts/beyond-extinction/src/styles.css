@@ -1079,6 +1079,22 @@ body {
   border-color: rgba(120, 200, 255, 0.7);
   color: #fff;
 }
+.be-select {
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #dfe9f5;
+  font-family: "Inter", sans-serif;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.be-select option {
+  color: #101418;
+}
 .be-field input[type="range"] {
   -webkit-appearance: none;
   appearance: none;

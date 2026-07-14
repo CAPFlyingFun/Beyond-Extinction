@@ -20,6 +20,7 @@ import {
   getSettings,
   subscribeSettings,
   type GameplaySettings,
+  type GraphicsQuality,
 } from "../engine/Settings";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 import { closeHudEditor, setHudEditorContext } from "../engine/HudEditor";
@@ -114,8 +115,12 @@ class ChapterOnePlaceholderScene implements IScene {
   // Wind + adaptive-LOD tick for the instanced tree species. Takes the smoothed
   // fps (from perfHud) so the forest draw range tracks the framerate.
   private treesUpdate?: (dt: number, camPos: THREE.Vector3, fps?: number) => number;
+  // Set the forest's graphics-quality preset (fixed tier distance or "auto").
+  private treesSetQuality?: (q: GraphicsQuality) => void;
   // On-screen framerate readout; also the source of the smoothed fps above.
   private perfHud?: PerfHud;
+  // Forced on by ?fps=1 regardless of the Show FPS setting (dev convenience).
+  private fpsForced = false;
   // Sun with a player-following shadow frustum (see updateSun). The shadow box
   // is tight (~140 m) because a directional shadow can't span the 8 km island.
   private sun?: THREE.DirectionalLight;
@@ -319,14 +324,14 @@ class ChapterOnePlaceholderScene implements IScene {
       0.107,
       60000,
     );
-    // Smoothed-fps source for the adaptive tree LOD. The visible counter is off
-    // by default — add ?fps=1 to the URL to show it for performance tuning.
-    // Guarded so headless/test contexts without a DOM don't throw.
+    // Smoothed-fps source for the tree LOD (used by "Auto" quality) + the
+    // optional on-screen readout. ?fps=1 forces it on regardless of the setting;
+    // otherwise the Show FPS setting controls it. Guarded for headless/tests.
     if (typeof document !== "undefined") {
-      const showFps =
+      this.fpsForced =
         typeof location !== "undefined" &&
         new URLSearchParams(location.search).get("fps") === "1";
-      this.perfHud = new PerfHud(showFps);
+      this.perfHud = new PerfHud(this.fpsForced || this.settings.showFps);
     }
   }
 
@@ -647,6 +652,8 @@ class ChapterOnePlaceholderScene implements IScene {
     this.unsubSettings = subscribeSettings((s) => {
       this.settings = s;
       this.applyFov();
+      this.treesSetQuality?.(s.graphicsQuality);
+      this.perfHud?.setVisible(this.fpsForced || s.showFps);
       this.maybeAutoAdvance();
     });
     this.buildSettingsButton();
@@ -2433,6 +2440,8 @@ class ChapterOnePlaceholderScene implements IScene {
     if (this.disposed) return;
     this.scene.add(trees.group);
     this.treesUpdate = trees.update;
+    this.treesSetQuality = trees.setQuality;
+    trees.setQuality(this.settings.graphicsQuality);
     console.info(`[Beyond Extinction] island billboard trees placed: ${trees.count}`);
   }
 

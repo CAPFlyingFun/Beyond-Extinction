@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { loadTexture } from "./assets";
+import { TREE_RANGE_M, type GraphicsQuality } from "./Settings";
 import {
   beachHeight,
   ISLAND_CENTER,
@@ -163,45 +164,53 @@ function billboardMaterial(
 
 export interface IslandTrees {
   group: THREE.Group;
-  /** Advance wind + adaptive LOD. `fps` (smoothed) drives the draw range; when
-   *  omitted a neutral 60 is assumed. Returns the current fade-end in metres. */
+  /** Set the graphics-quality preset (fixed tier distance, or "auto"). */
+  setQuality(q: GraphicsQuality): void;
+  /** Advance wind + LOD. `fps` (smoothed) is only used in "auto". Returns the
+   *  current fade-end distance in metres. */
   update(dt: number, camPos: THREE.Vector3, fps?: number): number;
   count: number;
 }
 
-/** Framerate → tree fade-end distance in metres. Anchor points from the design:
- *  <30 fps → 75 m, ~45 → 130, ~60 → 180, >60 (→75) → 250, lerped smoothly
- *  between. Below 15 fps is handled separately as an emergency snap to 40 m. */
-const FPS_RANGE: ReadonlyArray<readonly [number, number]> = [
-  [15, 75],
-  [30, 75],
-  [45, 130],
-  [60, 180],
-  [75, 250],
+/** "auto" framerate → tree fade-end distance (metres), anchored to the fixed
+ *  tier distances so Auto glides through the same values by framerate:
+ *  ≤20 fps → 50 (minimal), 30 → 80 (low), 40 → 120 (medium), 50 → 175
+ *  (medium-high), 60 → 225 (high), ≥72 → 300 (ultra). Lerped between. */
+const AUTO_ANCHORS: ReadonlyArray<readonly [number, number]> = [
+  [20, TREE_RANGE_M.minimal],
+  [30, TREE_RANGE_M.low],
+  [40, TREE_RANGE_M.medium],
+  [50, TREE_RANGE_M["medium-high"]],
+  [60, TREE_RANGE_M.high],
+  [72, TREE_RANGE_M.ultra],
 ];
 
-function rangeForFps(fps: number): number {
-  if (fps <= FPS_RANGE[0][0]) return FPS_RANGE[0][1];
-  for (let i = 1; i < FPS_RANGE.length; i++) {
-    const [f1, d1] = FPS_RANGE[i];
+function autoRangeForFps(fps: number): number {
+  if (fps <= AUTO_ANCHORS[0][0]) return AUTO_ANCHORS[0][1];
+  for (let i = 1; i < AUTO_ANCHORS.length; i++) {
+    const [f1, d1] = AUTO_ANCHORS[i];
     if (fps <= f1) {
-      const [f0, d0] = FPS_RANGE[i - 1];
+      const [f0, d0] = AUTO_ANCHORS[i - 1];
       return d0 + (d1 - d0) * ((fps - f0) / (f1 - f0));
     }
   }
-  return FPS_RANGE[FPS_RANGE.length - 1][1];
+  return AUTO_ANCHORS[AUTO_ANCHORS.length - 1][1];
 }
 
-const EMERGENCY_FPS = 15; // below this, snap the draw range hard
-const EMERGENCY_RANGE_M = 40; // ...to this many metres, immediately
+/** Target fade-end distance (metres) for a quality setting. */
+function rangeForQuality(q: GraphicsQuality, fps: number): number {
+  return q === "auto" ? autoRangeForFps(fps) : TREE_RANGE_M[q];
+}
 
 export async function loadIslandBillboardTrees(): Promise<IslandTrees> {
   const group = new THREE.Group();
   group.name = "island-billboard-trees";
   const uTime = { value: 0 };
-  // Adaptive LOD band (metres), shared by every species material. Start optimistic
-  // (a full 60 fps range); update() eases it toward the framerate-mapped target.
-  const uFadeEnd = { value: rangeForFps(60) };
+  // LOD band (metres), shared by every species material. Driven by the quality
+  // preset; update() eases uFadeEnd toward the tier (or fps-mapped) target and
+  // keeps trees solid to 75% of it, dithering out over the far 25%.
+  let quality: GraphicsQuality = "high";
+  const uFadeEnd = { value: TREE_RANGE_M.high };
   const uFadeStart = { value: uFadeEnd.value * 0.75 };
 
   // Unit quad, pivot at bottom-centre so instance placement plants the base.
@@ -294,21 +303,19 @@ export async function loadIslandBillboardTrees(): Promise<IslandTrees> {
   return {
     group,
     count,
+    setQuality(q: GraphicsQuality) {
+      quality = q;
+    },
     update(dt: number, camPos: THREE.Vector3, fps = 60): number {
       uTime.value += dt;
 
-      // Adaptive draw range from the framerate. Below EMERGENCY_FPS we SNAP the
-      // range down hard (a framerate collapse should shed distance instantly);
-      // otherwise we ease toward the mapped target (~1 s time constant) so trees
-      // don't visibly pop as the fps wanders across an anchor.
-      if (fps < EMERGENCY_FPS) {
-        uFadeEnd.value = EMERGENCY_RANGE_M;
-      } else {
-        const target = rangeForFps(fps);
-        const k = dt > 0 ? 1 - Math.exp(-dt / 1.0) : 1;
-        uFadeEnd.value += (target - uFadeEnd.value) * k;
-      }
-      uFadeStart.value = uFadeEnd.value * 0.75; // solid to 75%, dither only the far 25%
+      // Target fade-end from the quality preset (a fixed tier distance, or the
+      // fps-mapped distance for "auto"). Ease toward it (~1 s time constant) so
+      // switching tiers — or, in Auto, a wandering framerate — doesn't pop.
+      const target = rangeForQuality(quality, fps);
+      const k = dt > 0 ? 1 - Math.exp(-dt / 1.0) : 1;
+      uFadeEnd.value += (target - uFadeEnd.value) * k;
+      uFadeStart.value = uFadeEnd.value * 0.75; // solid to 75%, dither the far 25%
 
       // Cull a whole chunk only once its entire bounding sphere is past the fade
       // end, so nothing that could still be drawing ever pops out.

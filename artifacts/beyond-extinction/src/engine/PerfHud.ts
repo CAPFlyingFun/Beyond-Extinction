@@ -12,18 +12,15 @@
  * frame, not a spike to 0) so the average — and therefore the LOD — stays calm.
  */
 export class PerfHud {
-  private readonly el: HTMLDivElement | null = null;
+  private el: HTMLDivElement | null = null;
   private fpsEma = 60;
   private acc = 0; // seconds since the last DOM text write (throttled)
 
-  constructor(show = false, parent: HTMLElement = document.body) {
-    if (show) {
-      const el = document.createElement("div");
-      el.className = "be-fps";
-      el.textContent = "-- fps";
-      parent.appendChild(el);
-      this.el = el;
-    }
+  constructor(
+    show = false,
+    private readonly parent: HTMLElement = document.body,
+  ) {
+    if (show) this.setVisible(true);
   }
 
   /** Feed the frame delta (seconds). Cheap; call once per frame. */
@@ -45,7 +42,23 @@ export class PerfHud {
     return this.fpsEma;
   }
 
+  /** Show/hide the readout at runtime (wired to the Show FPS setting). The fps
+   *  is tracked regardless; this only creates/removes the DOM element. */
+  setVisible(v: boolean): void {
+    if (v && !this.el) {
+      const el = document.createElement("div");
+      el.className = "be-fps";
+      el.textContent = `${Math.round(this.fpsEma)} fps`;
+      this.parent.appendChild(el);
+      this.el = el;
+    } else if (!v && this.el) {
+      this.el.remove();
+      this.el = null;
+    }
+  }
+
   dispose(): void {
     this.el?.remove();
+    this.el = null;
   }
 }

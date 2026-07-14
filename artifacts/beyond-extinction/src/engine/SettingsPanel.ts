@@ -6,7 +6,10 @@ import {
   resetSettings,
   setSettings,
   SETTINGS_RANGES,
+  GRAPHICS_QUALITIES,
+  GRAPHICS_QUALITY_LABELS,
   type GameplaySettings,
+  type GraphicsQuality,
 } from "./Settings";
 
 interface OpenOptions {
@@ -92,6 +95,18 @@ export function openSettingsPanel({ parent, audio, onClose, onUnlimitedChange }:
           <button type="button" data-corner="tr">Top Right</button>
         </div>
       </div>
+      <label class="be-field" data-key="graphicsQuality">
+        <span class="be-field__row"><span>Graphics quality (tree detail)</span></span>
+        <select class="be-select"></select>
+      </label>
+      <label class="be-toggle" data-key="showFps">
+        <span class="be-toggle__text">
+          <span class="be-toggle__title">Show FPS</span>
+          <span class="be-toggle__hint">Small framerate readout in the top-left corner.</span>
+        </span>
+        <input type="checkbox" />
+        <span class="be-toggle__switch" aria-hidden="true"></span>
+      </label>
       <div class="be-field" data-key="hudLayout">
         <span class="be-field__row"><span>HUD layout</span></span>
         <button type="button" class="be-btn be-btn--wide" data-action="hudedit">Edit HUD Layout</button>
@@ -147,6 +162,37 @@ export function openSettingsPanel({ parent, audio, onClose, onUnlimitedChange }:
   unlimitedInput.addEventListener("change", () => {
     Progression.setUnlimited(unlimitedInput.checked);
     onUnlimitedChange?.(unlimitedInput.checked);
+  });
+
+  // Graphics quality — a preset picker that fixes the tree draw distance (or
+  // "auto" to scale it with the framerate).
+  const qualitySelect = el.querySelector(
+    '[data-key="graphicsQuality"] select',
+  ) as HTMLSelectElement;
+  for (const q of GRAPHICS_QUALITIES) {
+    const opt = document.createElement("option");
+    opt.value = q;
+    opt.textContent = GRAPHICS_QUALITY_LABELS[q];
+    qualitySelect.appendChild(opt);
+  }
+  const syncQuality = (q: GraphicsQuality): void => {
+    qualitySelect.value = q;
+  };
+  syncQuality(getSettings().graphicsQuality);
+  qualitySelect.addEventListener("change", () => {
+    setSettings({ graphicsQuality: qualitySelect.value as GraphicsQuality });
+  });
+
+  // Show FPS — a boolean toggle.
+  const showFpsInput = el.querySelector(
+    '[data-key="showFps"] input',
+  ) as HTMLInputElement;
+  const syncShowFps = (on: boolean): void => {
+    showFpsInput.checked = on;
+  };
+  syncShowFps(getSettings().showFps);
+  showFpsInput.addEventListener("change", () => {
+    setSettings({ showFps: showFpsInput.checked });
   });
 
   // Minimap position — a 4-way corner preset (segmented buttons).
@@ -227,6 +273,8 @@ export function openSettingsPanel({ parent, audio, onClose, onUnlimitedChange }:
     syncAutoPlay(s.autoPlay);
     syncSubtitles(s.subtitles);
     syncCorner(s.minimapCorner);
+    syncQuality(s.graphicsQuality);
+    syncShowFps(s.showFps);
   });
   el.addEventListener("click", (e) => {
     if (e.target === el) close();
