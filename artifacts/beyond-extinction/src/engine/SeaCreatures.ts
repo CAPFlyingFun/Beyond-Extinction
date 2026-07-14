@@ -608,11 +608,9 @@ export class SeaCreatures {
 
   /** Toggle tracking on the creature under the crosshair ray (origin+dir), or
    *  null if the ray misses. Tracked creatures show a label + are never culled. */
-  trackUnderRay(
-    origin: THREE.Vector3,
-    dir: THREE.Vector3,
-    maxM = 140,
-  ): { name: string; tracked: boolean } | null {
+  /** The creature under the crosshair ray, or null — read-only (used to show the
+   *  Track button only when there's actually something to track). */
+  private pickUnderRay(origin: THREE.Vector3, dir: THREE.Vector3, maxM: number): Creature | null {
     const d = dir.clone().normalize();
     const oc = new THREE.Vector3();
     let best: Creature | null = null;
@@ -629,6 +627,25 @@ export class SeaCreatures {
         best = c;
       }
     }
+    return best;
+  }
+
+  /** Peek the creature under the crosshair without changing anything. */
+  creatureUnderRay(
+    origin: THREE.Vector3,
+    dir: THREE.Vector3,
+    maxM = 140,
+  ): { name: string; tracked: boolean } | null {
+    const c = this.pickUnderRay(origin, dir, maxM);
+    return c ? { name: speciesName(c.species.id), tracked: c.tracked } : null;
+  }
+
+  trackUnderRay(
+    origin: THREE.Vector3,
+    dir: THREE.Vector3,
+    maxM = 140,
+  ): { name: string; tracked: boolean } | null {
+    const best = this.pickUnderRay(origin, dir, maxM);
     if (!best) return null;
     best.tracked = !best.tracked;
     return { name: speciesName(best.species.id), tracked: best.tracked };

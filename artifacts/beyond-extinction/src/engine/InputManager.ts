@@ -327,6 +327,9 @@ export class InputManager {
     // relocates the visual anchor, scaling it resizes the live joystick too.
     const joyRest = document.createElement("div");
     joyRest.className = "be-fp-joyrest";
+    // Hidden: the live joystick floats to wherever the thumb lands on the left
+    // half, so a second always-on resting base just read as a dead control.
+    joyRest.style.display = "none";
     layer.appendChild(joyRest);
 
     const joyBase = document.createElement("div");

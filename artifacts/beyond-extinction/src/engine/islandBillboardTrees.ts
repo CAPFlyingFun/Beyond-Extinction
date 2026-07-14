@@ -102,13 +102,12 @@ function billboardMaterial(
         `#include <common>
         uniform float uTime, uSway;
         varying float vOpacity;
-        // Distance fade (metres → opacity): a smooth linear ramp, full at 0 m
-        // to gone at 200 m (i.e. −25% every 50 m). Continuous rather than
-        // stepped so it doesn't band as you move. Applied by an ordered dither
-        // in the fragment shader, so far trees cost fewer pixels while their
-        // silhouette stays readable.
+        // Distance fade (metres → opacity): full out to 60 m, then a smooth
+        // linear ramp to gone at 500 m — far enough that the inland forest reads
+        // as a filled backdrop instead of an empty island, while the ordered
+        // dither in the fragment shader keeps far trees cheap on fill-rate.
         float treeFade(float m) {
-          return clamp(1.0 - m / 200.0, 0.0, 1.0);
+          return clamp(1.0 - (m - 60.0) / 440.0, 0.0, 1.0);
         }`,
       )
       .replace(
@@ -193,7 +192,7 @@ export async function loadIslandBillboardTrees(): Promise<IslandTrees> {
   // calls scale with CHUNK count, not tree count), and the 200 m LOD dither caps
   // how many pixels the far field can cost.
   const PLANT = MAP_SCALE / 5.2;
-  const STEP = 4.5 * PLANT; // ~13 -> 4.5: ~8x denser than the first pass
+  const STEP = 3.5 * PLANT; // denser still (fuller island, per feedback)
   const AX = 150 * MAP_SCALE;
   const CX = ISLAND_CENTER.x;
   const CZ = ISLAND_CENTER.z;

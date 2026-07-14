@@ -888,12 +888,24 @@ class ChapterOnePlaceholderScene implements IScene {
 
   /** Per-frame: drive the Feed prompt + the back-off countdown bar. */
   private updateFeedUI(dt: number, active: boolean): void {
-    // Track button rides along with free-roam play.
-    if (this.trackBtnEl) {
-      this.trackBtnEl.style.display = active ? "block" : "none";
-    }
     // While the interaction menu is open, hide the contextual buttons.
     const menuOpen = this.tameMenuEl?.style.display === "flex";
+    // Track button is CONTEXTUAL — only when a creature is actually under the
+    // crosshair (otherwise it just sat dead-centre over the reticle).
+    if (this.trackBtnEl) {
+      const dir = new THREE.Vector3();
+      const t =
+        active && this.seaCreatures && !menuOpen
+          ? (this.camera.getWorldDirection(dir),
+            this.seaCreatures.creatureUnderRay(this.camera.position, dir))
+          : null;
+      if (t) {
+        this.trackBtnEl.textContent = t.tracked ? "🎯 Untrack" : "🎯 Track";
+        this.trackBtnEl.style.display = "block";
+      } else {
+        this.trackBtnEl.style.display = "none";
+      }
+    }
     // Post-feed window: count the "back off" bar down.
     if (this.feedWindowT > 0) {
       this.feedWindowT -= dt;
