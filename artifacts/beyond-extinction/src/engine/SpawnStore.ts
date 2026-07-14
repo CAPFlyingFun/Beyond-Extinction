@@ -22,7 +22,12 @@ export interface IslandSpawns {
 // north/south — old points would land on the wrong terrain (possibly water).
 // v4: the island grew to 8192 m (Godot parity) — v3 world coords are ~2.4×
 // too small and would drop the player in the wrong place.
-const KEY = "be-island-spawns-v4";
+// v5: retire any point a v4 build persisted. The Chapter 3 chase handback used
+// to write its cave respawn here, which then became the INITIAL spawn every
+// fresh arrival read — so new games started (and flew over) at the cave. The
+// story respawn is now in-memory only; this store is dev-set spawns again, and
+// the bump discards the polluted cave points already saved on devices.
+const KEY = "be-island-spawns-v5";
 
 export const SpawnStore = {
   get(): IslandSpawns {
