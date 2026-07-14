@@ -2510,8 +2510,12 @@ body {
 .be-sh-vital__bar i {
   display: block;
   height: 100%;
+  width: 100%;
   border-radius: 4px;
-  transition: width 0.3s ease;
+  transform-origin: 0 50%;
+  transform: scaleX(1);
+  /* scaleX fill (not width) — see .be-sh-bars__bar i for the iOS rationale. */
+  transition: transform 0.3s ease;
 }
 .be-sh-vital--health i { background: linear-gradient(180deg, #ff6b6b, #c9403f); }
 .be-sh-vital--stamina i { background: linear-gradient(180deg, #7dffb0, #3fae63); }
@@ -2565,10 +2569,18 @@ body {
 .be-sh-bars__bar i {
   display: block;
   height: 100%;
+  width: 100%;
   border-radius: 5px;
+  transform-origin: 0 50%;
+  transform: scaleX(1);
+  will-change: transform;
   /* No transition: the scene drives these every frame from the live value, so
      the fill tracks exactly and always reaches 0. A width transition here made
-     the bar lag behind and appear to stop short of empty. */
+     the bar lag behind and appear to stop short of empty.
+     Fill level is scaleX (NOT width): iOS Safari stops repainting layout-driven
+     width changes once the is-low pulse animation promotes this element to its
+     own compositing layer — the bar froze at ~25% while the value kept
+     draining. Transforms are composited and always repaint. */
 }
 /* Vertical (top-down) sheen so a partial bar reads as ONE glossy bar. A
    horizontal gradient split into a light + dark half that looked like two

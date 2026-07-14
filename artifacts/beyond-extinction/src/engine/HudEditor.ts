@@ -293,7 +293,7 @@ export function openHudEditor({ parent, audio, onClose, mode }: OpenOptions): vo
             .map(
               ([icon, v]) => `
           <div class="be-sh-vital"><span class="be-sh-vital__icon">${icon}</span>
-            <div class="be-sh-vital__bar"><i style="width:${v}%"></i></div></div>`,
+            <div class="be-sh-vital__bar"><i style="transform:scaleX(${(v as number) / 100})"></i></div></div>`,
             )
             .join("");
         break;
@@ -302,9 +302,9 @@ export function openHudEditor({ parent, audio, onClose, mode }: OpenOptions): vo
         p = document.createElement("div");
         p.className = "be-sh-bars";
         p.innerHTML = `
-          <div class="be-sh-bars__row"><span class="be-sh-bars__icon">❤</span><div class="be-sh-bars__bar be-sh-bars__bar--health"><i style="width:92%"></i></div></div>
-          <div class="be-sh-bars__row"><span class="be-sh-bars__icon">⚡</span><div class="be-sh-bars__bar be-sh-bars__bar--stam"><i style="width:76%"></i></div></div>
-          <div class="be-sh-bars__row"><span class="be-sh-bars__icon">💧</span><div class="be-sh-bars__bar be-sh-bars__bar--water"><i style="width:58%"></i></div></div>`;
+          <div class="be-sh-bars__row"><span class="be-sh-bars__icon">❤</span><div class="be-sh-bars__bar be-sh-bars__bar--health"><i style="transform:scaleX(0.92)"></i></div></div>
+          <div class="be-sh-bars__row"><span class="be-sh-bars__icon">⚡</span><div class="be-sh-bars__bar be-sh-bars__bar--stam"><i style="transform:scaleX(0.76)"></i></div></div>
+          <div class="be-sh-bars__row"><span class="be-sh-bars__icon">💧</span><div class="be-sh-bars__bar be-sh-bars__bar--water"><i style="transform:scaleX(0.58)"></i></div></div>`;
         break;
       }
       case "hotbar": {

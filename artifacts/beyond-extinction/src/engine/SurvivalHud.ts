@@ -191,9 +191,14 @@ export class SurvivalHud {
    *  the throttled (5 Hz) onStats path could lag and appear to stop short. */
   setBars(health: number, stamina: number, water: number): void {
     if (this.mountedCreature !== null) return;
-    this.healthBar.style.width = `${health}%`;
-    this.stamBar.style.width = `${stamina}%`;
-    this.waterBar.style.width = `${water}%`;
+    // scaleX, not width: iOS Safari promotes the fill to its own compositing
+    // layer the moment the is-low pulse animation starts, and layout-driven
+    // width changes stop being repainted (the bar visually freezes at ~25%
+    // while the real value keeps draining). Transforms are composited and
+    // always repaint.
+    this.healthBar.style.transform = `scaleX(${clamp01(health / 100)})`;
+    this.stamBar.style.transform = `scaleX(${clamp01(stamina / 100)})`;
+    this.waterBar.style.transform = `scaleX(${clamp01(water / 100)})`;
     this.healthBarWrap.classList.toggle("is-low", health < 25);
     this.stamBarWrap.classList.toggle("is-low", stamina < 25);
     this.waterBarWrap.classList.toggle("is-low", water < 25);
@@ -509,7 +514,7 @@ export class SurvivalHud {
     this.setVital("water", c.water, `${Math.round(c.water)}`);
     const wPct = Math.min(100, (c.weight / c.maxWeight) * 100);
     const w = this.vitals.weight;
-    w.fill.style.width = `${wPct}%`;
+    w.fill.style.transform = `scaleX(${clamp01(wPct / 100)})`;
     w.val.textContent = `${c.weight}kg`;
     w.row.classList.toggle("is-low", wPct > 85);
 
@@ -520,7 +525,7 @@ export class SurvivalHud {
 
   private setVital(key: string, pct: number, text: string): void {
     const v = this.vitals[key];
-    v.fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+    v.fill.style.transform = `scaleX(${clamp01(pct / 100)})`;
     v.val.textContent = text;
     v.row.classList.toggle("is-low", pct < 25);
   }
@@ -610,6 +615,10 @@ function dayPhase(timeMin: number): { icon: string; word: string; tone: "warm" |
   if (h >= 14 && h < 17) return { icon: "🌤", word: "Afternoon", tone: "day" };
   if (h >= 17 && h < 19) return { icon: "🌇", word: "Dusk", tone: "warm" };
   return { icon: "🌙", word: "Night", tone: "night" };
+}
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
 }
 
 function escapeHtml(s: string): string {
