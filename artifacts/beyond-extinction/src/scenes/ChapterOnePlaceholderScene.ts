@@ -3,6 +3,7 @@ import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { loadModel, loadTexture } from "../engine/assets";
 import { updateBillboardsYAxis } from "../engine/Billboard";
 import { loadIslandBillboardTrees } from "../engine/islandBillboardTrees";
+import { PerfHud } from "../engine/PerfHud";
 import { HudMarker } from "../engine/HudMarker";
 import { Navigator } from "../engine/Navigator";
 import { PlayerController } from "../engine/PlayerController";
@@ -110,8 +111,11 @@ class ChapterOnePlaceholderScene implements IScene {
   private oceanUniforms!: OceanWater["uniforms"];
   private dodo!: THREE.Group;
   private billboards: THREE.Mesh[] = [];
-  // Wind + draw-distance tick for the instanced tree species (see islandTrees).
-  private treesUpdate?: (dt: number, camPos: THREE.Vector3) => void;
+  // Wind + adaptive-LOD tick for the instanced tree species. Takes the smoothed
+  // fps (from perfHud) so the forest draw range tracks the framerate.
+  private treesUpdate?: (dt: number, camPos: THREE.Vector3, fps?: number) => number;
+  // On-screen framerate readout; also the source of the smoothed fps above.
+  private perfHud?: PerfHud;
   // Sun with a player-following shadow frustum (see updateSun). The shadow box
   // is tight (~140 m) because a directional shadow can't span the 8 km island.
   private sun?: THREE.DirectionalLight;
@@ -315,6 +319,9 @@ class ChapterOnePlaceholderScene implements IScene {
       0.107,
       60000,
     );
+    // On-screen fps readout (and the smoothed-fps source for the tree LOD).
+    // Guarded so headless/test contexts without a DOM don't throw.
+    if (typeof document !== "undefined") this.perfHud = new PerfHud();
   }
 
   async enter(): Promise<void> {
@@ -2934,6 +2941,8 @@ class ChapterOnePlaceholderScene implements IScene {
   // ---------- Loop ----------
 
   update(dt: number, elapsed: number): void {
+    // Framerate readout + smoothed fps for the adaptive tree LOD (every mode).
+    this.perfHud?.tick(dt);
     // Ambient sea life — roams whether or not gameplay control is active. During
     // the arrival flyover, seed/stream them around the CAMERA (which skims and
     // dives over the water) so they're visible in the dip; otherwise around Jack.
@@ -2989,7 +2998,7 @@ class ChapterOnePlaceholderScene implements IScene {
       this.applyLocomotion(this.sarah, false, dt);
       for (const m of this.mixers) m.update(dt);
       this.dilo?.update(dt);
-      this.treesUpdate?.(dt, this.camera.position);
+      this.treesUpdate?.(dt, this.camera.position, this.perfHud?.fps);
       updateBillboardsYAxis(this.billboards, this.camera.position);
       return;
     }
@@ -3003,7 +3012,7 @@ class ChapterOnePlaceholderScene implements IScene {
       for (const mx of this.mixers) mx.update(dt);
       this.dilo?.update(dt);
       this.chaseDressing?.update(dt);
-      this.treesUpdate?.(dt, this.camera.position);
+      this.treesUpdate?.(dt, this.camera.position, this.perfHud?.fps);
       updateBillboardsYAxis(this.billboards, this.camera.position);
       return;
     }
@@ -3024,7 +3033,7 @@ class ChapterOnePlaceholderScene implements IScene {
       this.applyLocomotion(this.sarah, false, dt);
       for (const mx of this.mixers) mx.update(dt);
       this.dilo?.update(dt);
-      this.treesUpdate?.(dt, this.camera.position);
+      this.treesUpdate?.(dt, this.camera.position, this.perfHud?.fps);
       updateBillboardsYAxis(this.billboards, this.camera.position);
       return;
     }
@@ -3170,7 +3179,7 @@ class ChapterOnePlaceholderScene implements IScene {
       this.applyLocomotion(this.sarah, sFlags.moving, dt);
       for (const m of this.mixers) m.update(dt);
       this.dilo?.update(dt);
-      this.treesUpdate?.(dt, this.camera.position);
+      this.treesUpdate?.(dt, this.camera.position, this.perfHud?.fps);
       for (const h of this.highlights) h.update(dt);
       this.objMarker?.update(this.camera);
       updateBillboardsYAxis(this.billboards, this.camera.position);
@@ -3188,7 +3197,7 @@ class ChapterOnePlaceholderScene implements IScene {
     // Keep the walking hero on the terrain surface (Sarah is static until reached).
     if (this.jack) this.jack.position.y = beachHeight(this.jack.position.x, this.jack.position.z);
     for (const m of this.mixers) m.update(dt);
-    this.treesUpdate?.(dt, this.camera.position);
+    this.treesUpdate?.(dt, this.camera.position, this.perfHud?.fps);
 
     this.cameraDirector?.update(this.cameraState(), dt);
     for (const h of this.highlights) h.update(dt);
@@ -3257,6 +3266,7 @@ class ChapterOnePlaceholderScene implements IScene {
     setHudEditorContext("lab"); // island HUD leaves with the scene
     this.seaCreatures?.dispose();
     this.dilo?.dispose();
+    this.perfHud?.dispose();
     this.objMarker?.dispose();
     this.hurtEl?.remove();
     this.unsubFeed?.();

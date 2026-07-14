@@ -84,6 +84,8 @@ function billboardMaterial(
   tex: THREE.Texture,
   sway: number,
   uTime: { value: number },
+  uFadeStart: { value: number },
+  uFadeEnd: { value: number },
 ): THREE.Material {
   const mat = new THREE.MeshBasicMaterial({
     map: tex,
@@ -95,19 +97,22 @@ function billboardMaterial(
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = uTime;
     shader.uniforms.uSway = { value: sway };
+    shader.uniforms.uFadeStart = uFadeStart;
+    shader.uniforms.uFadeEnd = uFadeEnd;
     // ── VERTEX: billboard, wind sway, and per-tree LOD opacity by distance ──
     shader.vertexShader = shader.vertexShader
       .replace(
         "#include <common>",
         `#include <common>
-        uniform float uTime, uSway;
+        uniform float uTime, uSway, uFadeStart, uFadeEnd;
         varying float vOpacity;
-        // Distance fade (metres → opacity): full out to 60 m, then a smooth
-        // linear ramp to gone at 500 m — far enough that the inland forest reads
-        // as a filled backdrop instead of an empty island, while the ordered
-        // dither in the fragment shader keeps far trees cheap on fill-rate.
+        // Distance fade (metres → opacity): full out to uFadeStart, then a smooth
+        // linear ramp to gone (0) at uFadeEnd. Both are driven per-frame from the
+        // measured framerate (see IslandTrees.update) so slower devices shed draw
+        // distance and faster ones extend it. The ordered dither in the fragment
+        // shader keeps the ramped band cheap on fill-rate.
         float treeFade(float m) {
-          return clamp(1.0 - (m - 60.0) / 440.0, 0.0, 1.0);
+          return clamp((uFadeEnd - m) / max(uFadeEnd - uFadeStart, 1.0), 0.0, 1.0);
         }`,
       )
       .replace(
@@ -158,18 +163,46 @@ function billboardMaterial(
 
 export interface IslandTrees {
   group: THREE.Group;
-  update(dt: number, camPos: THREE.Vector3): void;
+  /** Advance wind + adaptive LOD. `fps` (smoothed) drives the draw range; when
+   *  omitted a neutral 60 is assumed. Returns the current fade-end in metres. */
+  update(dt: number, camPos: THREE.Vector3, fps?: number): number;
   count: number;
 }
 
-/** Chunks past this range don't draw — the draped aerial terrain reads as jungle
- *  at distance, so real billboards only need to fill the near field. */
-const TREE_DRAW_DIST = 62 * MAP_SCALE; // ≈ 700 m
+/** Framerate → tree fade-end distance in metres. Anchor points from the design:
+ *  <30 fps → 75 m, ~45 → 130, ~60 → 180, >60 (→75) → 250, lerped smoothly
+ *  between. Below 15 fps is handled separately as an emergency snap to 40 m. */
+const FPS_RANGE: ReadonlyArray<readonly [number, number]> = [
+  [15, 75],
+  [30, 75],
+  [45, 130],
+  [60, 180],
+  [75, 250],
+];
+
+function rangeForFps(fps: number): number {
+  if (fps <= FPS_RANGE[0][0]) return FPS_RANGE[0][1];
+  for (let i = 1; i < FPS_RANGE.length; i++) {
+    const [f1, d1] = FPS_RANGE[i];
+    if (fps <= f1) {
+      const [f0, d0] = FPS_RANGE[i - 1];
+      return d0 + (d1 - d0) * ((fps - f0) / (f1 - f0));
+    }
+  }
+  return FPS_RANGE[FPS_RANGE.length - 1][1];
+}
+
+const EMERGENCY_FPS = 15; // below this, snap the draw range hard
+const EMERGENCY_RANGE_M = 40; // ...to this many metres, immediately
 
 export async function loadIslandBillboardTrees(): Promise<IslandTrees> {
   const group = new THREE.Group();
   group.name = "island-billboard-trees";
   const uTime = { value: 0 };
+  // Adaptive LOD band (metres), shared by every species material. Start optimistic
+  // (a full 60 fps range); update() eases it toward the framerate-mapped target.
+  const uFadeEnd = { value: rangeForFps(60) };
+  const uFadeStart = { value: uFadeEnd.value * 0.4 };
 
   // Unit quad, pivot at bottom-centre so instance placement plants the base.
   const quad = new THREE.PlaneGeometry(1, 1);
@@ -182,7 +215,10 @@ export async function loadIslandBillboardTrees(): Promise<IslandTrees> {
       tex.anisotropy = 4;
       const img = tex.image as { width: number; height: number } | undefined;
       const aspect = img && img.height ? img.width / img.height : 0.6;
-      return { mat: billboardMaterial(tex, sp.sway, uTime), width: sp.height * aspect };
+      return {
+        mat: billboardMaterial(tex, sp.sway, uTime, uFadeStart, uFadeEnd),
+        width: sp.height * aspect,
+      };
     }),
   );
 
@@ -230,7 +266,7 @@ export async function loadIslandBillboardTrees(): Promise<IslandTrees> {
     }
   }
 
-  const chunks: { im: THREE.InstancedMesh; center: THREE.Vector3 }[] = [];
+  const chunks: { im: THREE.InstancedMesh; center: THREE.Vector3; radius: number }[] = [];
   SPECIES.forEach((sp, s) => {
     const baked = loaded[s];
     if (!baked) return;
@@ -247,20 +283,43 @@ export async function loadIslandBillboardTrees(): Promise<IslandTrees> {
       im.receiveShadow = false;
       im.name = `bbtrees-${sp.file}-${key}`;
       group.add(im);
-      chunks.push({ im, center: im.boundingSphere!.center.clone() });
+      chunks.push({
+        im,
+        center: im.boundingSphere!.center.clone(),
+        radius: im.boundingSphere!.radius,
+      });
     }
   });
 
   return {
     group,
     count,
-    update(dt: number, camPos: THREE.Vector3) {
+    update(dt: number, camPos: THREE.Vector3, fps = 60): number {
       uTime.value += dt;
+
+      // Adaptive draw range from the framerate. Below EMERGENCY_FPS we SNAP the
+      // range down hard (a framerate collapse should shed distance instantly);
+      // otherwise we ease toward the mapped target (~1 s time constant) so trees
+      // don't visibly pop as the fps wanders across an anchor.
+      if (fps < EMERGENCY_FPS) {
+        uFadeEnd.value = EMERGENCY_RANGE_M;
+      } else {
+        const target = rangeForFps(fps);
+        const k = dt > 0 ? 1 - Math.exp(-dt / 1.0) : 1;
+        uFadeEnd.value += (target - uFadeEnd.value) * k;
+      }
+      uFadeStart.value = uFadeEnd.value * 0.4; // near 40% stays fully opaque
+
+      // Cull a whole chunk only once its entire bounding sphere is past the fade
+      // end, so nothing that could still be drawing ever pops out.
+      const rangeU = uFadeEnd.value / METERS_PER_UNIT;
       for (const c of chunks) {
         const dx = c.center.x - camPos.x;
         const dz = c.center.z - camPos.z;
-        c.im.visible = dx * dx + dz * dz < TREE_DRAW_DIST * TREE_DRAW_DIST;
+        const lim = rangeU + c.radius;
+        c.im.visible = dx * dx + dz * dz < lim * lim;
       }
+      return uFadeEnd.value;
     },
   };
 }
