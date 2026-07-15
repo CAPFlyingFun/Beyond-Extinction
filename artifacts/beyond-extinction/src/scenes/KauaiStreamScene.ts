@@ -204,6 +204,13 @@ class KauaiStreamScene implements IScene {
         // World-lock the ripple UVs to (x,z) so they don't swim with the
         // camera-following plane, then scroll them for the wave motion.
         this.waterT += dt;
+        // High/low tide: the whole ocean level drifts slowly between +0.1 m and
+        // -0.9 m (two incommensurate sines → non-repeating), so the shoreline
+        // laps in and out. Just moves the flat plane — no colour/surface change.
+        const tide =
+          0.6 * Math.sin(this.waterT * 0.25) +
+          0.4 * Math.sin(this.waterT * 0.11 + 1.3); // ∈ [-1, 1]
+        this.water.position.y = WATER_Y + 0.5 * tide; // [-0.9, +0.1]
         if (this.waterNormal) {
           const uvpm = WATER_REPEAT / WATER_SIZE;
           this.waterNormal.offset.set(
