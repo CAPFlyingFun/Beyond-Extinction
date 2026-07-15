@@ -489,19 +489,30 @@ varying vec3 vBiomeN;
 uniform sampler2D tSand, tGrass, tJungle, tRock, tMtn, tSnow, tReef;
 // three uploads sRGB textures with an sRGB internal format on WebGL2, so
 // texture2D already returns LINEAR — no manual decode needed.
-vec3 s2l(vec3 c) { return c; }`,
+vec3 s2l(vec3 c) { return c; }
+// Triplanar sample: blend the three world-axis projections by the surface
+// normal so vertical faces tile from the side instead of smearing the
+// top-down projection down a cliff.
+vec3 triplanar(sampler2D tex, vec3 wp, vec3 n, float scale) {
+  vec3 bw = abs(n); bw = pow(bw, vec3(4.0)); bw /= (bw.x + bw.y + bw.z);
+  vec3 cx = texture2D(tex, wp.zy / scale).rgb;
+  vec3 cy = texture2D(tex, wp.xz / scale).rgb;
+  vec3 cz = texture2D(tex, wp.xy / scale).rgb;
+  return cx * bw.x + cy * bw.y + cz * bw.z;
+}`,
       )
       .replace(
         "#include <map_fragment>",
         `{
   float e = vBiomeW.y;                          // elevation (m)
   float slope = 1.0 - clamp(vBiomeN.y, 0.0, 1.0);
-  vec2 uv = vBiomeW.xz;                          // world-space tiling
+  vec2 uv = vBiomeW.xz;                          // world-space tiling (flat areas)
   vec3 sand = s2l(texture2D(tSand,   uv / 9.0 ).rgb);
   vec3 grass= s2l(texture2D(tGrass,  uv / 11.0).rgb);
   vec3 jung = s2l(texture2D(tJungle, uv / 13.0).rgb);
-  vec3 rock = s2l(texture2D(tRock,   uv / 18.0).rgb);
-  vec3 mtn  = s2l(texture2D(tMtn,    uv / 22.0).rgb);
+  // rock + mountain are what shows on steep faces → triplanar so they tile
+  vec3 rock = s2l(triplanar(tRock, vBiomeW, vBiomeN, 18.0));
+  vec3 mtn  = s2l(triplanar(tMtn,  vBiomeW, vBiomeN, 22.0));
   vec3 snow = s2l(texture2D(tSnow,   uv / 12.0).rgb);
   vec3 c = sand;
   c = mix(c, grass, smoothstep(3.0, 22.0, e));

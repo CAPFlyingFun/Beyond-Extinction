@@ -31,6 +31,25 @@ const WATER_REPEAT = 10000; // ripple normal repeats → ~8 m wavelength
  * any angle — the moving normals modulate the fresnel into a live shimmer. No
  * white foam yet (deferred).
  */
+const OCEAN_WAVES_GLSL = `
+uniform float uTime;
+// Sum of a few directional swells → gentle height variation (breaks the flat
+// grid look); returns height and writes the analytic surface normal.
+float oceanWaves(vec2 p, float t, out vec3 nrm) {
+  vec2 d1 = normalize(vec2(1.0, 0.35)); float k1 = 6.2831 / 1300.0; float a1 = 1.1;
+  vec2 d2 = normalize(vec2(-0.4, 1.0)); float k2 = 6.2831 / 2100.0; float a2 = 1.6;
+  vec2 d3 = normalize(vec2(0.8, -0.6)); float k3 = 6.2831 / 950.0;  float a3 = 0.6;
+  float p1 = dot(p, d1) * k1 + t * 0.55;
+  float p2 = dot(p, d2) * k2 + t * 0.4;
+  float p3 = dot(p, d3) * k3 + t * 0.75;
+  float h = a1 * sin(p1) + a2 * sin(p2) + a3 * sin(p3);
+  float dx = a1 * cos(p1) * d1.x * k1 + a2 * cos(p2) * d2.x * k2 + a3 * cos(p3) * d3.x * k3;
+  float dz = a1 * cos(p1) * d1.y * k1 + a2 * cos(p2) * d2.y * k2 + a3 * cos(p3) * d3.y * k3;
+  nrm = normalize(vec3(-dx, 1.0, -dz));
+  return h;
+}`;
+
+/** Ocean surface material (see original notes) + Gerstner-style vertex swells. */
 function makeOceanMaterial(): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({
     color: 0x14526e,
@@ -40,10 +59,28 @@ function makeOceanMaterial(): THREE.MeshStandardMaterial {
     opacity: 0.82,
     envMapIntensity: 1.1,
     normalScale: new THREE.Vector2(0.55, 0.55),
+    polygonOffset: true, // bias depth back so the shoreline sand wins (no z-fight)
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 2,
   });
   const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
   mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uTime = { value: 0 };
     sh.uniforms.uSky = { value: sky };
+    mat.userData.shader = sh; // so update() can drive uTime
+    sh.vertexShader = sh.vertexShader
+      .replace("#include <common>", "#include <common>\n" + OCEAN_WAVES_GLSL)
+      .replace(
+        "#include <beginnormal_vertex>",
+        `#include <beginnormal_vertex>
+        vec3 __wp = (modelMatrix * vec4(position, 1.0)).xyz;
+        vec3 oceanN; float oceanH = oceanWaves(__wp.xz, uTime, oceanN);
+        objectNormal = oceanN;`,
+      )
+      .replace(
+        "#include <begin_vertex>",
+        "#include <begin_vertex>\n        transformed.y += oceanH;",
+      );
     sh.fragmentShader = sh.fragmentShader
       .replace("#include <common>", "#include <common>\nuniform vec3 uSky;")
       .replace(
@@ -83,7 +120,10 @@ class KauaiStreamScene implements IScene {
 
   async enter(): Promise<void> {
     this.scene.background = SKY; // fallback until the HDRI background loads
-    this.scene.fog = new THREE.Fog(SKY.getHex(), 2500, 12000);
+    // Neutral light haze (not saturated sky-blue) pushed far out, so distant
+    // terrain keeps its colour and only melts into a soft horizon haze rather
+    // than a blue fade. With streamer radius 2 the loaded edge sits past this.
+    this.scene.fog = new THREE.Fog(0xbcc6cc, 6500, 17000);
 
     // Sky HDRI (ambientCG, CC0): EXR → PMREM environment for real sky
     // reflections + image-based light; the tonemapped JPG is the cheap visible
@@ -98,7 +138,11 @@ class KauaiStreamScene implements IScene {
     // Ocean plane at sea level, follows the camera in XZ. An animated ripple
     // normal map gives moving wavelets + travelling specular glints (no foam).
     const waterMat = makeOceanMaterial();
-    const water = new THREE.Mesh(new THREE.PlaneGeometry(WATER_SIZE, WATER_SIZE), waterMat);
+    // Subdivided so the Gerstner vertex swells actually deform the surface.
+    const water = new THREE.Mesh(
+      new THREE.PlaneGeometry(WATER_SIZE, WATER_SIZE, 256, 256),
+      waterMat,
+    );
     water.geometry.rotateX(-Math.PI / 2);
     water.position.set(SPAWN.x, 0, SPAWN.z);
     water.renderOrder = -1;
@@ -118,7 +162,7 @@ class KauaiStreamScene implements IScene {
     try {
       const res = await fetch(assetUrl("assets/terrain/kauai/manifest.json"));
       const manifest = (await res.json()) as KauaiManifest;
-      this.streamer = new KauaiTileStreamer(this.scene, manifest, { radius: 1 });
+      this.streamer = new KauaiTileStreamer(this.scene, manifest, { radius: 2 });
       this.streamer.update(0, SPAWN.x, SPAWN.z); // kick the first ring
     } catch (e) {
       console.error("[kauai] manifest load failed", e);
@@ -196,14 +240,18 @@ class KauaiStreamScene implements IScene {
         this.water.position.z = z;
         // World-lock the ripple UVs to (x,z) so they don't swim with the
         // camera-following plane, then scroll them for the wave motion.
+        this.waterT += dt;
         if (this.waterNormal) {
-          this.waterT += dt;
           const uvpm = WATER_REPEAT / WATER_SIZE;
           this.waterNormal.offset.set(
             x * uvpm + this.waterT * 0.014,
             z * uvpm + this.waterT * 0.010,
           );
         }
+        const wsh = (this.water.material as THREE.Material).userData.shader as
+          | { uniforms: { uTime: { value: number } } }
+          | undefined;
+        if (wsh) wsh.uniforms.uTime.value = this.waterT;
       }
       if (this.hud) {
         const col = String.fromCharCode(65 + Math.min(7, Math.max(0, Math.round(x / 7000 + 3.5))));
