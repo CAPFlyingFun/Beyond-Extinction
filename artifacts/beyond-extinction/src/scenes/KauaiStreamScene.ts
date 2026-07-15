@@ -18,6 +18,7 @@ import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
  * to the east (+X); you face inland (west) toward the interior + summit.
  */
 const EYE = 1.7; // m
+const CAM_FWD = 0.32; // eye pushed this far ahead of the head so the body renders behind it
 const SKY = new THREE.Color(0x8fbcd4);
 const SUN = new THREE.Vector3(-0.55, 0.72, 0.42).normalize();
 
@@ -88,6 +89,7 @@ class KauaiStreamScene implements IScene {
   private envMap?: THREE.Texture;
   private bgMap?: THREE.Texture;
   private hud?: HTMLDivElement;
+  private swapBtn?: HTMLButtonElement;
   private grounded = false;
   // Hero characters: Jack (player) and Sarah (standing NPC). Both feet-planted
   // on the rendered mesh surface each frame so they never sink into terrain.
@@ -95,6 +97,9 @@ class KauaiStreamScene implements IScene {
   private sarah?: IslandCharacter;
   private jackPos = new THREE.Vector2(SPAWN.x, SPAWN.z);
   private sarahPos = new THREE.Vector2();
+  // Which character the first-person camera is bound to (the played body). The
+  // other stands as an NPC. Toggle with switchCharacter().
+  private active: "Jack" | "Sarah" = "Jack";
   private disposed = false;
   // Vertical physics state (feet world Y + vertical velocity + airborne flag),
   // and last frame's XZ so water can drag the horizontal step.
@@ -191,6 +196,7 @@ class KauaiStreamScene implements IScene {
       c.setFacing(Math.PI / 2); // face east, toward the ocean/camera
       this.scene.add(c.group);
       this.groundCharacter(c, this.jackPos);
+      this.applyRoles();
     });
     void IslandCharacter.load("Sarah", 1.7).then((c) => {
       if (this.disposed) return void c.dispose();
@@ -198,6 +204,7 @@ class KauaiStreamScene implements IScene {
       c.setFacing(Math.PI / 2);
       this.scene.add(c.group);
       this.groundCharacter(c, this.sarahPos);
+      this.applyRoles();
     });
 
     // Dev-only handle for headless render/inspection of the streaming world.
@@ -210,6 +217,8 @@ class KauaiStreamScene implements IScene {
         streamer: this.streamer,
         player: this.player,
         input: this.ctx.input,
+        switchCharacter: () => this.switchCharacter(),
+        getActive: () => this.active,
         step: (dt = 0.016, n = 1) => {
           for (let i = 0; i < n; i++) this.update(dt);
         },
@@ -256,6 +265,26 @@ class KauaiStreamScene implements IScene {
     });
   }
 
+  /** Head-hide the played (active) character so the head-height camera doesn't
+   *  render skull interior; restore the NPC's head. */
+  private applyRoles(): void {
+    const activeChar = this.active === "Jack" ? this.jack : this.sarah;
+    const npcChar = this.active === "Jack" ? this.sarah : this.jack;
+    activeChar?.setHeadHidden(true);
+    npcChar?.setHeadHidden(false);
+  }
+
+  /** Swap which character the first-person camera is bound to. The outgoing body
+   *  is left standing (as an NPC) where the player currently is. */
+  switchCharacter(): void {
+    const here = new THREE.Vector2(this.camera.position.x, this.camera.position.z);
+    if (this.active === "Jack") this.jackPos.copy(here);
+    else this.sarahPos.copy(here);
+    this.active = this.active === "Jack" ? "Sarah" : "Jack";
+    this.applyRoles();
+    this.ctx.overlays.showToast(`Now playing: ${this.active}`);
+  }
+
   /** Plant a character's feet on the rendered mesh surface at its XZ (or sea
    *  level over water) — only once the tile there has decoded. */
   private groundCharacter(c: IslandCharacter, at: THREE.Vector2): void {
@@ -274,28 +303,37 @@ class KauaiStreamScene implements IScene {
     hud.textContent = "loading terrain…";
     this.ctx.uiLayer.appendChild(hud);
     this.hud = hud;
+
+    // Character-swap button (top-left): bind the FP camera to Jack or Sarah.
+    const swap = document.createElement("button");
+    swap.type = "button";
+    swap.textContent = "⇄ SWAP";
+    swap.style.cssText =
+      "position:absolute;top:10px;left:10px;z-index:61;padding:8px 12px;" +
+      "border:0;border-radius:10px;background:rgba(6,14,22,0.72);color:#dff;" +
+      "font:700 12px/1 ui-monospace,Menlo,monospace;letter-spacing:.04em;" +
+      "backdrop-filter:blur(6px);touch-action:manipulation;cursor:pointer;";
+    swap.addEventListener("click", (e) => {
+      e.preventDefault();
+      this.switchCharacter();
+    });
+    this.ctx.uiLayer.appendChild(swap);
+    this.swapBtn = swap;
   }
 
   update(dt: number): void {
     const p = this.player;
     const s = this.streamer;
-    if (p) p.update(dt);
+    const moved = p ? p.update(dt) : null;
     if (s) {
       const x = this.camera.position.x;
       const z = this.camera.position.z;
       s.update(dt, x, z);
       this.hydro?.update(dt, s);
       this.trees?.update(dt, this.camera.position, s, this.hydro);
-      // Advance character animations and keep their feet planted on the current
-      // surface height (tiles refine as they stream, so re-ground every frame).
-      if (this.jack) {
-        this.jack.update(dt);
-        this.groundCharacter(this.jack, this.jackPos);
-      }
-      if (this.sarah) {
-        this.sarah.update(dt);
-        this.groundCharacter(this.sarah, this.sarahPos);
-      }
+      // Advance both characters' animation mixers (idle/walk blend).
+      this.jack?.update(dt);
+      this.sarah?.update(dt);
       // ── Player vertical physics: gravity + jump on land, wade/swim in water ──
       // High/low tide (two incommensurate sines → non-repeating) drives the
       // ocean surface, used for both the plane and the swim/wade test.
@@ -357,6 +395,25 @@ class KauaiStreamScene implements IScene {
       this.prevX = this.camera.position.x;
       this.prevZ = this.camera.position.z;
 
+      // ── First-person body: the active character IS the player. Plant it at the
+      // player's feet, face it the look direction, blend idle↔walk, and push the
+      // eye ahead of the (hidden) head so the body renders behind it. The other
+      // character stands where it was placed as an NPC.
+      const activeChar = this.active === "Jack" ? this.jack : this.sarah;
+      const npcChar = this.active === "Jack" ? this.sarah : this.jack;
+      const npcPos = this.active === "Jack" ? this.sarahPos : this.jackPos;
+      if (activeChar && p) {
+        activeChar.place(this.camera.position.x, this.feetY, this.camera.position.z);
+        activeChar.setBodyYaw(p.yaw);
+        activeChar.setMoving(!!moved?.moving);
+        this.camera.position.x -= Math.sin(p.yaw) * CAM_FWD;
+        this.camera.position.z -= Math.cos(p.yaw) * CAM_FWD;
+      }
+      if (npcChar) {
+        npcChar.setMoving(false);
+        this.groundCharacter(npcChar, npcPos);
+      }
+
       if (this.water) {
         // The plane follows the player in XZ; ripple UVs are world-locked (so
         // they don't swim with the plane) then scrolled for wave motion.
@@ -397,6 +454,7 @@ class KauaiStreamScene implements IScene {
     this.envMap?.dispose();
     this.bgMap?.dispose();
     this.hud?.remove();
+    this.swapBtn?.remove();
     this.scene.clear();
   }
 }
