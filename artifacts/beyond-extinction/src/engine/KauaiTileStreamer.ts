@@ -41,7 +41,14 @@ function decodeElev(r: number, g: number, b: number): number {
   return e < -6000 ? -6000 : e;
 }
 
-const SEG = 96; // grid resolution per tile (97² verts ≈ 9.4k)
+// Grid resolution per tile. The source DEM is 513²/tile (~13.7 m/px), so 512 is
+// the real detail ceiling. 192 (193² ≈ 37k verts, ~36 m spacing) halves the old
+// 96's ~73 m facets for much smoother hillsides, and deliberately stays under
+// the 65 536-vertex 16-bit index limit — so tiles keep a Uint16 index buffer
+// and the resident set (~25 tiles) stays ~46 MB of geometry, mobile-safe.
+// (Bumping toward 256/512 smooths further but tips into 32-bit indices and
+// materially more memory — raise only if the target devices have the headroom.)
+const SEG = 192;
 // Tiles are baked 513² with a 1-px overlap: a tile's last height column/row is
 // byte-identical to its neighbour's first, and the mesh maps u·(P−1) so that
 // shared sample lands exactly on the tile border. Neighbouring edge vertices
