@@ -3,6 +3,7 @@ import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { PlayerController } from "../engine/PlayerController";
 import { KauaiTileStreamer, type KauaiManifest } from "../engine/KauaiTileStreamer";
 import { assetUrl, loadTexture } from "../engine/assets";
+import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
 
 /**
  * Kauaʻi streaming-terrain test scene. A fast first-person scout over the
@@ -33,10 +34,11 @@ const WATER_REPEAT = 10000; // ripple normal repeats → ~8 m wavelength
 function makeOceanMaterial(): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({
     color: 0x14526e,
-    roughness: 0.14,
-    metalness: 0.1,
+    roughness: 0.13,
+    metalness: 0.22, // reflect the sky HDRI (scene.environment) off the ripples
     transparent: true,
     opacity: 0.82,
+    envMapIntensity: 1.1,
     normalScale: new THREE.Vector2(0.55, 0.55),
   });
   const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
@@ -49,7 +51,7 @@ function makeOceanMaterial(): THREE.MeshStandardMaterial {
         `#include <lights_fragment_end>
         {
           float fres = pow(1.0 - clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0), 3.0);
-          totalEmissiveRadiance += uSky * fres * 0.7; // sky sheen on the ripples
+          totalEmissiveRadiance += uSky * fres * 0.35; // subtle sheen atop the HDRI reflection
         }`,
       );
   };
@@ -67,6 +69,8 @@ class KauaiStreamScene implements IScene {
   private water?: THREE.Mesh;
   private waterNormal?: THREE.Texture;
   private waterT = 0;
+  private envMap?: THREE.Texture;
+  private bgMap?: THREE.Texture;
   private hud?: HTMLDivElement;
   private grounded = false;
 
@@ -78,14 +82,18 @@ class KauaiStreamScene implements IScene {
   }
 
   async enter(): Promise<void> {
-    this.scene.background = SKY;
-    this.scene.fog = new THREE.Fog(SKY.getHex(), 2500, 11000);
+    this.scene.background = SKY; // fallback until the HDRI background loads
+    this.scene.fog = new THREE.Fog(SKY.getHex(), 2500, 12000);
 
-    this.scene.add(new THREE.HemisphereLight(0xe6f2ff, 0x6b7550, 1.25));
-    const sun = new THREE.DirectionalLight(0xfff3e0, 1.5);
+    // Sky HDRI (ambientCG, CC0): EXR → PMREM environment for real sky
+    // reflections + image-based light; the tonemapped JPG is the cheap visible
+    // background. The env supplies most of the ambient, so keep the fill lights
+    // low and let the sun handle direct light + shadows.
+    this.scene.add(new THREE.HemisphereLight(0xe6f2ff, 0x6b7550, 0.35));
+    const sun = new THREE.DirectionalLight(0xfff3e0, 1.35);
     sun.position.copy(SUN).multiplyScalar(1000);
     this.scene.add(sun);
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.18)); // lift deep-shadow slopes
+    this.loadSky();
 
     // Ocean plane at sea level, follows the camera in XZ. An animated ripple
     // normal map gives moving wavelets + travelling specular glints (no foam).
@@ -129,6 +137,30 @@ class KauaiStreamScene implements IScene {
     this.player.setActive(true);
 
     this.buildHud();
+  }
+
+  /** Load the sky HDRI: EXR → PMREM environment, tonemapped JPG → background. */
+  private loadSky(): void {
+    const renderer = this.ctx.renderer.renderer;
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    void new EXRLoader()
+      .loadAsync(assetUrl("assets/hdri/daysky.exr"))
+      .then((exr) => {
+        exr.mapping = THREE.EquirectangularReflectionMapping;
+        const env = pmrem.fromEquirectangular(exr).texture;
+        this.scene.environment = env;
+        this.envMap = env;
+        exr.dispose();
+        pmrem.dispose();
+      })
+      .catch((e) => console.error("[kauai] HDRI env load failed", e));
+    void loadTexture("assets/hdri/daysky_bg.jpg").then((tex) => {
+      if (!tex) return;
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      this.scene.background = tex;
+      this.bgMap = tex;
+    });
   }
 
   private buildHud(): void {
@@ -193,6 +225,8 @@ class KauaiStreamScene implements IScene {
     this.player?.setActive(false);
     this.player?.dispose();
     this.streamer?.dispose();
+    this.envMap?.dispose();
+    this.bgMap?.dispose();
     this.hud?.remove();
     this.scene.clear();
   }
