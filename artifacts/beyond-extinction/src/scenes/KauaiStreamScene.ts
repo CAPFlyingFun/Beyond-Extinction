@@ -21,6 +21,15 @@ const EYE = 1.7; // m
 const SKY = new THREE.Color(0x8fbcd4);
 const SUN = new THREE.Vector3(-0.55, 0.72, 0.42).normalize();
 
+// Player vertical physics.
+const GRAVITY = 22; // m/s² (snappy game gravity)
+const JUMP_V = 7.5; // m/s → ~1.3 m jump apex
+const WATER_ENTER = 0.35; // water at least this deep starts to slow you
+const SWIM_DEPTH = 1.3; // deeper than this → swim; shallower → wade on the bed
+const SWIM_EYE = 0.25; // eye height above the surface while swimming
+const WADE_SLOW = 0.6; // horizontal speed factor while wading
+const SWIM_SLOW = 0.45; // horizontal speed factor while swimming
+
 // Wailua beach in metres (grid centre origin). Nudged ~1.4 km inland from the
 // waterline so the scout starts on land while G5 finishes decoding.
 const SPAWN = { x: 20900, z: 1288, facing: 270 };
@@ -87,6 +96,13 @@ class KauaiStreamScene implements IScene {
   private jackPos = new THREE.Vector2(SPAWN.x, SPAWN.z);
   private sarahPos = new THREE.Vector2();
   private disposed = false;
+  // Vertical physics state (feet world Y + vertical velocity + airborne flag),
+  // and last frame's XZ so water can drag the horizontal step.
+  private feetY = EYE;
+  private vy = 0;
+  private airborne = false;
+  private prevX = SPAWN.x;
+  private prevZ = SPAWN.z;
 
   constructor(ctx: SceneContext) {
     this.ctx = ctx;
@@ -148,11 +164,12 @@ class KauaiStreamScene implements IScene {
       console.error("[kauai] manifest load failed", e);
     }
 
-    // First-person scout controller (fast, so 7 km tiles are quick to cross).
+    // First-person player controller — human-scale gameplay speeds. Vertical
+    // physics (gravity/jump/wade/swim) is layered on in update().
     this.player = new PlayerController(this.camera, this.ctx.input, {
       eyeHeight: EYE,
-      moveSpeed: 8, // 8 m/s jog
-      runMultiplier: 25, // 200 m/s sprint — traverse a tile in ~35 s
+      moveSpeed: 2.8, // ~2.8 m/s walk
+      runMultiplier: 3.4, // ~9.5 m/s sprint
       crouchMultiplier: 0.5,
       crawlMultiplier: 0.3,
       lookSensitivity: 0.0032,
@@ -192,6 +209,23 @@ class KauaiStreamScene implements IScene {
         hydro: this.hydro,
         streamer: this.streamer,
         player: this.player,
+        input: this.ctx.input,
+        step: (dt = 0.016, n = 1) => {
+          for (let i = 0; i < n; i++) this.update(dt);
+        },
+        dbg: () => {
+          const x = this.camera.position.x;
+          const z = this.camera.position.z;
+          return {
+            camXZ: [Math.round(x), Math.round(z)],
+            tileReady: this.streamer?.tileReadyAt(x, z) ?? false,
+            grounded: this.grounded,
+            feetY: +this.feetY.toFixed(2),
+            vy: +this.vy.toFixed(2),
+            airborne: this.airborne,
+            camY: +this.camera.position.y.toFixed(2),
+          };
+        },
       };
     }
 
@@ -262,32 +296,76 @@ class KauaiStreamScene implements IScene {
         this.sarah.update(dt);
         this.groundCharacter(this.sarah, this.sarahPos);
       }
-      // Ride the terrain surface once the standing tile has decoded; over
-      // ocean, stay at the water surface (don't sink below sea level).
+      // ── Player vertical physics: gravity + jump on land, wade/swim in water ──
+      // High/low tide (two incommensurate sines → non-repeating) drives the
+      // ocean surface, used for both the plane and the swim/wade test.
+      this.waterT += dt;
+      const tide =
+        0.6 * Math.sin(this.waterT * 0.25) + 0.4 * Math.sin(this.waterT * 0.11 + 1.3);
+      const waterY = WATER_Y + 0.5 * tide; // ocean surface (also the plane Y)
+
       if (s.tileReadyAt(x, z)) {
-        this.camera.position.y = Math.max(s.surfaceHeightAt(x, z), 0) + EYE;
-        this.grounded = true;
+        const ground = s.surfaceHeightAt(x, z);
+        if (!this.grounded) {
+          this.feetY = Math.max(ground, waterY);
+          this.grounded = true;
+        }
+        const depth = waterY - ground; // > 0 → a water column stands here
+
+        // Water drags the horizontal step: pull the just-moved camera (and the
+        // controller's authoritative position, so it doesn't snap back) part-way
+        // toward last frame's spot.
+        if (depth > WATER_ENTER && this.player) {
+          const f = depth > SWIM_DEPTH ? SWIM_SLOW : WADE_SLOW;
+          const nx = this.prevX + (this.camera.position.x - this.prevX) * f;
+          const nz = this.prevZ + (this.camera.position.z - this.prevZ) * f;
+          this.camera.position.x = nx;
+          this.camera.position.z = nz;
+          this.player.position.x = nx;
+          this.player.position.z = nz;
+        }
+
+        const jump = this.ctx.input.consumeJump();
+        if (depth > SWIM_DEPTH) {
+          // SWIM: bob at the surface (eye just above the water), no gravity.
+          const target = waterY - (EYE - SWIM_EYE);
+          this.feetY += (target - this.feetY) * Math.min(1, dt * 6);
+          this.vy = 0;
+          this.airborne = false;
+        } else {
+          // LAND / WADE: stick to the ground (or riverbed), jump + gravity.
+          if (jump && !this.airborne) {
+            this.vy = JUMP_V;
+            this.airborne = true;
+          }
+          if (this.airborne) {
+            this.vy -= GRAVITY * dt;
+            this.feetY += this.vy * dt;
+            if (this.feetY <= ground) {
+              this.feetY = ground;
+              this.vy = 0;
+              this.airborne = false;
+            }
+          } else {
+            this.feetY = ground;
+          }
+        }
+        this.camera.position.y = this.feetY + EYE;
       } else if (!this.grounded) {
-        this.camera.position.y = EYE; // sit at sea level until first tile lands
+        this.camera.position.y = EYE; // sit at sea level until the first tile lands
       }
+      this.prevX = this.camera.position.x;
+      this.prevZ = this.camera.position.z;
+
       if (this.water) {
-        this.water.position.x = x;
-        this.water.position.z = z;
-        // World-lock the ripple UVs to (x,z) so they don't swim with the
-        // camera-following plane, then scroll them for the wave motion.
-        this.waterT += dt;
-        // High/low tide: the whole ocean level drifts slowly between +0.1 m and
-        // -0.9 m (two incommensurate sines → non-repeating), so the shoreline
-        // laps in and out. Just moves the flat plane — no colour/surface change.
-        const tide =
-          0.6 * Math.sin(this.waterT * 0.25) +
-          0.4 * Math.sin(this.waterT * 0.11 + 1.3); // ∈ [-1, 1]
-        this.water.position.y = WATER_Y + 0.5 * tide; // [-0.9, +0.1]
+        // The plane follows the player in XZ; ripple UVs are world-locked (so
+        // they don't swim with the plane) then scrolled for wave motion.
+        this.water.position.set(this.camera.position.x, waterY, this.camera.position.z);
         if (this.waterNormal) {
           const uvpm = WATER_REPEAT / WATER_SIZE;
           this.waterNormal.offset.set(
-            x * uvpm + this.waterT * 0.014,
-            z * uvpm + this.waterT * 0.010,
+            this.camera.position.x * uvpm + this.waterT * 0.014,
+            this.camera.position.z * uvpm + this.waterT * 0.01,
           );
         }
       }
