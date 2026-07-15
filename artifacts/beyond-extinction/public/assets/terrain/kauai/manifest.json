@@ -1,0 +1,694 @@
+{
+  "name": "kauai",
+  "source": "AWS Terrarium DEM z14 (~8.9 m/px)",
+  "grid": {
+    "cols": 8,
+    "rows": 8,
+    "colLabels": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+      "F",
+      "G",
+      "H"
+    ],
+    "rowLabels": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "A1": "north-west; col A->H = west->east; row 1->8 = north->south"
+  },
+  "tileSizeM": 7000.0,
+  "totalM": 56000.0,
+  "tilePixels": 512,
+  "encoding": "terrarium RGB: elev_m = R*256 + G + B/256 - 32768",
+  "center": {
+    "lat": 22.055,
+    "lon": -159.54
+  },
+  "bbox": {
+    "latmin": 21.80252,
+    "latmax": 22.30748,
+    "lonmin": -159.81139,
+    "lonmax": -159.26861
+  },
+  "world": {
+    "origin": "grid centre (0,0)",
+    "tileWorldSizeM": 7000.0,
+    "axis": "col -> +X (east), row -> +Z (south)"
+  },
+  "elevRange": {
+    "minM": -7578.0,
+    "maxM": 1597.9
+  },
+  "tiles": [
+    {
+      "id": "A1",
+      "col": 0,
+      "row": 0,
+      "file": "height/A/A1.png",
+      "centerX": -24500.0,
+      "centerZ": -24500.0,
+      "minM": -2506.9,
+      "maxM": -1244.3
+    },
+    {
+      "id": "A2",
+      "col": 0,
+      "row": 1,
+      "file": "height/A/A2.png",
+      "centerX": -24500.0,
+      "centerZ": -17500.0,
+      "minM": -1341.4,
+      "maxM": -56.2
+    },
+    {
+      "id": "A3",
+      "col": 0,
+      "row": 2,
+      "file": "height/A/A3.png",
+      "centerX": -24500.0,
+      "centerZ": -10500.0,
+      "minM": -453.7,
+      "maxM": 68.1
+    },
+    {
+      "id": "A4",
+      "col": 0,
+      "row": 3,
+      "file": "height/A/A4.png",
+      "centerX": -24500.0,
+      "centerZ": -3500.0,
+      "minM": -1413.3,
+      "maxM": 407.8
+    },
+    {
+      "id": "A5",
+      "col": 0,
+      "row": 4,
+      "file": "height/A/A5.png",
+      "centerX": -24500.0,
+      "centerZ": 3500.0,
+      "minM": -335.1,
+      "maxM": 387.6
+    },
+    {
+      "id": "A6",
+      "col": 0,
+      "row": 5,
+      "file": "height/A/A6.png",
+      "centerX": -24500.0,
+      "centerZ": 10500.0,
+      "minM": -740.6,
+      "maxM": 19.3
+    },
+    {
+      "id": "A7",
+      "col": 0,
+      "row": 6,
+      "file": "height/A/A7.png",
+      "centerX": -24500.0,
+      "centerZ": 17500.0,
+      "minM": -2086.4,
+      "maxM": -650.3
+    },
+    {
+      "id": "A8",
+      "col": 0,
+      "row": 7,
+      "file": "height/A/A8.png",
+      "centerX": -24500.0,
+      "centerZ": 24500.0,
+      "minM": -2514.8,
+      "maxM": -2033.1
+    },
+    {
+      "id": "B1",
+      "col": 1,
+      "row": 0,
+      "file": "height/B/B1.png",
+      "centerX": -17500.0,
+      "centerZ": -24500.0,
+      "minM": -2380.1,
+      "maxM": -738.0
+    },
+    {
+      "id": "B2",
+      "col": 1,
+      "row": 1,
+      "file": "height/B/B2.png",
+      "centerX": -17500.0,
+      "centerZ": -17500.0,
+      "minM": -1664.4,
+      "maxM": -27.1
+    },
+    {
+      "id": "B3",
+      "col": 1,
+      "row": 2,
+      "file": "height/B/B3.png",
+      "centerX": -17500.0,
+      "centerZ": -10500.0,
+      "minM": -7578.0,
+      "maxM": 1047.7
+    },
+    {
+      "id": "B4",
+      "col": 1,
+      "row": 3,
+      "file": "height/B/B4.png",
+      "centerX": -17500.0,
+      "centerZ": -3500.0,
+      "minM": -5021.7,
+      "maxM": 1080.5
+    },
+    {
+      "id": "B5",
+      "col": 1,
+      "row": 4,
+      "file": "height/B/B5.png",
+      "centerX": -17500.0,
+      "centerZ": 3500.0,
+      "minM": 2.0,
+      "maxM": 834.7
+    },
+    {
+      "id": "B6",
+      "col": 1,
+      "row": 5,
+      "file": "height/B/B6.png",
+      "centerX": -17500.0,
+      "centerZ": 10500.0,
+      "minM": -648.6,
+      "maxM": 369.3
+    },
+    {
+      "id": "B7",
+      "col": 1,
+      "row": 6,
+      "file": "height/B/B7.png",
+      "centerX": -17500.0,
+      "centerZ": 17500.0,
+      "minM": -2051.5,
+      "maxM": -58.2
+    },
+    {
+      "id": "B8",
+      "col": 1,
+      "row": 7,
+      "file": "height/B/B8.png",
+      "centerX": -17500.0,
+      "centerZ": 24500.0,
+      "minM": -2435.3,
+      "maxM": -1626.9
+    },
+    {
+      "id": "C1",
+      "col": 2,
+      "row": 0,
+      "file": "height/C/C1.png",
+      "centerX": -10500.0,
+      "centerZ": -24500.0,
+      "minM": -2162.9,
+      "maxM": -75.1
+    },
+    {
+      "id": "C2",
+      "col": 2,
+      "row": 1,
+      "file": "height/C/C2.png",
+      "centerX": -10500.0,
+      "centerZ": -17500.0,
+      "minM": -5292.3,
+      "maxM": 1116.9
+    },
+    {
+      "id": "C3",
+      "col": 2,
+      "row": 2,
+      "file": "height/C/C3.png",
+      "centerX": -10500.0,
+      "centerZ": -10500.0,
+      "minM": -4637.3,
+      "maxM": 1297.6
+    },
+    {
+      "id": "C4",
+      "col": 2,
+      "row": 3,
+      "file": "height/C/C4.png",
+      "centerX": -10500.0,
+      "centerZ": -3500.0,
+      "minM": 173.7,
+      "maxM": 1169.6
+    },
+    {
+      "id": "C5",
+      "col": 2,
+      "row": 4,
+      "file": "height/C/C5.png",
+      "centerX": -10500.0,
+      "centerZ": 3500.0,
+      "minM": 25.3,
+      "maxM": 922.2
+    },
+    {
+      "id": "C6",
+      "col": 2,
+      "row": 5,
+      "file": "height/C/C6.png",
+      "centerX": -10500.0,
+      "centerZ": 10500.0,
+      "minM": -55.6,
+      "maxM": 375.7
+    },
+    {
+      "id": "C7",
+      "col": 2,
+      "row": 6,
+      "file": "height/C/C7.png",
+      "centerX": -10500.0,
+      "centerZ": 17500.0,
+      "minM": -1623.8,
+      "maxM": 135.4
+    },
+    {
+      "id": "C8",
+      "col": 2,
+      "row": 7,
+      "file": "height/C/C8.png",
+      "centerX": -10500.0,
+      "centerZ": 24500.0,
+      "minM": -2093.1,
+      "maxM": -939.1
+    },
+    {
+      "id": "D1",
+      "col": 3,
+      "row": 0,
+      "file": "height/D/D1.png",
+      "centerX": -3500.0,
+      "centerZ": -24500.0,
+      "minM": -687.4,
+      "maxM": -18.5
+    },
+    {
+      "id": "D2",
+      "col": 3,
+      "row": 1,
+      "file": "height/D/D2.png",
+      "centerX": -3500.0,
+      "centerZ": -17500.0,
+      "minM": -5779.1,
+      "maxM": 1137.6
+    },
+    {
+      "id": "D3",
+      "col": 3,
+      "row": 2,
+      "file": "height/D/D3.png",
+      "centerX": -3500.0,
+      "centerZ": -10500.0,
+      "minM": 61.0,
+      "maxM": 1320.5
+    },
+    {
+      "id": "D4",
+      "col": 3,
+      "row": 3,
+      "file": "height/D/D4.png",
+      "centerX": -3500.0,
+      "centerZ": -3500.0,
+      "minM": 400.6,
+      "maxM": 1420.5
+    },
+    {
+      "id": "D5",
+      "col": 3,
+      "row": 4,
+      "file": "height/D/D5.png",
+      "centerX": -3500.0,
+      "centerZ": 3500.0,
+      "minM": 127.9,
+      "maxM": 1329.4
+    },
+    {
+      "id": "D6",
+      "col": 3,
+      "row": 5,
+      "file": "height/D/D6.png",
+      "centerX": -3500.0,
+      "centerZ": 10500.0,
+      "minM": 19.3,
+      "maxM": 820.1
+    },
+    {
+      "id": "D7",
+      "col": 3,
+      "row": 6,
+      "file": "height/D/D7.png",
+      "centerX": -3500.0,
+      "centerZ": 17500.0,
+      "minM": -930.8,
+      "maxM": 217.0
+    },
+    {
+      "id": "D8",
+      "col": 3,
+      "row": 7,
+      "file": "height/D/D8.png",
+      "centerX": -3500.0,
+      "centerZ": 24500.0,
+      "minM": -1949.2,
+      "maxM": -481.1
+    },
+    {
+      "id": "E1",
+      "col": 4,
+      "row": 0,
+      "file": "height/E/E1.png",
+      "centerX": 3500.0,
+      "centerZ": -24500.0,
+      "minM": -1700.9,
+      "maxM": -10.2
+    },
+    {
+      "id": "E2",
+      "col": 4,
+      "row": 1,
+      "file": "height/E/E2.png",
+      "centerX": 3500.0,
+      "centerZ": -17500.0,
+      "minM": -617.4,
+      "maxM": 382.4
+    },
+    {
+      "id": "E3",
+      "col": 4,
+      "row": 2,
+      "file": "height/E/E3.png",
+      "centerX": 3500.0,
+      "centerZ": -10500.0,
+      "minM": 34.5,
+      "maxM": 1343.7
+    },
+    {
+      "id": "E4",
+      "col": 4,
+      "row": 3,
+      "file": "height/E/E4.png",
+      "centerX": 3500.0,
+      "centerZ": -3500.0,
+      "minM": 274.0,
+      "maxM": 1597.9
+    },
+    {
+      "id": "E5",
+      "col": 4,
+      "row": 4,
+      "file": "height/E/E5.png",
+      "centerX": 3500.0,
+      "centerZ": 3500.0,
+      "minM": 174.7,
+      "maxM": 1501.9
+    },
+    {
+      "id": "E6",
+      "col": 4,
+      "row": 5,
+      "file": "height/E/E6.png",
+      "centerX": 3500.0,
+      "centerZ": 10500.0,
+      "minM": 116.3,
+      "maxM": 981.5
+    },
+    {
+      "id": "E7",
+      "col": 4,
+      "row": 6,
+      "file": "height/E/E7.png",
+      "centerX": 3500.0,
+      "centerZ": 17500.0,
+      "minM": -680.1,
+      "maxM": 279.4
+    },
+    {
+      "id": "E8",
+      "col": 4,
+      "row": 7,
+      "file": "height/E/E8.png",
+      "centerX": 3500.0,
+      "centerZ": 24500.0,
+      "minM": -1554.5,
+      "maxM": -65.6
+    },
+    {
+      "id": "F1",
+      "col": 5,
+      "row": 0,
+      "file": "height/F/F1.png",
+      "centerX": 10500.0,
+      "centerZ": -24500.0,
+      "minM": -1944.2,
+      "maxM": -0.4
+    },
+    {
+      "id": "F2",
+      "col": 5,
+      "row": 1,
+      "file": "height/F/F2.png",
+      "centerX": 10500.0,
+      "centerZ": -17500.0,
+      "minM": -565.8,
+      "maxM": 219.8
+    },
+    {
+      "id": "F3",
+      "col": 5,
+      "row": 2,
+      "file": "height/F/F3.png",
+      "centerX": 10500.0,
+      "centerZ": -10500.0,
+      "minM": 19.2,
+      "maxM": 978.7
+    },
+    {
+      "id": "F4",
+      "col": 5,
+      "row": 3,
+      "file": "height/F/F4.png",
+      "centerX": 10500.0,
+      "centerZ": -3500.0,
+      "minM": 121.3,
+      "maxM": 992.4
+    },
+    {
+      "id": "F5",
+      "col": 5,
+      "row": 4,
+      "file": "height/F/F5.png",
+      "centerX": 10500.0,
+      "centerZ": 3500.0,
+      "minM": 96.6,
+      "maxM": 755.9
+    },
+    {
+      "id": "F6",
+      "col": 5,
+      "row": 5,
+      "file": "height/F/F6.png",
+      "centerX": 10500.0,
+      "centerZ": 10500.0,
+      "minM": 23.0,
+      "maxM": 457.1
+    },
+    {
+      "id": "F7",
+      "col": 5,
+      "row": 6,
+      "file": "height/F/F7.png",
+      "centerX": 10500.0,
+      "centerZ": 17500.0,
+      "minM": -172.6,
+      "maxM": 607.3
+    },
+    {
+      "id": "F8",
+      "col": 5,
+      "row": 7,
+      "file": "height/F/F8.png",
+      "centerX": 10500.0,
+      "centerZ": 24500.0,
+      "minM": -1690.0,
+      "maxM": -12.2
+    },
+    {
+      "id": "G1",
+      "col": 6,
+      "row": 0,
+      "file": "height/G/G1.png",
+      "centerX": 17500.0,
+      "centerZ": -24500.0,
+      "minM": -2109.3,
+      "maxM": -5.2
+    },
+    {
+      "id": "G2",
+      "col": 6,
+      "row": 1,
+      "file": "height/G/G2.png",
+      "centerX": 17500.0,
+      "centerZ": -17500.0,
+      "minM": -482.0,
+      "maxM": 234.4
+    },
+    {
+      "id": "G3",
+      "col": 6,
+      "row": 2,
+      "file": "height/G/G3.png",
+      "centerX": 17500.0,
+      "centerZ": -10500.0,
+      "minM": 53.5,
+      "maxM": 905.9
+    },
+    {
+      "id": "G4",
+      "col": 6,
+      "row": 3,
+      "file": "height/G/G4.png",
+      "centerX": 17500.0,
+      "centerZ": -3500.0,
+      "minM": 8.2,
+      "maxM": 865.9
+    },
+    {
+      "id": "G5",
+      "col": 6,
+      "row": 4,
+      "file": "height/G/G5.png",
+      "centerX": 17500.0,
+      "centerZ": 3500.0,
+      "minM": -1.7,
+      "maxM": 282.3
+    },
+    {
+      "id": "G6",
+      "col": 6,
+      "row": 5,
+      "file": "height/G/G6.png",
+      "centerX": 17500.0,
+      "centerZ": 10500.0,
+      "minM": -4237.3,
+      "maxM": 504.5
+    },
+    {
+      "id": "G7",
+      "col": 6,
+      "row": 6,
+      "file": "height/G/G7.png",
+      "centerX": 17500.0,
+      "centerZ": 17500.0,
+      "minM": -4757.0,
+      "maxM": 701.0
+    },
+    {
+      "id": "G8",
+      "col": 6,
+      "row": 7,
+      "file": "height/G/G8.png",
+      "centerX": 17500.0,
+      "centerZ": 24500.0,
+      "minM": -2287.4,
+      "maxM": -111.9
+    },
+    {
+      "id": "H1",
+      "col": 7,
+      "row": 0,
+      "file": "height/H/H1.png",
+      "centerX": 24500.0,
+      "centerZ": -24500.0,
+      "minM": -2025.4,
+      "maxM": -300.6
+    },
+    {
+      "id": "H2",
+      "col": 7,
+      "row": 1,
+      "file": "height/H/H2.png",
+      "centerX": 24500.0,
+      "centerZ": -17500.0,
+      "minM": -674.8,
+      "maxM": 98.3
+    },
+    {
+      "id": "H3",
+      "col": 7,
+      "row": 2,
+      "file": "height/H/H3.png",
+      "centerX": 24500.0,
+      "centerZ": -10500.0,
+      "minM": -560.6,
+      "maxM": 475.9
+    },
+    {
+      "id": "H4",
+      "col": 7,
+      "row": 3,
+      "file": "height/H/H4.png",
+      "centerX": 24500.0,
+      "centerZ": -3500.0,
+      "minM": -767.5,
+      "maxM": 111.0
+    },
+    {
+      "id": "H5",
+      "col": 7,
+      "row": 4,
+      "file": "height/H/H5.png",
+      "centerX": 24500.0,
+      "centerZ": 3500.0,
+      "minM": -922.5,
+      "maxM": 36.4
+    },
+    {
+      "id": "H6",
+      "col": 7,
+      "row": 5,
+      "file": "height/H/H6.png",
+      "centerX": 24500.0,
+      "centerZ": 10500.0,
+      "minM": -978.7,
+      "maxM": 29.6
+    },
+    {
+      "id": "H7",
+      "col": 7,
+      "row": 6,
+      "file": "height/H/H7.png",
+      "centerX": 24500.0,
+      "centerZ": 17500.0,
+      "minM": -2393.7,
+      "maxM": -131.5
+    },
+    {
+      "id": "H8",
+      "col": 7,
+      "row": 7,
+      "file": "height/H/H8.png",
+      "centerX": 24500.0,
+      "centerZ": 24500.0,
+      "minM": -3014.9,
+      "maxM": -1009.8
+    }
+  ]
+}
