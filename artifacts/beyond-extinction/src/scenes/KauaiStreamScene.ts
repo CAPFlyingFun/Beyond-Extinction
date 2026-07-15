@@ -23,6 +23,7 @@ const SUN = new THREE.Vector3(-0.55, 0.72, 0.42).normalize();
 const SPAWN = { x: 20900, z: 1288, facing: 270 };
 const WATER_SIZE = 80000; // ocean plane extent (m)
 const WATER_REPEAT = 10000; // ripple normal repeats → ~8 m wavelength
+const WATER_Y = -0.4; // surface just below the 0 m waterline (soft shoreline)
 
 /**
  * Ocean surface material: a translucent MeshStandard blue with an animated
@@ -59,9 +60,6 @@ function makeOceanMaterial(): THREE.MeshStandardMaterial {
     opacity: 0.82,
     envMapIntensity: 1.1,
     normalScale: new THREE.Vector2(0.55, 0.55),
-    polygonOffset: true, // bias depth back so the shoreline sand wins (no z-fight)
-    polygonOffsetFactor: 1,
-    polygonOffsetUnits: 2,
   });
   const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
   mat.onBeforeCompile = (sh) => {
@@ -144,7 +142,9 @@ class KauaiStreamScene implements IScene {
       waterMat,
     );
     water.geometry.rotateX(-Math.PI / 2);
-    water.position.set(SPAWN.x, 0, SPAWN.z);
+    // Sit the surface a touch below the 0 m waterline so the terrain's soft
+    // wet-sand → reef fade forms the shoreline, not a hard water edge.
+    water.position.set(SPAWN.x, WATER_Y, SPAWN.z);
     water.renderOrder = -1;
     this.scene.add(water);
     this.water = water;
@@ -241,6 +241,13 @@ class KauaiStreamScene implements IScene {
         // World-lock the ripple UVs to (x,z) so they don't swim with the
         // camera-following plane, then scroll them for the wave motion.
         this.waterT += dt;
+        // Slow "breathing" tide: the whole ocean level drifts between +0.1 m
+        // and -0.9 m (two incommensurate sines → looks non-repeating), riding
+        // on top of the per-vertex swells so the shoreline laps in and out.
+        const tide =
+          0.6 * Math.sin(this.waterT * 0.25) +
+          0.4 * Math.sin(this.waterT * 0.11 + 1.3); // ∈ [-1, 1]
+        this.water.position.y = WATER_Y + 0.5 * tide; // [-0.9, +0.1]
         if (this.waterNormal) {
           const uvpm = WATER_REPEAT / WATER_SIZE;
           this.waterNormal.offset.set(

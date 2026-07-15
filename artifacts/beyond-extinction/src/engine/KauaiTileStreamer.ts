@@ -487,6 +487,7 @@ function makeBiomeMaterial(tex: BiomeTextures): THREE.MeshStandardMaterial {
 varying vec3 vBiomeW;
 varying vec3 vBiomeN;
 uniform sampler2D tSand, tGrass, tJungle, tRock, tMtn, tSnow, tReef;
+float gWet = 0.0; // shoreline wetness (set in map_fragment, used for roughness)
 // three uploads sRGB textures with an sRGB internal format on WebGL2, so
 // texture2D already returns LINEAR — no manual decode needed.
 vec3 s2l(vec3 c) { return c; }
@@ -522,14 +523,23 @@ vec3 triplanar(sampler2D tex, vec3 wp, vec3 n, float scale) {
   c = mix(c, snow,  smoothstep(1150.0, 1420.0, e));
   float rockAmt = smoothstep(0.42, 0.72, slope) * smoothstep(2.0, 12.0, e);
   c = mix(c, rock, rockAmt);                     // steep faces -> cliff
-  if (e < 0.0) {                                 // below sea level: seafloor
-    float d = clamp(-e / 55.0, 0.0, 1.0);        // 0 at shore -> 1 at ~55 m
+  // Soft shoreline (no hard cut at e=0): the beach dampens to wet sand as it
+  // nears the waterline, then the reef/seafloor fades in over a few metres and
+  // deepens with depth — the same kind of smoothstep blend as the biome bands.
+  gWet = smoothstep(1.4, -0.8, e);               // 0 dry -> 1 at/below waterline
+  c = mix(c, c * 0.66, smoothstep(1.3, 0.0, e)); // wet-sand band
+  {
+    float d = clamp(-e / 55.0, 0.0, 1.0);
     vec3 reef = s2l(texture2D(tReef, uv / 10.0).rgb);
-    vec3 deep = vec3(0.015, 0.06, 0.10);         // dark deep-ocean floor
-    c = mix(reef, deep, d * d);
+    vec3 underwater = mix(reef, vec3(0.015, 0.06, 0.10), d * d);
+    c = mix(c, underwater, smoothstep(0.3, -3.5, e)); // fade in over ~3.5 m
   }
   diffuseColor.rgb *= c;
 }`,
+      )
+      .replace(
+        "#include <roughnessmap_fragment>",
+        "#include <roughnessmap_fragment>\n  roughnessFactor = mix(roughnessFactor, 0.25, gWet); // wet sheen at the shore",
       );
   };
   mat.customProgramCacheKey = () => "kauai-biome";
