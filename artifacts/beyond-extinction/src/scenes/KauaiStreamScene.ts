@@ -55,10 +55,10 @@ class KauaiStreamScene implements IScene {
       new THREE.PlaneGeometry(80000, 80000),
       new THREE.MeshStandardMaterial({
         color: 0x1c5a76,
-        roughness: 0.35,
-        metalness: 0.1,
+        roughness: 0.32,
+        metalness: 0.12,
         transparent: true,
-        opacity: 0.86,
+        opacity: 0.8, // let shallow reef show turquoise through the surface
       }),
     );
     water.geometry.rotateX(-Math.PI / 2);
@@ -112,9 +112,10 @@ class KauaiStreamScene implements IScene {
       const x = this.camera.position.x;
       const z = this.camera.position.z;
       s.update(dt, x, z);
-      // Ride the terrain surface once the standing tile has decoded.
+      // Ride the terrain surface once the standing tile has decoded; over
+      // ocean, stay at the water surface (don't sink below sea level).
       if (s.tileReadyAt(x, z)) {
-        this.camera.position.y = s.heightAt(x, z) + EYE;
+        this.camera.position.y = Math.max(s.heightAt(x, z), 0) + EYE;
         this.grounded = true;
       } else if (!this.grounded) {
         this.camera.position.y = EYE; // sit at sea level until first tile lands

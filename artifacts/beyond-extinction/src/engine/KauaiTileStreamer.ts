@@ -30,10 +30,15 @@ export interface KauaiManifest {
   spawn?: { tile?: string; x?: number; z?: number; facing?: string };
 }
 
-/** Terrarium RGB → metres. Ocean/nodata reads huge-negative → clamp to sea. */
+/**
+ * Terrarium RGB → metres. Keeps the REAL bathymetry (negative = below sea
+ * level) so the seafloor drops beneath the water plane instead of z-fighting a
+ * flat sand shelf against it. Only genuine nodata sentinels (absurd depths)
+ * are floored.
+ */
 function decodeElev(r: number, g: number, b: number): number {
   const e = r * 256 + g + b / 256 - 32768;
-  return e < -20 ? 0 : Math.max(0, e);
+  return e < -6000 ? -6000 : e;
 }
 
 const SEG = 96; // grid resolution per tile (97² verts ≈ 9.4k)
@@ -48,6 +53,7 @@ interface BiomeTextures {
   rock: THREE.Texture; // cliff.jpg — steep faces + mid rock
   mountain: THREE.Texture;
   snow: THREE.Texture;
+  reef: THREE.Texture; // shallow seafloor / lagoon
 }
 
 type TileState = "loading" | "in" | "active" | "out";
@@ -113,6 +119,7 @@ export class KauaiTileStreamer {
       "rock",
       "mountain",
       "snow",
+      "reef",
     ];
     const files: Record<keyof BiomeTextures, string> = {
       sand: "sand",
@@ -121,6 +128,7 @@ export class KauaiTileStreamer {
       rock: "cliff",
       mountain: "mountain",
       snow: "snow",
+      reef: "reef",
     };
     const white = (): THREE.Texture => {
       const t = new THREE.DataTexture(
@@ -454,6 +462,7 @@ function makeBiomeMaterial(tex: BiomeTextures): THREE.MeshStandardMaterial {
     shader.uniforms.tRock = { value: tex.rock };
     shader.uniforms.tMtn = { value: tex.mountain };
     shader.uniforms.tSnow = { value: tex.snow };
+    shader.uniforms.tReef = { value: tex.reef };
     shader.vertexShader = shader.vertexShader
       .replace(
         "#include <common>",
@@ -473,7 +482,7 @@ function makeBiomeMaterial(tex: BiomeTextures): THREE.MeshStandardMaterial {
         `#include <common>
 varying vec3 vBiomeW;
 varying vec3 vBiomeN;
-uniform sampler2D tSand, tGrass, tJungle, tRock, tMtn, tSnow;
+uniform sampler2D tSand, tGrass, tJungle, tRock, tMtn, tSnow, tReef;
 // three uploads sRGB textures with an sRGB internal format on WebGL2, so
 // texture2D already returns LINEAR — no manual decode needed.
 vec3 s2l(vec3 c) { return c; }`,
@@ -498,6 +507,12 @@ vec3 s2l(vec3 c) { return c; }`,
   c = mix(c, snow,  smoothstep(1150.0, 1420.0, e));
   float rockAmt = smoothstep(0.42, 0.72, slope) * smoothstep(2.0, 12.0, e);
   c = mix(c, rock, rockAmt);                     // steep faces -> cliff
+  if (e < 0.0) {                                 // below sea level: seafloor
+    float d = clamp(-e / 55.0, 0.0, 1.0);        // 0 at shore -> 1 at ~55 m
+    vec3 reef = s2l(texture2D(tReef, uv / 10.0).rgb);
+    vec3 deep = vec3(0.015, 0.06, 0.10);         // dark deep-ocean floor
+    c = mix(reef, deep, d * d);
+  }
   diffuseColor.rgb *= c;
 }`,
       );
