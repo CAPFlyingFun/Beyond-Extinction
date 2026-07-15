@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { PlayerController } from "../engine/PlayerController";
 import { KauaiTileStreamer, type KauaiManifest } from "../engine/KauaiTileStreamer";
+import { KauaiHydro } from "../engine/KauaiHydro";
 import { assetUrl, loadTexture } from "../engine/assets";
 import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
 
@@ -67,6 +68,7 @@ class KauaiStreamScene implements IScene {
 
   private readonly ctx: SceneContext;
   private streamer?: KauaiTileStreamer;
+  private hydro?: KauaiHydro;
   private player?: PlayerController;
   private water?: THREE.Mesh;
   private waterNormal?: THREE.Texture;
@@ -127,6 +129,8 @@ class KauaiStreamScene implements IScene {
       const manifest = (await res.json()) as KauaiManifest;
       this.streamer = new KauaiTileStreamer(this.scene, manifest, { radius: 2 });
       this.streamer.update(0, SPAWN.x, SPAWN.z); // kick the first ring
+      // Real NHD rivers + lakes, draped on the tiles and streamed with them.
+      this.hydro = new KauaiHydro(this.scene);
     } catch (e) {
       console.error("[kauai] manifest load failed", e);
     }
@@ -190,6 +194,7 @@ class KauaiStreamScene implements IScene {
       const x = this.camera.position.x;
       const z = this.camera.position.z;
       s.update(dt, x, z);
+      this.hydro?.update(dt, s);
       // Ride the terrain surface once the standing tile has decoded; over
       // ocean, stay at the water surface (don't sink below sea level).
       if (s.tileReadyAt(x, z)) {
@@ -238,6 +243,7 @@ class KauaiStreamScene implements IScene {
   dispose(): void {
     this.player?.setActive(false);
     this.player?.dispose();
+    this.hydro?.dispose();
     this.streamer?.dispose();
     this.envMap?.dispose();
     this.bgMap?.dispose();

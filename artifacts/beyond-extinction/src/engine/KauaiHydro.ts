@@ -1,0 +1,307 @@
+import * as THREE from "three";
+import { assetUrl, loadTexture } from "./assets";
+import type { KauaiTileStreamer } from "./KauaiTileStreamer";
+
+/**
+ * Real Kauaʻi hydrography (USGS NHDPlus HR), baked offline by
+ * tools/bake_hydro.py into assets/terrain/kauai/hydro.json:
+ *
+ *  - rivers: polyline runs (world XZ + Y draped on the RENDERED terrain mesh,
+ *    monotonic downstream) with a per-point width from drainage area. Runs are
+ *    pre-split per terrain tile so they stream with {@link KauaiTileStreamer}.
+ *  - lakes/reservoirs: flat rings (+holes) at a baked waterline Y, triangulated
+ *    here at load time with THREE.ShapeUtils.
+ *
+ * Rendering matches the ocean look (translucent blue + animated ripple normals
+ * + fresnel sheen) so all water reads as one family. River UVs run along the
+ * channel (u = metres/8) and the normal map scrolls downstream; lake UVs are
+ * world-locked like the ocean's.
+ *
+ * Each tile's rivers merge into ONE mesh and its lakes into another (2 draw
+ * calls per resident tile, worst case). Chunks show/hide with tile residency —
+ * geometry is built lazily on first residency and cached for the scene's life.
+ */
+
+const FLOAT_M = 0.3; // ribbon sits this far above the rendered terrain surface
+const UV_M = 8; // metres per ripple-normal repeat (same wavelength as the ocean)
+const RIVER_SCROLL = 0.05; // u/s ≈ 0.4 m/s downstream drift
+const LAKE_DRIFT = { x: 0.014, y: 0.01 }; // ocean's ripple drift (u/s)
+
+interface HydroRiver {
+  tile: string;
+  name: string | null;
+  toOcean: boolean;
+  order: number;
+  /** [x, y, z, width] per point, upstream → downstream */
+  pts: [number, number, number, number][];
+}
+interface HydroLake {
+  tile: string;
+  name: string | null;
+  y: number;
+  ring: [number, number][];
+  holes: [number, number][][];
+}
+interface HydroDoc {
+  version: number;
+  rivers: HydroRiver[];
+  lakes: HydroLake[];
+}
+
+/** Ocean-family water material (see KauaiStreamScene.makeOceanMaterial). */
+function makeWaterMaterial(color: number): THREE.MeshStandardMaterial {
+  const mat = new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.13,
+    metalness: 0.22,
+    transparent: true,
+    opacity: 0.82,
+    envMapIntensity: 1.1,
+    normalScale: new THREE.Vector2(0.55, 0.55),
+    side: THREE.DoubleSide, // ribbons stay visible from below-bank angles
+  });
+  const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uSky = { value: sky };
+    sh.fragmentShader = sh.fragmentShader
+      .replace("#include <common>", "#include <common>\nuniform vec3 uSky;")
+      .replace(
+        "#include <lights_fragment_end>",
+        `#include <lights_fragment_end>
+        {
+          float fres = pow(1.0 - clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0), 3.0);
+          totalEmissiveRadiance += uSky * fres * 0.35;
+        }`,
+      );
+  };
+  return mat;
+}
+
+/** Triangle-strip ribbon along a run's centerline, XZ-perpendicular offsets. */
+function buildRibbon(
+  run: HydroRiver,
+  positions: number[],
+  uvs: number[],
+  indices: number[],
+): void {
+  const pts = run.pts;
+  const n = pts.length;
+  if (n < 2) return;
+  let cum = 0;
+  let prevX = pts[0][0];
+  let prevZ = pts[0][2];
+  const base = positions.length / 3;
+  let emitted = 0;
+  for (let i = 0; i < n; i++) {
+    const [x, y, z, w] = pts[i];
+    // central-difference direction (falls back to fwd/back at the ends)
+    const a = pts[Math.max(0, i - 1)];
+    const b = pts[Math.min(n - 1, i + 1)];
+    let dx = b[0] - a[0];
+    let dz = b[2] - a[2];
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-6) continue; // degenerate — skip, quad bridges the gap
+    dx /= len;
+    dz /= len;
+    const px = -dz; // left-perpendicular in XZ
+    const pz = dx;
+    const half = w / 2;
+    const yy = y + FLOAT_M;
+    positions.push(x + px * half, yy, z + pz * half, x - px * half, yy, z - pz * half);
+    cum += Math.hypot(x - prevX, z - prevZ);
+    prevX = x;
+    prevZ = z;
+    const u = cum / UV_M;
+    uvs.push(u, 0, u, w / UV_M);
+    emitted++;
+  }
+  for (let i = 0; i < emitted - 1; i++) {
+    const v0 = base + i * 2;
+    // two triangles per quad, wound for +Y normals
+    indices.push(v0, v0 + 2, v0 + 1, v0 + 1, v0 + 2, v0 + 3);
+  }
+}
+
+/** Flat lake mesh from ring + holes at the baked waterline. */
+function buildLake(
+  lake: HydroLake,
+  positions: number[],
+  uvs: number[],
+  indices: number[],
+): void {
+  const contour = lake.ring.map(([x, z]) => new THREE.Vector2(x, z));
+  const holes = lake.holes.map((h) => h.map(([x, z]) => new THREE.Vector2(x, z)));
+  let tris: number[][];
+  try {
+    tris = THREE.ShapeUtils.triangulateShape(contour, holes);
+  } catch {
+    return; // malformed ring — skip rather than crash the scene
+  }
+  const all = contour.concat(...holes);
+  const base = positions.length / 3;
+  for (const v of all) {
+    positions.push(v.x, lake.y, v.y);
+    uvs.push(v.x / UV_M, v.y / UV_M);
+  }
+  for (const [a, b, c] of tris) {
+    // ShapeUtils winds for +Z-up shapes; our Y-up flat mesh needs the flip
+    indices.push(base + a, base + c, base + b);
+  }
+}
+
+interface Chunk {
+  tile: string;
+  cx: number;
+  cz: number;
+  rivers: HydroRiver[];
+  lakes: HydroLake[];
+  built: boolean;
+  meshes: THREE.Mesh[];
+}
+
+export class KauaiHydro {
+  readonly group = new THREE.Group();
+
+  private readonly scene: THREE.Scene;
+  private readonly chunks = new Map<string, Chunk>();
+  private riverMat: THREE.MeshStandardMaterial;
+  private lakeMat: THREE.MeshStandardMaterial;
+  private riverNormal?: THREE.Texture;
+  private lakeNormal?: THREE.Texture;
+  private t = 0;
+  private disposed = false;
+
+  constructor(scene: THREE.Scene) {
+    this.scene = scene;
+    this.group.name = "kauai-hydro";
+    scene.add(this.group);
+    // Slightly deeper blue-green than the open ocean so channels read as
+    // river water, while staying in the same material family.
+    this.riverMat = makeWaterMaterial(0x175b66);
+    this.lakeMat = makeWaterMaterial(0x14526e);
+    void this.loadNormals();
+    void this.load();
+  }
+
+  private async loadNormals(): Promise<void> {
+    const tex = await loadTexture("assets/textures/water_normal.png");
+    if (!tex || this.disposed) return;
+    const prep = (t: THREE.Texture): THREE.Texture => {
+      t.colorSpace = THREE.NoColorSpace;
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.needsUpdate = true;
+      return t;
+    };
+    // independent clones: rivers scroll downstream, lakes drift like the ocean
+    this.riverNormal = prep(tex.clone());
+    this.lakeNormal = prep(tex.clone());
+    this.riverMat.normalMap = this.riverNormal;
+    this.riverMat.needsUpdate = true;
+    this.lakeMat.normalMap = this.lakeNormal;
+    this.lakeMat.needsUpdate = true;
+  }
+
+  private async load(): Promise<void> {
+    let doc: HydroDoc;
+    try {
+      const res = await fetch(assetUrl("assets/terrain/kauai/hydro.json"));
+      if (!res.ok) throw new Error(`hydro.json ${res.status}`);
+      doc = (await res.json()) as HydroDoc;
+    } catch (e) {
+      console.error("[kauai-hydro] load failed — no rivers/lakes this session", e);
+      return;
+    }
+    if (this.disposed) return;
+    const chunkOf = (tile: string): Chunk => {
+      let c = this.chunks.get(tile);
+      if (!c) {
+        const col = tile.charCodeAt(0) - 65;
+        const row = parseInt(tile.slice(1), 10) - 1;
+        c = {
+          tile,
+          cx: (col - 3.5) * 7000,
+          cz: (row - 3.5) * 7000,
+          rivers: [],
+          lakes: [],
+          built: false,
+          meshes: [],
+        };
+        this.chunks.set(tile, c);
+      }
+      return c;
+    };
+    for (const r of doc.rivers) chunkOf(r.tile).rivers.push(r);
+    for (const l of doc.lakes) chunkOf(l.tile).lakes.push(l);
+  }
+
+  private buildChunk(c: Chunk): void {
+    c.built = true;
+    const make = (
+      build: (pos: number[], uv: number[], idx: number[]) => void,
+      mat: THREE.Material,
+      name: string,
+    ): void => {
+      const pos: number[] = [];
+      const uv: number[] = [];
+      const idx: number[] = [];
+      build(pos, uv, idx);
+      if (idx.length === 0) return;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+      geo.setIndex(idx);
+      geo.computeVertexNormals();
+      geo.computeBoundingSphere();
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.name = name;
+      mesh.visible = false;
+      c.meshes.push(mesh);
+      this.group.add(mesh);
+    };
+    make(
+      (p, u, i) => {
+        for (const r of c.rivers) buildRibbon(r, p, u, i);
+      },
+      this.riverMat,
+      `hydro-${c.tile}-rivers`,
+    );
+    make(
+      (p, u, i) => {
+        for (const l of c.lakes) buildLake(l, p, u, i);
+      },
+      this.lakeMat,
+      `hydro-${c.tile}-lakes`,
+    );
+  }
+
+  /** Call every frame after the streamer's update. */
+  update(dt: number, streamer: KauaiTileStreamer): void {
+    this.t += dt;
+    if (this.riverNormal) this.riverNormal.offset.set(-this.t * RIVER_SCROLL, 0);
+    if (this.lakeNormal) {
+      this.lakeNormal.offset.set(this.t * LAKE_DRIFT.x, this.t * LAKE_DRIFT.y);
+    }
+    for (const c of this.chunks.values()) {
+      const ready = streamer.tileReadyAt(c.cx, c.cz);
+      if (ready && !c.built) this.buildChunk(c);
+      for (const m of c.meshes) m.visible = ready;
+    }
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    for (const c of this.chunks.values()) {
+      for (const m of c.meshes) {
+        this.group.remove(m);
+        m.geometry.dispose();
+      }
+      c.meshes.length = 0;
+    }
+    this.chunks.clear();
+    this.riverMat.dispose();
+    this.lakeMat.dispose();
+    this.riverNormal?.dispose();
+    this.lakeNormal?.dispose();
+    this.scene.remove(this.group);
+  }
+}
