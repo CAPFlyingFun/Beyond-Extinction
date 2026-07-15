@@ -151,7 +151,9 @@ export class KauaiTileStreamer {
         const tex = (await loadTexture(`assets/textures/${files[n]}.jpg`)) ?? white();
         tex.wrapS = THREE.RepeatWrapping;
         tex.wrapT = THREE.RepeatWrapping;
-        tex.anisotropy = 4;
+        // High anisotropy keeps the ground crisp at grazing angles instead of
+        // dissolving into moiré bands (three clamps to the device max).
+        tex.anisotropy = 16;
         out[n] = tex;
       }),
     );
@@ -505,6 +507,29 @@ float gWet = 0.0; // shoreline wetness (set in map_fragment, used for roughness)
 // three uploads sRGB textures with an sRGB internal format on WebGL2, so
 // texture2D already returns LINEAR — no manual decode needed.
 vec3 s2l(vec3 c) { return c; }
+// Cheap world-space value noise (no texture fetch) — used to jitter biome
+// band thresholds and to modulate brightness so repeats/contours break up.
+// Sinless hash (Dave Hoskins): stays artifact-free at this map's large world
+// coordinates, where sin()-based hashes lose precision on mobile GPUs.
+float bhash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float bnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(bhash(i), bhash(i + vec2(1.0, 0.0)), f.x),
+             mix(bhash(i + vec2(0.0, 1.0)), bhash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+// Anti-repetition tiling: the same texture at two offset scales, blended.
+// The second (4.3× larger, irrational-ish ratio) de-phases the repeat grid so
+// the pattern stops reading as a checkerboard at distance.
+vec3 tile2(sampler2D tex, vec2 uv, float scale) {
+  vec3 a = texture2D(tex, uv / scale).rgb;
+  vec3 b = texture2D(tex, uv / (scale * 4.3) + vec2(0.37, 0.71)).rgb;
+  return mix(a, b, 0.45);
+}
 // Triplanar sample: blend the three world-axis projections by the surface
 // normal so vertical faces tile from the side instead of smearing the
 // top-down projection down a cliff.
@@ -520,23 +545,38 @@ vec3 triplanar(sampler2D tex, vec3 wp, vec3 n, float scale) {
         "#include <map_fragment>",
         `{
   float e = vElev;                              // elevation (m) — skirt uses its edge height
-  float slope = 1.0 - clamp(vBiomeN.y, 0.0, 1.0);
+  vec3 nrm = normalize(vBiomeN);                 // varying denormalizes across a triangle
+  float slope = 1.0 - clamp(nrm.y, 0.0, 1.0);
   vec2 uv = vBiomeW.xz;                          // world-space tiling (flat areas)
-  vec3 sand = s2l(texture2D(tSand,   uv / 9.0 ).rgb);
-  vec3 grass= s2l(texture2D(tGrass,  uv / 11.0).rgb);
-  vec3 jung = s2l(texture2D(tJungle, uv / 13.0).rgb);
+  // Jittered band elevation: two octaves of world noise wobble the biome
+  // thresholds ±~45 m so transitions are patchy and organic instead of
+  // following exact height contours. Ramped in above the beach so the
+  // waterline bands (wet sand / reef, which use the raw e) stay put.
+  float jit = bnoise(uv * 0.011) * 0.65 + bnoise(uv * 0.047) * 0.35 - 0.5;
+  float ej = e + jit * 90.0 * min(1.0, max(e, 0.0) / 60.0);
+  vec3 sand = s2l(tile2(tSand,   uv, 9.0 ));
+  vec3 grass= s2l(tile2(tGrass,  uv, 11.0));
+  vec3 jung = s2l(tile2(tJungle, uv, 13.0));
   // rock + mountain are what shows on steep faces → triplanar so they tile
-  vec3 rock = s2l(triplanar(tRock, vBiomeW, vBiomeN, 18.0));
-  vec3 mtn  = s2l(triplanar(tMtn,  vBiomeW, vBiomeN, 22.0));
-  vec3 snow = s2l(texture2D(tSnow,   uv / 12.0).rgb);
+  vec3 rock = s2l(triplanar(tRock, vBiomeW, nrm, 18.0));
+  vec3 mtn  = s2l(triplanar(tMtn,  vBiomeW, nrm, 22.0));
+  vec3 snow = s2l(tile2(tSnow,   uv, 14.0));
+  // Lush Kauaʻi bands: dry grass is only a coastal fringe, jungle green owns
+  // the lowlands, and bare rock/summit bands sit higher up the mountain.
   vec3 c = sand;
-  c = mix(c, grass, smoothstep(3.0, 22.0, e));
-  c = mix(c, jung,  smoothstep(70.0, 240.0, e));
-  c = mix(c, rock,  smoothstep(520.0, 820.0, e));
-  c = mix(c, mtn,   smoothstep(880.0, 1080.0, e));
-  c = mix(c, snow,  smoothstep(1150.0, 1420.0, e));
-  float rockAmt = smoothstep(0.42, 0.72, slope) * smoothstep(2.0, 12.0, e);
-  c = mix(c, rock, rockAmt);                     // steep faces -> cliff
+  c = mix(c, grass, smoothstep(2.5, 12.0, ej));
+  c = mix(c, jung,  smoothstep(18.0, 90.0, ej));
+  c = mix(c, rock,  smoothstep(680.0, 980.0, ej));
+  c = mix(c, mtn,   smoothstep(1020.0, 1220.0, ej));
+  c = mix(c, snow,  smoothstep(1300.0, 1540.0, ej));
+  // Steep faces → cliff rock at ANY elevation (triplanar, so it tiles instead
+  // of smearing). No height gate: coastal bluffs and sea cliffs need it most —
+  // the old gate left them as vertically-stretched sand stripes.
+  float rockAmt = smoothstep(0.30, 0.55, slope);
+  c = mix(c, rock, rockAmt);
+  // Large-scale brightness variation (two noise octaves, no fetch) breaks the
+  // "wallpaper" uniformity of tiled ground seen from altitude.
+  c *= 0.90 + 0.20 * (bnoise(uv * 0.0016) * 0.6 + bnoise(uv * 0.0085) * 0.4);
   // Soft shoreline (no hard cut at e=0): the beach dampens to wet sand as it
   // nears the waterline, then the reef/seafloor fades in over a few metres and
   // deepens with depth — the same kind of smoothstep blend as the biome bands.
