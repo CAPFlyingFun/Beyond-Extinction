@@ -382,7 +382,7 @@ export class KauaiHydro {
     c.built = true;
     // Sample the live rendered terrain and lift a hair so water sits just above
     // the ground surface (never coupled to the ocean tide, never clipping).
-    const groundY: GroundY = (x, z) => streamer.heightAt(x, z) + LIFT_M;
+    const groundY: GroundY = (x, z) => streamer.surfaceHeightAt(x, z) + LIFT_M;
     const make = (
       build: (pos: number[], uv: number[], idx: number[]) => void,
       mat: THREE.Material,

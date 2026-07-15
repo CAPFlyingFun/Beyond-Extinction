@@ -216,7 +216,7 @@ class KauaiStreamScene implements IScene {
       // Ride the terrain surface once the standing tile has decoded; over
       // ocean, stay at the water surface (don't sink below sea level).
       if (s.tileReadyAt(x, z)) {
-        this.camera.position.y = Math.max(s.heightAt(x, z), 0) + EYE;
+        this.camera.position.y = Math.max(s.surfaceHeightAt(x, z), 0) + EYE;
         this.grounded = true;
       } else if (!this.grounded) {
         this.camera.position.y = EYE; // sit at sea level until first tile lands

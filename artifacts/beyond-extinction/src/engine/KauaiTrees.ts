@@ -416,7 +416,9 @@ export class KauaiTrees {
         const prob = canopy * (isTree ? 1 : 0.45);
         if (prob < 0.04 || hash(i, j, 23) > prob) continue;
 
-        const h = streamer.heightAt(px, pz);
+        // Ground on the RENDERED mesh surface (not the finer heightmap) so the
+        // base sits exactly on the terrain you see, even on curved slopes.
+        const h = streamer.surfaceHeightAt(px, pz);
         if (h < 1) continue; // never plant below/at the waterline
 
         // Precise water collision: skip anything landing on/near a real river

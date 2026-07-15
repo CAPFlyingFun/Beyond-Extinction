@@ -202,6 +202,59 @@ export class KauaiTileStreamer {
     );
   }
 
+  /**
+   * Height of the RENDERED terrain surface at world (x, z). Unlike heightAt
+   * (which bilinear-samples the full-resolution heightmap), this samples on the
+   * mesh's SEG-resolution grid and interpolates the four surrounding mesh
+   * vertices — exactly the surface you see. Props grounded here sit on the
+   * visible mesh instead of floating above / sinking below it wherever the
+   * coarse mesh only approximates the finer heightmap (i.e. on curved slopes).
+   */
+  surfaceHeightAt(x: number, z: number): number {
+    const col = this.colOf(x);
+    const row = this.rowOf(z);
+    const t = this.tiles.get(`${col},${row}`);
+    if (!t || !t.heights) return 0;
+    const P = this.P;
+    const h = t.heights;
+    // Height at mesh vertex (gi, gj) = bilinear heightmap sample at that vertex,
+    // matching how the tile mesh sets each vertex's Y at build time.
+    const vh = (gi: number, gj: number): number => {
+      const px = (gi / SEG) * (P - 1);
+      const py = (gj / SEG) * (P - 1);
+      const x0 = Math.floor(px);
+      const y0 = Math.floor(py);
+      const x1 = Math.min(P - 1, x0 + 1);
+      const y1 = Math.min(P - 1, y0 + 1);
+      const tx = px - x0;
+      const ty = py - y0;
+      return (
+        h[y0 * P + x0] * (1 - tx) * (1 - ty) +
+        h[y0 * P + x1] * tx * (1 - ty) +
+        h[y1 * P + x0] * (1 - tx) * ty +
+        h[y1 * P + x1] * tx * ty
+      );
+    };
+    const u = (x - t.cx) / this.S + 0.5;
+    const v = (z - t.cz) / this.S + 0.5;
+    const gu = Math.min(SEG, Math.max(0, u * SEG));
+    const gv = Math.min(SEG, Math.max(0, v * SEG));
+    const gi0 = Math.min(SEG - 1, Math.floor(gu));
+    const gj0 = Math.min(SEG - 1, Math.floor(gv));
+    const fx = gu - gi0;
+    const fz = gv - gj0;
+    const h00 = vh(gi0, gj0);
+    const h10 = vh(gi0 + 1, gj0);
+    const h01 = vh(gi0, gj0 + 1);
+    const h11 = vh(gi0 + 1, gj0 + 1);
+    return (
+      h00 * (1 - fx) * (1 - fz) +
+      h10 * fx * (1 - fz) +
+      h01 * (1 - fx) * fz +
+      h11 * fx * fz
+    );
+  }
+
   /** True once the tile the player is standing in has its heights decoded. */
   get currentReady(): boolean {
     const t = this.tiles.get(`${this.colOf(0) + 0},${this.rowOf(0)}`);
