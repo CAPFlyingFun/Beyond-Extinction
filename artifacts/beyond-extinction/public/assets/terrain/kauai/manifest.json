@@ -690,5 +690,12 @@
       "minM": -3014.9,
       "maxM": -1009.8
     }
-  ]
+  ],
+  "spawn": {
+    "tile": "A5",
+    "x": -26000.0,
+    "z": 3500.0,
+    "facing": "inland (+X east) \u2014 ocean at back (west), mountains ahead (east)",
+    "note": "Kauai west coast (Polihale). A little in from the waterline on dry sand; A5 exact centre is (-24500, 3500) if a more inland spawn is wanted."
+  }
 }
