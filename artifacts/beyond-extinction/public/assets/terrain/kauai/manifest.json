@@ -28,7 +28,7 @@
   },
   "tileSizeM": 7000.0,
   "totalM": 56000.0,
-  "tilePixels": 512,
+  "tilePixels": 513,
   "encoding": "terrarium RGB: elev_m = R*256 + G + B/256 - 32768",
   "center": {
     "lat": 22.055,
