@@ -44,10 +44,11 @@ class KauaiStreamScene implements IScene {
     this.scene.background = SKY;
     this.scene.fog = new THREE.Fog(SKY.getHex(), 2500, 11000);
 
-    this.scene.add(new THREE.HemisphereLight(0xdff0ff, 0x55613a, 0.85));
-    const sun = new THREE.DirectionalLight(0xfff3e0, 1.15);
+    this.scene.add(new THREE.HemisphereLight(0xe6f2ff, 0x6b7550, 1.25));
+    const sun = new THREE.DirectionalLight(0xfff3e0, 1.5);
     sun.position.copy(SUN).multiplyScalar(1000);
     this.scene.add(sun);
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.18)); // lift deep-shadow slopes
 
     // Ocean plane at sea level, follows the camera in XZ.
     const water = new THREE.Mesh(

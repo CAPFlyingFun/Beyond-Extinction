@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { assetUrl } from "./assets";
+import { assetUrl, loadTexture } from "./assets";
 
 /**
  * Streaming terrain for the full-scale Kauaʻi map (Chapter 2+ "Hanifat").
@@ -38,7 +38,16 @@ function decodeElev(r: number, g: number, b: number): number {
 
 const SEG = 96; // grid resolution per tile (97² verts ≈ 9.4k)
 const FADE_PER_SEC = 1 / 0.6; // ~0.6 s cross-fade
-const SUN = new THREE.Vector3(-0.55, 0.72, 0.42).normalize();
+
+/** Biome ground textures blended across the terrain by elevation + slope. */
+interface BiomeTextures {
+  sand: THREE.Texture;
+  grass: THREE.Texture;
+  jungle: THREE.Texture;
+  rock: THREE.Texture; // cliff.jpg — steep faces + mid rock
+  mountain: THREE.Texture;
+  snow: THREE.Texture;
+}
 
 type TileState = "loading" | "in" | "active" | "out";
 
@@ -75,6 +84,8 @@ export class KauaiTileStreamer {
   private curRow = -99;
   /** Number of tiles fully or partially resident (for a debug HUD). */
   resident = 0;
+  /** Shared biome textures, loaded once and reused by every tile mesh. */
+  private texReady: Promise<BiomeTextures>;
 
   constructor(
     scene: THREE.Scene,
@@ -89,6 +100,47 @@ export class KauaiTileStreamer {
     for (const t of manifest.tiles) this.byId.set(t.id, t);
     this.group.name = "kauai-terrain";
     scene.add(this.group);
+    this.texReady = this.loadBiomeTextures();
+  }
+
+  /** Load the shared biome ground textures once (repeat-wrapped for tiling). */
+  private async loadBiomeTextures(): Promise<BiomeTextures> {
+    const names: (keyof BiomeTextures)[] = [
+      "sand",
+      "grass",
+      "jungle",
+      "rock",
+      "mountain",
+      "snow",
+    ];
+    const files: Record<keyof BiomeTextures, string> = {
+      sand: "sand",
+      grass: "grass",
+      jungle: "jungle",
+      rock: "cliff",
+      mountain: "mountain",
+      snow: "snow",
+    };
+    const white = (): THREE.Texture => {
+      const t = new THREE.DataTexture(
+        new Uint8Array([200, 200, 200, 255]),
+        1,
+        1,
+      );
+      t.needsUpdate = true;
+      return t;
+    };
+    const out = {} as BiomeTextures;
+    await Promise.all(
+      names.map(async (n) => {
+        const tex = (await loadTexture(`assets/textures/${files[n]}.jpg`)) ?? white();
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.anisotropy = 4;
+        out[n] = tex;
+      }),
+    );
+    return out;
   }
 
   /** Tile column/row for a world XZ (unclamped). */
@@ -234,10 +286,11 @@ export class KauaiTileStreamer {
       if (this.tiles.get(key) === tile) this.tiles.delete(key);
       return;
     }
+    const tex = await this.texReady;
     // player may have moved away while decoding
     if (this.tiles.get(key) !== tile) return;
     tile.heights = heights;
-    this.buildMesh(tile);
+    this.buildMesh(tile, tex);
     // if it was marked out during the await, honor that; else fade in
     if (tile.state !== "out") tile.state = "in";
   }
@@ -266,15 +319,21 @@ export class KauaiTileStreamer {
     return out;
   }
 
-  private buildMesh(tile: Tile): void {
+  private buildMesh(tile: Tile, tex: BiomeTextures): void {
     const P = this.P;
     const h = tile.heights!;
-    const geo = new THREE.PlaneGeometry(this.S, this.S, SEG, SEG);
+    // Build the grid slightly OVERSIZED so neighbouring tiles overlap by a
+    // small margin: the outer ring samples clamp to the tile edge (a flat
+    // skirt) which tucks under the next tile, hiding the hairline seams that
+    // appear where two independently-sampled edges don't meet exactly.
+    const OV = 120; // metres of overlap fringe per side
+    const geo = new THREE.PlaneGeometry(this.S + 2 * OV, this.S + 2 * OV, SEG, SEG);
     geo.rotateX(-Math.PI / 2); // lie flat: +Z south, +X east
     const pos = geo.attributes.position as THREE.BufferAttribute;
-    const colors = new Float32Array(pos.count * 3);
-    const col = new THREE.Color();
-    const sampleH = (u: number, v: number): number => {
+    for (let i = 0; i < pos.count; i++) {
+      // local plane coords: x in [-S/2, S/2] (east), z in [-S/2, S/2] (south)
+      const u = pos.getX(i) / this.S + 0.5;
+      const v = pos.getZ(i) / this.S + 0.5;
       const fx = Math.min(P - 1, Math.max(0, u * (P - 1)));
       const fy = Math.min(P - 1, Math.max(0, v * (P - 1)));
       const x0 = Math.floor(fx);
@@ -283,41 +342,16 @@ export class KauaiTileStreamer {
       const y1 = Math.min(P - 1, y0 + 1);
       const tx = fx - x0;
       const ty = fy - y0;
-      return (
+      pos.setY(
+        i,
         h[y0 * P + x0] * (1 - tx) * (1 - ty) +
-        h[y0 * P + x1] * tx * (1 - ty) +
-        h[y1 * P + x0] * (1 - tx) * ty +
-        h[y1 * P + x1] * tx * ty
+          h[y0 * P + x1] * tx * (1 - ty) +
+          h[y1 * P + x0] * (1 - tx) * ty +
+          h[y1 * P + x1] * tx * ty,
       );
-    };
-    for (let i = 0; i < pos.count; i++) {
-      // local plane coords: x in [-S/2, S/2] (east), z in [-S/2, S/2] (south)
-      const lx = pos.getX(i);
-      const lz = pos.getZ(i);
-      const u = lx / this.S + 0.5;
-      const v = lz / this.S + 0.5;
-      const y = sampleH(u, v);
-      pos.setY(i, y);
-      // biome ramp by elevation (sand→grass→forest→rock→snow)
-      const t = Math.min(1, y / 1575);
-      if (y <= 0.5) col.setRGB(0.82, 0.76, 0.55);
-      else if (t < 0.14) col.setRGB(0.55, 0.62, 0.34);
-      else if (t < 0.4) col.setRGB(0.24, 0.44, 0.24);
-      else if (t < 0.7) col.setRGB(0.42, 0.38, 0.3);
-      else col.setRGB(0.92, 0.94, 0.96);
-      colors[i * 3] = col.r;
-      colors[i * 3 + 1] = col.g;
-      colors[i * 3 + 2] = col.b;
     }
-    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     geo.computeVertexNormals();
-    const mat = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.95,
-      metalness: 0,
-      transparent: true,
-      opacity: 0,
-    });
+    const mat = makeBiomeMaterial(tex);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(tile.cx, 0, tile.cz);
     mesh.name = `kauai-${tile.id}`;
@@ -343,4 +377,79 @@ export class KauaiTileStreamer {
     this.tiles.clear();
     this.scene.remove(this.group);
   }
+}
+
+/**
+ * Terrain material that auto-paints the real biome ground textures by elevation
+ * and slope: sand at the waterline → grass → jungle → rock → mountain → snow on
+ * the peaks, with steep faces reading as cliff/rock at any height. Built on
+ * MeshStandardMaterial (keeps scene lighting + fog + the cross-fade opacity);
+ * the blend is injected via onBeforeCompile. All tiles share one compiled
+ * program (customProgramCacheKey) and the same texture set.
+ */
+function makeBiomeMaterial(tex: BiomeTextures): THREE.MeshStandardMaterial {
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.96,
+    metalness: 0,
+    transparent: true,
+    opacity: 0,
+  });
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.tSand = { value: tex.sand };
+    shader.uniforms.tGrass = { value: tex.grass };
+    shader.uniforms.tJungle = { value: tex.jungle };
+    shader.uniforms.tRock = { value: tex.rock };
+    shader.uniforms.tMtn = { value: tex.mountain };
+    shader.uniforms.tSnow = { value: tex.snow };
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        "#include <common>",
+        "#include <common>\nvarying vec3 vBiomeW;\nvarying vec3 vBiomeN;",
+      )
+      .replace(
+        "#include <beginnormal_vertex>",
+        "#include <beginnormal_vertex>\n  vBiomeN = normalize(mat3(modelMatrix) * objectNormal);",
+      )
+      .replace(
+        "#include <begin_vertex>",
+        "#include <begin_vertex>\n  vBiomeW = (modelMatrix * vec4(transformed, 1.0)).xyz;",
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+varying vec3 vBiomeW;
+varying vec3 vBiomeN;
+uniform sampler2D tSand, tGrass, tJungle, tRock, tMtn, tSnow;
+// three uploads sRGB textures with an sRGB internal format on WebGL2, so
+// texture2D already returns LINEAR — no manual decode needed.
+vec3 s2l(vec3 c) { return c; }`,
+      )
+      .replace(
+        "#include <map_fragment>",
+        `{
+  float e = vBiomeW.y;                          // elevation (m)
+  float slope = 1.0 - clamp(vBiomeN.y, 0.0, 1.0);
+  vec2 uv = vBiomeW.xz;                          // world-space tiling
+  vec3 sand = s2l(texture2D(tSand,   uv / 9.0 ).rgb);
+  vec3 grass= s2l(texture2D(tGrass,  uv / 11.0).rgb);
+  vec3 jung = s2l(texture2D(tJungle, uv / 13.0).rgb);
+  vec3 rock = s2l(texture2D(tRock,   uv / 18.0).rgb);
+  vec3 mtn  = s2l(texture2D(tMtn,    uv / 22.0).rgb);
+  vec3 snow = s2l(texture2D(tSnow,   uv / 12.0).rgb);
+  vec3 c = sand;
+  c = mix(c, grass, smoothstep(3.0, 22.0, e));
+  c = mix(c, jung,  smoothstep(70.0, 240.0, e));
+  c = mix(c, rock,  smoothstep(520.0, 820.0, e));
+  c = mix(c, mtn,   smoothstep(880.0, 1080.0, e));
+  c = mix(c, snow,  smoothstep(1150.0, 1420.0, e));
+  float rockAmt = smoothstep(0.42, 0.72, slope) * smoothstep(2.0, 12.0, e);
+  c = mix(c, rock, rockAmt);                     // steep faces -> cliff
+  diffuseColor.rgb *= c;
+}`,
+      );
+  };
+  mat.customProgramCacheKey = () => "kauai-biome";
+  return mat;
 }
