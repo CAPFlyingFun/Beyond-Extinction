@@ -42,7 +42,11 @@ function decodeElev(r: number, g: number, b: number): number {
 }
 
 const SEG = 96; // grid resolution per tile (97² verts ≈ 9.4k)
-const SKIRT_M = 220; // metres each tile's edge apron drops to plug seams
+// Adjacent tiles co-sample the master DEM so their shared edges already match
+// to well under a metre (max seam mismatch ≈ 11 m on the steepest ridges), so
+// the apron only needs to be a touch deeper than that worst case — not the tall
+// wall that used to show at ground level near the map edge.
+const SKIRT_M = 24; // metres each tile's edge apron drops to plug seams
 const FADE_PER_SEC = 1 / 0.6; // ~0.6 s cross-fade
 
 /** Biome ground textures blended across the terrain by elevation + slope. */

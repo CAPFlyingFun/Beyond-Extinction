@@ -2,7 +2,7 @@ import * as THREE from "three";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { PlayerController } from "../engine/PlayerController";
 import { KauaiTileStreamer, type KauaiManifest } from "../engine/KauaiTileStreamer";
-import { assetUrl } from "../engine/assets";
+import { assetUrl, loadTexture } from "../engine/assets";
 
 /**
  * Kauaʻi streaming-terrain test scene. A fast first-person scout over the
@@ -20,6 +20,41 @@ const SUN = new THREE.Vector3(-0.55, 0.72, 0.42).normalize();
 // Wailua beach in metres (grid centre origin). Nudged ~1.4 km inland from the
 // waterline so the scout starts on land while G5 finishes decoding.
 const SPAWN = { x: 20900, z: 1288, facing: 270 };
+const WATER_SIZE = 80000; // ocean plane extent (m)
+const WATER_REPEAT = 10000; // ripple normal repeats → ~8 m wavelength
+
+/**
+ * Ocean surface material: a translucent MeshStandard blue with an animated
+ * ripple normal map (set by the scene) for moving wavelets + travelling sun
+ * glints, plus a fresnel sky-reflection term so the surface reads as water from
+ * any angle — the moving normals modulate the fresnel into a live shimmer. No
+ * white foam yet (deferred).
+ */
+function makeOceanMaterial(): THREE.MeshStandardMaterial {
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x14526e,
+    roughness: 0.14,
+    metalness: 0.1,
+    transparent: true,
+    opacity: 0.82,
+    normalScale: new THREE.Vector2(0.55, 0.55),
+  });
+  const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uSky = { value: sky };
+    sh.fragmentShader = sh.fragmentShader
+      .replace("#include <common>", "#include <common>\nuniform vec3 uSky;")
+      .replace(
+        "#include <lights_fragment_end>",
+        `#include <lights_fragment_end>
+        {
+          float fres = pow(1.0 - clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0), 3.0);
+          totalEmissiveRadiance += uSky * fres * 0.7; // sky sheen on the ripples
+        }`,
+      );
+  };
+  return mat;
+}
 
 class KauaiStreamScene implements IScene {
   readonly name = "kauai-stream";
@@ -30,6 +65,8 @@ class KauaiStreamScene implements IScene {
   private streamer?: KauaiTileStreamer;
   private player?: PlayerController;
   private water?: THREE.Mesh;
+  private waterNormal?: THREE.Texture;
+  private waterT = 0;
   private hud?: HTMLDivElement;
   private grounded = false;
 
@@ -50,22 +87,24 @@ class KauaiStreamScene implements IScene {
     this.scene.add(sun);
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.18)); // lift deep-shadow slopes
 
-    // Ocean plane at sea level, follows the camera in XZ.
-    const water = new THREE.Mesh(
-      new THREE.PlaneGeometry(80000, 80000),
-      new THREE.MeshStandardMaterial({
-        color: 0x1c5a76,
-        roughness: 0.32,
-        metalness: 0.12,
-        transparent: true,
-        opacity: 0.8, // let shallow reef show turquoise through the surface
-      }),
-    );
+    // Ocean plane at sea level, follows the camera in XZ. An animated ripple
+    // normal map gives moving wavelets + travelling specular glints (no foam).
+    const waterMat = makeOceanMaterial();
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(WATER_SIZE, WATER_SIZE), waterMat);
     water.geometry.rotateX(-Math.PI / 2);
     water.position.set(SPAWN.x, 0, SPAWN.z);
     water.renderOrder = -1;
     this.scene.add(water);
     this.water = water;
+    void loadTexture("assets/textures/water_normal.png").then((tex) => {
+      if (!tex) return;
+      tex.colorSpace = THREE.NoColorSpace; // normal maps are linear data
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(WATER_REPEAT, WATER_REPEAT);
+      waterMat.normalMap = tex;
+      waterMat.needsUpdate = true;
+      this.waterNormal = tex;
+    });
 
     // Load the manifest and start streaming around the spawn.
     try {
@@ -123,6 +162,16 @@ class KauaiStreamScene implements IScene {
       if (this.water) {
         this.water.position.x = x;
         this.water.position.z = z;
+        // World-lock the ripple UVs to (x,z) so they don't swim with the
+        // camera-following plane, then scroll them for the wave motion.
+        if (this.waterNormal) {
+          this.waterT += dt;
+          const uvpm = WATER_REPEAT / WATER_SIZE;
+          this.waterNormal.offset.set(
+            x * uvpm + this.waterT * 0.014,
+            z * uvpm + this.waterT * 0.010,
+          );
+        }
       }
       if (this.hud) {
         const col = String.fromCharCode(65 + Math.min(7, Math.max(0, Math.round(x / 7000 + 3.5))));
