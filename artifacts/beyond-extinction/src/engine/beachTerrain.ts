@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { assetUrl } from "./assets";
+import { TerrainEdit } from "./TerrainEdit";
 
 /**
  * Island terrain + water for Chapter 2 (Hanifat). The shape comes from a real
@@ -194,6 +195,9 @@ export function beachHeight(x: number, z: number): number {
     const e = t * t * (3 - 2 * t); // smoothstep out to natural terrain
     h = LANDING_H * (1 - e) + h * e;
   }
+  // Dev-sculpted edits (1 m layer): empty by default, so this is a no-op until
+  // the Terrain Editor lays down deltas. Reaches everything that reads height.
+  h += TerrainEdit.deltaAt(x, z);
   return h;
 }
 
