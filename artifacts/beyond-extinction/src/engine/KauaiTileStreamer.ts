@@ -360,6 +360,12 @@ export class KauaiTileStreamer {
       );
     }
     geo.computeVertexNormals();
+    // Per-vertex "colour elevation" = the surface height. The skirt reuses its
+    // top-edge height here, so its dropped wall colours like the terrain edge
+    // (dry sand on a beach) instead of reading as dark underwater.
+    const elev = new Float32Array(pos.count);
+    for (let i = 0; i < pos.count; i++) elev[i] = pos.getY(i);
+    geo.setAttribute("aElev", new THREE.BufferAttribute(elev, 1));
     const mat = makeBiomeMaterial(tex);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(tile.cx, 0, tile.cz);
@@ -417,6 +423,8 @@ function buildSkirtGeometry(
   const vidx = (ix: number, iz: number): number => iz * n + ix;
   const out: number[] = [];
   const nout: number[] = [];
+  const eout: number[] = []; // aElev: the top-edge height, so the wall colours
+  //                            like the terrain edge, not its dropped position.
   const quad = (ax: number, az: number, bx: number, bz: number): void => {
     const a = vidx(ax, az);
     const b = vidx(bx, bz);
@@ -429,8 +437,10 @@ function buildSkirtGeometry(
     const bn = [nrm.getX(b), nrm.getY(b), nrm.getZ(b)];
     out.push(axv, ayv, azv, bxv, byv, bzv, bxv, byv - drop, bzv);
     nout.push(...an, ...bn, ...bn);
+    eout.push(ayv, byv, byv); // all three sample their column's edge height
     out.push(axv, ayv, azv, bxv, byv - drop, bzv, axv, ayv - drop, azv);
     nout.push(...an, ...bn, ...an);
+    eout.push(ayv, byv, ayv);
   };
   for (let ix = 0; ix < seg; ix++) quad(ix, 0, ix + 1, 0); // north
   for (let ix = 0; ix < seg; ix++) quad(ix, seg, ix + 1, seg); // south
@@ -439,6 +449,7 @@ function buildSkirtGeometry(
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.Float32BufferAttribute(out, 3));
   g.setAttribute("normal", new THREE.Float32BufferAttribute(nout, 3));
+  g.setAttribute("aElev", new THREE.Float32BufferAttribute(eout, 1));
   return g;
 }
 
@@ -470,7 +481,7 @@ function makeBiomeMaterial(tex: BiomeTextures): THREE.MeshStandardMaterial {
     shader.vertexShader = shader.vertexShader
       .replace(
         "#include <common>",
-        "#include <common>\nvarying vec3 vBiomeW;\nvarying vec3 vBiomeN;",
+        "#include <common>\nattribute float aElev;\nvarying float vElev;\nvarying vec3 vBiomeW;\nvarying vec3 vBiomeN;",
       )
       .replace(
         "#include <beginnormal_vertex>",
@@ -478,12 +489,13 @@ function makeBiomeMaterial(tex: BiomeTextures): THREE.MeshStandardMaterial {
       )
       .replace(
         "#include <begin_vertex>",
-        "#include <begin_vertex>\n  vBiomeW = (modelMatrix * vec4(transformed, 1.0)).xyz;",
+        "#include <begin_vertex>\n  vBiomeW = (modelMatrix * vec4(transformed, 1.0)).xyz;\n  vElev = aElev;",
       );
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <common>",
         `#include <common>
+varying float vElev;
 varying vec3 vBiomeW;
 varying vec3 vBiomeN;
 uniform sampler2D tSand, tGrass, tJungle, tRock, tMtn, tSnow, tReef;
@@ -505,7 +517,7 @@ vec3 triplanar(sampler2D tex, vec3 wp, vec3 n, float scale) {
       .replace(
         "#include <map_fragment>",
         `{
-  float e = vBiomeW.y;                          // elevation (m)
+  float e = vElev;                              // elevation (m) — skirt uses its edge height
   float slope = 1.0 - clamp(vBiomeN.y, 0.0, 1.0);
   vec2 uv = vBiomeW.xz;                          // world-space tiling (flat areas)
   vec3 sand = s2l(texture2D(tSand,   uv / 9.0 ).rgb);
