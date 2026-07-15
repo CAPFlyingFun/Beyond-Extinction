@@ -10,6 +10,8 @@ import { MarkerEditor } from "./MarkerEditor";
 import { MarkerStore } from "./MarkerStore";
 import { AnimationEditor } from "./AnimationEditor";
 import { AnimStore } from "./AnimStore";
+import { TerrainEditor } from "./TerrainEditor";
+import { TerrainEdit } from "./TerrainEdit";
 import { DevAccess } from "./DevAccess";
 import { createChapterOneScene } from "../scenes/ChapterOnePlaceholderScene";
 import type { SceneContext, SceneFactory } from "./IScene";
@@ -29,6 +31,7 @@ export class Game {
   private readonly devPortal: DevPortal;
   private readonly markerEditor: MarkerEditor;
   private readonly animEditor: AnimationEditor;
+  private readonly terrainEditor: TerrainEditor;
 
   private readonly uiLayer: HTMLElement;
   private rafId = 0;
@@ -74,14 +77,29 @@ export class Game {
       playSfx: (n) => this.audio.playSfx(n),
       showToast: (m) => this.overlays.showToast(m),
     });
-    // Preload the baked marker + animation layouts so scenes recall them on enter.
+    // In-app Terrain Editor (island sculpt brushes) — shares the fly-cam deps.
+    this.terrainEditor = new TerrainEditor({
+      getActive: () => {
+        const a = this.scenes.active;
+        return a ? { scene: a.scene, camera: a.camera, name: a.name } : null;
+      },
+      domElement: this.renderer.domElement,
+      uiLayer: this.uiLayer,
+      input: this.input,
+      onOpenChange: (open) => this.devPortal.setSuspended(open),
+      playSfx: (n) => this.audio.playSfx(n),
+      showToast: (m) => this.overlays.showToast(m),
+    });
+    // Preload the baked marker + animation layouts + terrain edits.
     void MarkerStore.load();
     void AnimStore.load();
+    TerrainEdit.load();
 
     // Hidden dev gate: press-and-hold 10s anywhere → PIN → Dev menu.
     this.devPortal = new DevPortal({
       onMarkerEditor: () => this.markerEditor.toggle(),
       onAnimationEditor: () => this.animEditor.toggle(),
+      onTerrainEditor: () => this.terrainEditor.toggle(),
       onSkipToIsland: () => this.skipToIsland(),
       showToast: (m) => this.overlays.showToast(m),
     });
@@ -124,6 +142,7 @@ export class Game {
     this.scenes.resize(this.renderer.width, this.renderer.height);
     this.markerEditor.resize(this.renderer.width, this.renderer.height);
     this.animEditor.resize(this.renderer.width, this.renderer.height);
+    this.terrainEditor.resize(this.renderer.width, this.renderer.height);
   };
 
   async start(initial: SceneFactory): Promise<void> {
@@ -145,6 +164,7 @@ export class Game {
   private skipToIsland(): void {
     this.markerEditor.close();
     this.animEditor.close();
+    this.terrainEditor.close();
     void this.scenes.goTo(createChapterOneScene);
   }
 
@@ -159,6 +179,7 @@ export class Game {
     this.scenes.update(dt, elapsed);
     this.markerEditor.update(dt);
     this.animEditor.update(dt);
+    this.terrainEditor.update(dt);
     // The Animation Editor renders its OWN scene+camera (a turntable); the
     // Marker Editor drives a fly camera over the live scene; otherwise the
     // active scene renders with its own camera.
@@ -169,7 +190,8 @@ export class Game {
     }
     const active = this.scenes.active;
     if (active) {
-      const cam = this.markerEditor.overrideCamera() ?? active.camera;
+      const cam =
+        this.terrainEditor.overrideCamera() ?? this.markerEditor.overrideCamera() ?? active.camera;
       this.renderer.render(active.scene, cam);
       active.renderOverlays?.(this.renderer.renderer);
     }
@@ -190,6 +212,7 @@ export class Game {
     this.overlays.dispose();
     this.markerEditor.close();
     this.animEditor.close();
+    this.terrainEditor.close();
     this.devPortal.dispose();
     this.renderer.dispose();
   }

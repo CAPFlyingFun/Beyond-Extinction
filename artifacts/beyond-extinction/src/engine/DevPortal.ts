@@ -26,6 +26,8 @@ export interface DevPortalActions {
   onMarkerEditor: () => void;
   /** Open the Animation Editor (optional until it ships). */
   onAnimationEditor?: () => void;
+  /** Open the Terrain Editor (island sculpt brushes). */
+  onTerrainEditor?: () => void;
   /** Jump straight to the island (skip the lab prologue) — dev shortcut. */
   onSkipToIsland?: () => void;
   /** Show a brief confirmation toast (used by the spawn-editing buttons). */
@@ -233,6 +235,7 @@ export class DevPortal {
         <div class="be-dev__sub">PIN accepted</div>
         <div class="be-dev__tools">
           <button class="be-dev__tool" data-tool="markers">◈ Marker Editor</button>
+          <button class="be-dev__tool" data-tool="terrain">⛰️ Terrain Editor</button>
           <button class="be-dev__tool" data-tool="anim">🦴 Animation Editor</button>
           <button class="be-dev__tool" data-tool="island">🏝️ Skip to Island</button>${spawnRows}
         </div>
@@ -251,6 +254,16 @@ export class DevPortal {
       close();
       this.actions.onMarkerEditor();
     });
+    const terrainBtn = menu.querySelector<HTMLButtonElement>('[data-tool="terrain"]');
+    if (this.actions.onTerrainEditor) {
+      terrainBtn?.addEventListener("click", () => {
+        close();
+        this.actions.onTerrainEditor!();
+      });
+    } else if (terrainBtn) {
+      terrainBtn.disabled = true;
+      terrainBtn.textContent = "⛰️ Terrain Editor — soon";
+    }
     const animBtn = menu.querySelector<HTMLButtonElement>('[data-tool="anim"]');
     if (this.actions.onAnimationEditor) {
       animBtn?.addEventListener("click", () => {

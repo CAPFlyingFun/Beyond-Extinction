@@ -31,6 +31,8 @@ import { beachStory } from "../data/beachSequences";
 import { VOICE_CLIPS } from "../data/voiceClips";
 import {
   buildBeachTerrain,
+  buildTerrainPatch,
+  disposeTerrainPatch,
   buildOceanWater,
   loadIslandHeightmap,
   loadIslandGround,
@@ -449,6 +451,8 @@ class ChapterOnePlaceholderScene implements IScene {
     // the saved point wins here on future loads.
     const savedSpawns = SpawnStore.get();
     const jackSpawn = savedSpawns.jack ?? ChapterOnePlaceholderScene.JACK_SPAWN;
+    // Fine sculpt patch over the play area (Terrain Editor renders 1 m edits here).
+    this.scene.add(buildTerrainPatch(jackSpawn.x, jackSpawn.z));
     const sarahSpawn = savedSpawns.sarah ?? ChapterOnePlaceholderScene.SARAH_SPAWN;
     this.jackFacingDeg = jackSpawn.rot;
     // Death sends you back here until the chase moves it to the cave (in memory).
@@ -2543,6 +2547,7 @@ class ChapterOnePlaceholderScene implements IScene {
     this.unsubForage?.();
     this.forageBtnEl?.remove();
     this.berryBushes?.dispose();
+    disposeTerrainPatch();
     this.worldLod.clear();
     this.feedBarEl?.remove();
     this.trackBtnEl?.remove();

@@ -423,10 +423,96 @@ export function buildBeachTerrain(
     colorMap && ground
       ? makeTerrainMaterial(colorMap, ground)
       : new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+  terrainMat = mat; // shared so the fine sculpt patch matches the base look
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.name = "beach-terrain";
   return mesh;
+}
+
+// ── Fine editable sculpt patch (Terrain Editor) ──────────────────────────────
+// A high-resolution terrain overlay over the play area so 1 m sculpts (see
+// TerrainEdit) actually SHOW. It reuses the base terrain material for a seamless
+// look, is lifted a hair so it never z-fights the coarse base underneath, and
+// exposes refresh() so the editor can re-displace it after each brush stroke.
+
+let terrainMat: THREE.Material | null = null;
+/** The material the base terrain uses (for the sculpt patch to share). */
+export function getTerrainMaterial(): THREE.Material | null {
+  return terrainMat;
+}
+
+const PATCH_SIZE_M = 900; // ±450 m around the play centre
+const PATCH_CELL_M = 2; // render tessellation (edit DATA stays 1 m)
+const PATCH_LIFT = 0.03; // world units above the base, kills z-fighting
+
+let patchGeo: THREE.PlaneGeometry | null = null;
+
+/** Build the sculpt patch centred on (cx, cz) world units. Adds nothing to a
+ *  scene itself — the caller adds the returned mesh. */
+export function buildTerrainPatch(cx: number, cz: number): THREE.Mesh {
+  const sizeU = PATCH_SIZE_M / METERS_PER_UNIT;
+  const seg = Math.round(PATCH_SIZE_M / PATCH_CELL_M);
+  const geo = new THREE.PlaneGeometry(sizeU, sizeU, seg, seg);
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(cx, 0, cz); // vertices hold real world XZ
+  patchGeo = geo;
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const uv = geo.attributes.uv as THREE.BufferAttribute;
+  const colors = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    const h = beachHeight(x, z);
+    pos.setY(i, h + PATCH_LIFT);
+    uv.setXY(i, 0.5 + x / HM_SPAN, 0.5 - (z - HM_CZ) / HM_SPAN);
+    const [r, g, b] = beachColor(h);
+    colors[i * 3] = r;
+    colors[i * 3 + 1] = g;
+    colors[i * 3 + 2] = b;
+  }
+  geo.computeVertexNormals();
+  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  const mat =
+    terrainMat ??
+    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  mesh.renderOrder = 1; // draw over the coarse base
+  mesh.name = "terrain-patch";
+  return mesh;
+}
+
+/** Re-displace the patch from the current beachHeight (after a sculpt stroke).
+ *  Optionally restrict to a world-XZ box; pass normals=false to skip the (whole-
+ *  patch) normal recompute for cheap mid-drag updates. */
+export function refreshTerrainPatch(
+  box?: { minX: number; minZ: number; maxX: number; maxZ: number },
+  normals = true,
+): void {
+  const geo = patchGeo;
+  if (!geo) return;
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const col = geo.attributes.color as THREE.BufferAttribute;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    if (box && (x < box.minX || x > box.maxX || z < box.minZ || z > box.maxZ)) continue;
+    const h = beachHeight(x, z);
+    pos.setY(i, h + PATCH_LIFT);
+    const [r, g, b] = beachColor(h);
+    col.setXYZ(i, r, g, b);
+  }
+  pos.needsUpdate = true;
+  col.needsUpdate = true;
+  if (normals) geo.computeVertexNormals();
+}
+
+/** Free the patch geometry on scene teardown (the material is shared with the
+ *  base terrain, so it is not disposed here). */
+export function disposeTerrainPatch(): void {
+  patchGeo?.dispose();
+  patchGeo = null;
 }
 
 const WATER_VERT = /* glsl */ `
