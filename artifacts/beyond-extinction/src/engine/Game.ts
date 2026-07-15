@@ -14,6 +14,7 @@ import { TerrainEditor } from "./TerrainEditor";
 import { TerrainEdit } from "./TerrainEdit";
 import { DevAccess } from "./DevAccess";
 import { createChapterOneScene } from "../scenes/ChapterOnePlaceholderScene";
+import { createKauaiStreamScene } from "../scenes/KauaiStreamScene";
 import type { SceneContext, SceneFactory } from "./IScene";
 
 /**
@@ -101,6 +102,7 @@ export class Game {
       onAnimationEditor: () => this.animEditor.toggle(),
       onTerrainEditor: () => this.terrainEditor.toggle(),
       onSkipToIsland: () => this.skipToIsland(),
+      onKauaiStream: () => this.skipToKauai(),
       showToast: (m) => this.overlays.showToast(m),
     });
     // The inventory's DEV tab opens the same PIN gate directly (no 10s hold).
@@ -166,6 +168,14 @@ export class Game {
     this.animEditor.close();
     this.terrainEditor.close();
     void this.scenes.goTo(createChapterOneScene);
+  }
+
+  /** Jump to the Kauaʻi streaming-terrain test scene (Dev menu shortcut). */
+  private skipToKauai(): void {
+    this.markerEditor.close();
+    this.animEditor.close();
+    this.terrainEditor.close();
+    void this.scenes.goTo(createKauaiStreamScene);
   }
 
   private loop = () => {

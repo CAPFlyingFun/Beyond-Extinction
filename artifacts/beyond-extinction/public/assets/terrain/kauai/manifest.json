@@ -692,10 +692,10 @@
     }
   ],
   "spawn": {
-    "tile": "A5",
-    "x": -26000.0,
-    "z": 3500.0,
-    "facing": "inland (+X east) \u2014 ocean at back (west), mountains ahead (east)",
-    "note": "Kauai west coast (Polihale). A little in from the waterline on dry sand; A5 exact centre is (-24500, 3500) if a more inland spawn is wanted."
+    "tile": "G5",
+    "x": 20900.0,
+    "z": 1288.0,
+    "facing": "inland (-X west) \u2014 ocean at back (east), interior/summit ahead (west)",
+    "note": "Kauai east coast, Wailua river mouth (Ch.2 arrival beach). ~90 m in from the waterline (x~21000), elev ~7 m."
   }
 }

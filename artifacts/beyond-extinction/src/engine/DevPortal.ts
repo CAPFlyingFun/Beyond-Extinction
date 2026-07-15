@@ -30,6 +30,8 @@ export interface DevPortalActions {
   onTerrainEditor?: () => void;
   /** Jump straight to the island (skip the lab prologue) — dev shortcut. */
   onSkipToIsland?: () => void;
+  /** Jump to the Kauaʻi streaming-terrain test scene. */
+  onKauaiStream?: () => void;
   /** Show a brief confirmation toast (used by the spawn-editing buttons). */
   showToast?: (message: string) => void;
 }
@@ -237,7 +239,8 @@ export class DevPortal {
           <button class="be-dev__tool" data-tool="markers">◈ Marker Editor</button>
           <button class="be-dev__tool" data-tool="terrain">⛰️ Terrain Editor</button>
           <button class="be-dev__tool" data-tool="anim">🦴 Animation Editor</button>
-          <button class="be-dev__tool" data-tool="island">🏝️ Skip to Island</button>${spawnRows}
+          <button class="be-dev__tool" data-tool="island">🏝️ Skip to Island</button>
+          <button class="be-dev__tool" data-tool="kauai">🗺️ Kauaʻi Stream</button>${spawnRows}
         </div>
         <button class="be-dev__key be-dev__key--cancel be-dev__menuclose" type="button">Close</button>
       </div>`;
@@ -282,6 +285,15 @@ export class DevPortal {
       });
     } else if (islandBtn) {
       islandBtn.remove();
+    }
+    const kauaiBtn = menu.querySelector<HTMLButtonElement>('[data-tool="kauai"]');
+    if (this.actions.onKauaiStream) {
+      kauaiBtn?.addEventListener("click", () => {
+        close();
+        this.actions.onKauaiStream!();
+      });
+    } else if (kauaiBtn) {
+      kauaiBtn.remove();
     }
     // Spawn tools: run the action, toast the result, and keep the menu open so
     // both Jack and Sarah can be set in one visit.
