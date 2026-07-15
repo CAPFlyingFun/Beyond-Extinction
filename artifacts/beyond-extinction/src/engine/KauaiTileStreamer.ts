@@ -560,7 +560,7 @@ vec3 triplanar(sampler2D tex, vec3 wp, vec3 n, float scale) {
   // rock + mountain are what shows on steep faces → triplanar so they tile
   vec3 rock = s2l(triplanar(tRock, vBiomeW, nrm, 18.0));
   vec3 mtn  = s2l(triplanar(tMtn,  vBiomeW, nrm, 22.0));
-  vec3 snow = s2l(tile2(tSnow,   uv, 14.0));
+  vec3 snow = s2l(tile2(tSnow,   uv, 6.0));
   // Lush Kauaʻi bands: dry grass is only a coastal fringe, jungle green owns
   // the lowlands, and bare rock/summit bands sit higher up the mountain.
   vec3 c = sand;
