@@ -32,25 +32,7 @@ const WATER_Y = -0.4; // surface just below the 0 m waterline (soft shoreline)
  * any angle — the moving normals modulate the fresnel into a live shimmer. No
  * white foam yet (deferred).
  */
-const OCEAN_WAVES_GLSL = `
-uniform float uTime;
-// Sum of a few directional swells → gentle height variation (breaks the flat
-// grid look); returns height and writes the analytic surface normal.
-float oceanWaves(vec2 p, float t, out vec3 nrm) {
-  vec2 d1 = normalize(vec2(1.0, 0.35)); float k1 = 6.2831 / 1300.0; float a1 = 1.1;
-  vec2 d2 = normalize(vec2(-0.4, 1.0)); float k2 = 6.2831 / 2100.0; float a2 = 1.6;
-  vec2 d3 = normalize(vec2(0.8, -0.6)); float k3 = 6.2831 / 950.0;  float a3 = 0.6;
-  float p1 = dot(p, d1) * k1 + t * 0.55;
-  float p2 = dot(p, d2) * k2 + t * 0.4;
-  float p3 = dot(p, d3) * k3 + t * 0.75;
-  float h = a1 * sin(p1) + a2 * sin(p2) + a3 * sin(p3);
-  float dx = a1 * cos(p1) * d1.x * k1 + a2 * cos(p2) * d2.x * k2 + a3 * cos(p3) * d3.x * k3;
-  float dz = a1 * cos(p1) * d1.y * k1 + a2 * cos(p2) * d2.y * k2 + a3 * cos(p3) * d3.y * k3;
-  nrm = normalize(vec3(-dx, 1.0, -dz));
-  return h;
-}`;
-
-/** Ocean surface material (see original notes) + Gerstner-style vertex swells. */
+/** Flat translucent ocean (the v51 look — no vertex swells). */
 function makeOceanMaterial(): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({
     color: 0x14526e,
@@ -63,22 +45,7 @@ function makeOceanMaterial(): THREE.MeshStandardMaterial {
   });
   const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
   mat.onBeforeCompile = (sh) => {
-    sh.uniforms.uTime = { value: 0 };
     sh.uniforms.uSky = { value: sky };
-    mat.userData.shader = sh; // so update() can drive uTime
-    sh.vertexShader = sh.vertexShader
-      .replace("#include <common>", "#include <common>\n" + OCEAN_WAVES_GLSL)
-      .replace(
-        "#include <beginnormal_vertex>",
-        `#include <beginnormal_vertex>
-        vec3 __wp = (modelMatrix * vec4(position, 1.0)).xyz;
-        vec3 oceanN; float oceanH = oceanWaves(__wp.xz, uTime, oceanN);
-        objectNormal = oceanN;`,
-      )
-      .replace(
-        "#include <begin_vertex>",
-        "#include <begin_vertex>\n        transformed.y += oceanH;",
-      );
     sh.fragmentShader = sh.fragmentShader
       .replace("#include <common>", "#include <common>\nuniform vec3 uSky;")
       .replace(
@@ -136,11 +103,7 @@ class KauaiStreamScene implements IScene {
     // Ocean plane at sea level, follows the camera in XZ. An animated ripple
     // normal map gives moving wavelets + travelling specular glints (no foam).
     const waterMat = makeOceanMaterial();
-    // Subdivided so the Gerstner vertex swells actually deform the surface.
-    const water = new THREE.Mesh(
-      new THREE.PlaneGeometry(WATER_SIZE, WATER_SIZE, 256, 256),
-      waterMat,
-    );
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(WATER_SIZE, WATER_SIZE), waterMat);
     water.geometry.rotateX(-Math.PI / 2);
     // Sit the surface a touch below the 0 m waterline so the terrain's soft
     // wet-sand → reef fade forms the shoreline, not a hard water edge.
@@ -241,13 +204,6 @@ class KauaiStreamScene implements IScene {
         // World-lock the ripple UVs to (x,z) so they don't swim with the
         // camera-following plane, then scroll them for the wave motion.
         this.waterT += dt;
-        // Slow "breathing" tide: the whole ocean level drifts between +0.1 m
-        // and -0.9 m (two incommensurate sines → looks non-repeating), riding
-        // on top of the per-vertex swells so the shoreline laps in and out.
-        const tide =
-          0.6 * Math.sin(this.waterT * 0.25) +
-          0.4 * Math.sin(this.waterT * 0.11 + 1.3); // ∈ [-1, 1]
-        this.water.position.y = WATER_Y + 0.5 * tide; // [-0.9, +0.1]
         if (this.waterNormal) {
           const uvpm = WATER_REPEAT / WATER_SIZE;
           this.waterNormal.offset.set(
@@ -255,10 +211,6 @@ class KauaiStreamScene implements IScene {
             z * uvpm + this.waterT * 0.010,
           );
         }
-        const wsh = (this.water.material as THREE.Material).userData.shader as
-          | { uniforms: { uTime: { value: number } } }
-          | undefined;
-        if (wsh) wsh.uniforms.uTime.value = this.waterT;
       }
       if (this.hud) {
         const col = String.fromCharCode(65 + Math.min(7, Math.max(0, Math.round(x / 7000 + 3.5))));
