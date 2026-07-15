@@ -237,6 +237,12 @@ export class KauaiHydro {
   private lakeNormal?: THREE.Texture;
   private t = 0;
   private disposed = false;
+  private loaded = false;
+
+  /** True once hydro.json is parsed, so waterNear() can answer authoritatively. */
+  get isLoaded(): boolean {
+    return this.loaded;
+  }
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -299,6 +305,77 @@ export class KauaiHydro {
     };
     for (const r of doc.rivers) chunkOf(r.tile).rivers.push(r);
     for (const l of doc.lakes) chunkOf(l.tile).lakes.push(l);
+    this.loaded = true;
+  }
+
+  /**
+   * River segments + lake rings overlapping an XZ box, for planting exclusion.
+   * River widths (baked per point) are halved and grown by `margin` so callers
+   * can test "does this point touch water" with a point-to-segment distance;
+   * lakes are returned whole for a point-in-polygon test. Cheap: a forest cell
+   * is ~300 m and only the one or two tiles it spans are scanned.
+   */
+  waterNear(
+    minX: number,
+    minZ: number,
+    maxX: number,
+    maxZ: number,
+    margin = 0,
+  ): { segs: { ax: number; az: number; bx: number; bz: number; half: number }[]; lakes: HydroLake[] } {
+    const segs: { ax: number; az: number; bx: number; bz: number; half: number }[] = [];
+    const lakes: HydroLake[] = [];
+    for (const c of this.chunks.values()) {
+      // Skip tiles whose 7 km bounds don't overlap the query box.
+      if (
+        c.cx + 3500 < minX ||
+        c.cx - 3500 > maxX ||
+        c.cz + 3500 < minZ ||
+        c.cz - 3500 > maxZ
+      ) {
+        continue;
+      }
+      for (const r of c.rivers) {
+        const pts = r.pts;
+        for (let i = 0; i < pts.length - 1; i++) {
+          const ax = pts[i][0];
+          const az = pts[i][2];
+          const bx = pts[i + 1][0];
+          const bz = pts[i + 1][2];
+          const half = Math.max(pts[i][3], pts[i + 1][3]) * 0.5 + margin;
+          if (
+            Math.max(ax, bx) + half < minX ||
+            Math.min(ax, bx) - half > maxX ||
+            Math.max(az, bz) + half < minZ ||
+            Math.min(az, bz) - half > maxZ
+          ) {
+            continue;
+          }
+          segs.push({ ax, az, bx, bz, half });
+        }
+      }
+      for (const l of c.lakes) {
+        let lminX = Infinity;
+        let lmaxX = -Infinity;
+        let lminZ = Infinity;
+        let lmaxZ = -Infinity;
+        for (const [x, z] of l.ring) {
+          if (x < lminX) lminX = x;
+          if (x > lmaxX) lmaxX = x;
+          if (z < lminZ) lminZ = z;
+          if (z > lmaxZ) lmaxZ = z;
+        }
+        if (
+          lmaxX + margin < minX ||
+          lminX - margin > maxX ||
+          lmaxZ + margin < minZ ||
+          lminZ - margin > maxZ
+        ) {
+          continue;
+        }
+        lakes.push(l);
+      }
+    }
+    return { segs, lakes };
   }
 
   private buildChunk(c: Chunk, streamer: KauaiTileStreamer): void {

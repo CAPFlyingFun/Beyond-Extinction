@@ -212,7 +212,7 @@ class KauaiStreamScene implements IScene {
       const z = this.camera.position.z;
       s.update(dt, x, z);
       this.hydro?.update(dt, s);
-      this.trees?.update(dt, this.camera.position, s);
+      this.trees?.update(dt, this.camera.position, s, this.hydro);
       // Ride the terrain surface once the standing tile has decoded; over
       // ocean, stay at the water surface (don't sink below sea level).
       if (s.tileReadyAt(x, z)) {

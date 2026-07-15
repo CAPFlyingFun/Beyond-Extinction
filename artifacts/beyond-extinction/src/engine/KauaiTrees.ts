@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { assetUrl, loadTexture } from "./assets";
 import type { KauaiTileStreamer } from "./KauaiTileStreamer";
+import type { KauaiHydro } from "./KauaiHydro";
 
 /**
  * Streaming billboard forest for the real-scale Kauaʻi map — the metre-scale
@@ -29,6 +30,7 @@ const BUILD_M = 1050; // build cells within this radius of the player
 const KEEP_M = 2600; // dispose cells past this radius
 const DRAW_M = 900; // trees solid to 75% of this, dither out to it
 const BUILD_PER_FRAME = 2; // cap cell builds per frame (anti-hitch)
+const WATER_MARGIN = 2.5; // keep plant bases this far back from any water edge
 
 // Vegetation raster geometry (see assets/terrain/kauai/veg/veg.json).
 const VEG_GRID = 384;
@@ -272,6 +274,57 @@ interface Cell {
   meshes: THREE.InstancedMesh[];
 }
 
+/** River segments + lake rings overlapping a forest cell (from KauaiHydro). */
+type WaterSet = ReturnType<KauaiHydro["waterNear"]>;
+
+/** Squared distance from point (px,pz) to segment (ax,az)-(bx,bz), in XZ. */
+function distSqToSeg(
+  px: number,
+  pz: number,
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number,
+): number {
+  const dx = bx - ax;
+  const dz = bz - az;
+  const len2 = dx * dx + dz * dz;
+  let t = len2 > 0 ? ((px - ax) * dx + (pz - az) * dz) / len2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const cx = ax + t * dx;
+  const cz = az + t * dz;
+  return (px - cx) * (px - cx) + (pz - cz) * (pz - cz);
+}
+
+/** Even-odd point-in-polygon test for a closed ring of [x, z] points. */
+function pointInRing(px: number, pz: number, ring: [number, number][]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0];
+    const zi = ring[i][1];
+    const xj = ring[j][0];
+    const zj = ring[j][1];
+    if (zi > pz !== zj > pz && px < ((xj - xi) * (pz - zi)) / (zj - zi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/** True if (px,pz) touches any river ribbon or lake in the set (widths already
+ *  include WATER_MARGIN via KauaiHydro.waterNear). */
+function touchesWater(px: number, pz: number, water: WaterSet): boolean {
+  for (const s of water.segs) {
+    if (distSqToSeg(px, pz, s.ax, s.az, s.bx, s.bz) <= s.half * s.half) return true;
+  }
+  for (const l of water.lakes) {
+    if (pointInRing(px, pz, l.ring) && !l.holes.some((h) => pointInRing(px, pz, h))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export class KauaiTrees {
   readonly group = new THREE.Group();
 
@@ -331,7 +384,12 @@ export class KauaiTrees {
   }
 
   /** Build one forest cell: scatter, gate on veg rasters, ground on terrain. */
-  private buildCell(ci: number, cj: number, streamer: KauaiTileStreamer): void {
+  private buildCell(
+    ci: number,
+    cj: number,
+    streamer: KauaiTileStreamer,
+    water: WaterSet | null,
+  ): void {
     const key = `${ci},${cj}`;
     if (this.cells.has(key)) return;
     const x0 = ci * CHUNK;
@@ -360,6 +418,10 @@ export class KauaiTrees {
 
         const h = streamer.heightAt(px, pz);
         if (h < 1) continue; // never plant below/at the waterline
+
+        // Precise water collision: skip anything landing on/near a real river
+        // ribbon or lake (the veg raster is too coarse to catch narrow channels).
+        if (water && touchesWater(px, pz, water)) continue;
 
         // Species by elevation band, weighted pick among those in-band.
         let total = 0;
@@ -426,8 +488,14 @@ export class KauaiTrees {
     this.cells.delete(`${cell.ci},${cell.cj}`);
   }
 
-  /** Call every frame after the streamer's update. */
-  update(dt: number, camPos: THREE.Vector3, streamer: KauaiTileStreamer): void {
+  /** Call every frame after the streamer's update. Pass the hydro layer so new
+   *  cells can exclude anything landing on a real river or lake. */
+  update(
+    dt: number,
+    camPos: THREE.Vector3,
+    streamer: KauaiTileStreamer,
+    hydro?: KauaiHydro,
+  ): void {
     this.uTime.value += dt;
     if (!this.ready) return;
 
@@ -464,9 +532,24 @@ export class KauaiTrees {
       const db = (b.ci * CHUNK - camPos.x) ** 2 + (b.cj * CHUNK - camPos.z) ** 2;
       return da - db;
     });
-    for (let n = 0; n < BUILD_PER_FRAME && this.buildQueue.length; n++) {
+    // Defer building until the hydrography is parsed, so the water-collision
+    // test is authoritative — otherwise trees could be planted in a channel
+    // before we can see it (the coarse veg raster misses narrow rivers).
+    const waterReady = !hydro || hydro.isLoaded;
+    for (let n = 0; waterReady && n < BUILD_PER_FRAME && this.buildQueue.length; n++) {
       const { ci, cj } = this.buildQueue.shift()!;
-      this.buildCell(ci, cj, streamer);
+      const x0 = ci * CHUNK;
+      const z0 = cj * CHUNK;
+      const water = hydro
+        ? hydro.waterNear(
+            x0 - WATER_MARGIN,
+            z0 - WATER_MARGIN,
+            x0 + CHUNK + WATER_MARGIN,
+            z0 + CHUNK + WATER_MARGIN,
+            WATER_MARGIN,
+          )
+        : null;
+      this.buildCell(ci, cj, streamer, water);
     }
 
     // Per-tree distance fade + per-cell cull (same ramp as the beach forest).
