@@ -4,6 +4,7 @@ import { PlayerController } from "../engine/PlayerController";
 import { KauaiTileStreamer, type KauaiManifest } from "../engine/KauaiTileStreamer";
 import { KauaiHydro } from "../engine/KauaiHydro";
 import { KauaiTrees } from "../engine/KauaiTrees";
+import { IslandCharacter } from "../engine/IslandCharacter";
 import { assetUrl, loadTexture } from "../engine/assets";
 import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
 
@@ -79,6 +80,13 @@ class KauaiStreamScene implements IScene {
   private bgMap?: THREE.Texture;
   private hud?: HTMLDivElement;
   private grounded = false;
+  // Hero characters: Jack (player) and Sarah (standing NPC). Both feet-planted
+  // on the rendered mesh surface each frame so they never sink into terrain.
+  private jack?: IslandCharacter;
+  private sarah?: IslandCharacter;
+  private jackPos = new THREE.Vector2(SPAWN.x, SPAWN.z);
+  private sarahPos = new THREE.Vector2();
+  private disposed = false;
 
   constructor(ctx: SceneContext) {
     this.ctx = ctx;
@@ -152,6 +160,29 @@ class KauaiStreamScene implements IScene {
     this.player.placeAt(SPAWN.x, SPAWN.z, SPAWN.facing);
     this.player.setActive(true);
 
+    // Hero characters. Jack rides with the player (his body a few metres ahead
+    // of the camera so it's visible while we validate grounding); Sarah stands
+    // just down the beach. Both plant their feet on the rendered mesh surface,
+    // so nothing clips into the sand the way it did on the old beach map.
+    // A few metres inland of the spawn camera (which faces west), flanking the
+    // centre so both are in view at once for the arrival beat.
+    this.jackPos.set(SPAWN.x - 5, SPAWN.z + 1.8);
+    this.sarahPos.set(SPAWN.x - 5, SPAWN.z - 1.8);
+    void IslandCharacter.load("Jack", 1.83).then((c) => {
+      if (this.disposed) return void c.dispose();
+      this.jack = c;
+      c.setFacing(Math.PI / 2); // face east, toward the ocean/camera
+      this.scene.add(c.group);
+      this.groundCharacter(c, this.jackPos);
+    });
+    void IslandCharacter.load("Sarah", 1.7).then((c) => {
+      if (this.disposed) return void c.dispose();
+      this.sarah = c;
+      c.setFacing(Math.PI / 2);
+      this.scene.add(c.group);
+      this.groundCharacter(c, this.sarahPos);
+    });
+
     // Dev-only handle for headless render/inspection of the streaming world.
     if (import.meta.env.DEV) {
       (window as unknown as { __kauai?: unknown }).__kauai = {
@@ -191,6 +222,14 @@ class KauaiStreamScene implements IScene {
     });
   }
 
+  /** Plant a character's feet on the rendered mesh surface at its XZ (or sea
+   *  level over water) — only once the tile there has decoded. */
+  private groundCharacter(c: IslandCharacter, at: THREE.Vector2): void {
+    const s = this.streamer;
+    if (!s || !s.tileReadyAt(at.x, at.y)) return;
+    c.place(at.x, Math.max(s.surfaceHeightAt(at.x, at.y), 0), at.y);
+  }
+
   private buildHud(): void {
     const hud = document.createElement("div");
     hud.style.cssText =
@@ -213,6 +252,16 @@ class KauaiStreamScene implements IScene {
       s.update(dt, x, z);
       this.hydro?.update(dt, s);
       this.trees?.update(dt, this.camera.position, s, this.hydro);
+      // Advance character animations and keep their feet planted on the current
+      // surface height (tiles refine as they stream, so re-ground every frame).
+      if (this.jack) {
+        this.jack.update(dt);
+        this.groundCharacter(this.jack, this.jackPos);
+      }
+      if (this.sarah) {
+        this.sarah.update(dt);
+        this.groundCharacter(this.sarah, this.sarahPos);
+      }
       // Ride the terrain surface once the standing tile has decoded; over
       // ocean, stay at the water surface (don't sink below sea level).
       if (s.tileReadyAt(x, z)) {
@@ -259,8 +308,11 @@ class KauaiStreamScene implements IScene {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.player?.setActive(false);
     this.player?.dispose();
+    this.jack?.dispose();
+    this.sarah?.dispose();
     this.hydro?.dispose();
     this.trees?.dispose();
     this.streamer?.dispose();
