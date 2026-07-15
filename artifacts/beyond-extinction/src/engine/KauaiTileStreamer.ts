@@ -37,6 +37,7 @@ function decodeElev(r: number, g: number, b: number): number {
 }
 
 const SEG = 96; // grid resolution per tile (97² verts ≈ 9.4k)
+const SKIRT_M = 220; // metres each tile's edge apron drops to plug seams
 const FADE_PER_SEC = 1 / 0.6; // ~0.6 s cross-fade
 
 /** Biome ground textures blended across the terrain by elevation + slope. */
@@ -322,12 +323,8 @@ export class KauaiTileStreamer {
   private buildMesh(tile: Tile, tex: BiomeTextures): void {
     const P = this.P;
     const h = tile.heights!;
-    // Build the grid slightly OVERSIZED so neighbouring tiles overlap by a
-    // small margin: the outer ring samples clamp to the tile edge (a flat
-    // skirt) which tucks under the next tile, hiding the hairline seams that
-    // appear where two independently-sampled edges don't meet exactly.
-    const OV = 120; // metres of overlap fringe per side
-    const geo = new THREE.PlaneGeometry(this.S + 2 * OV, this.S + 2 * OV, SEG, SEG);
+    // Exact-size grid so neighbouring tiles BUTT together with no overlap.
+    const geo = new THREE.PlaneGeometry(this.S, this.S, SEG, SEG);
     geo.rotateX(-Math.PI / 2); // lie flat: +Z south, +X east
     const pos = geo.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
@@ -356,6 +353,13 @@ export class KauaiTileStreamer {
     mesh.position.set(tile.cx, 0, tile.cz);
     mesh.name = `kauai-${tile.id}`;
     mesh.renderOrder = 0;
+    // Downward skirt: a vertical apron hanging SKIRT_M below the tile's edge,
+    // sharing the biome material so it fades with the tile and reads as
+    // terrain. It plugs any hairline seam where two neighbours' independently
+    // sampled edges differ, without ever sticking out horizontally.
+    const skirt = new THREE.Mesh(buildSkirtGeometry(geo, SEG, SKIRT_M), mat);
+    skirt.name = `kauai-${tile.id}-skirt`;
+    mesh.add(skirt);
     tile.mesh = mesh;
     tile.mat = mat;
     this.group.add(mesh);
@@ -365,6 +369,9 @@ export class KauaiTileStreamer {
     if (t.mesh) {
       this.group.remove(t.mesh);
       t.mesh.geometry.dispose();
+      for (const c of t.mesh.children) {
+        if (c instanceof THREE.Mesh) c.geometry.dispose(); // skirt
+      }
     }
     t.mat?.dispose();
     t.mesh = undefined;
@@ -377,6 +384,50 @@ export class KauaiTileStreamer {
     this.tiles.clear();
     this.scene.remove(this.group);
   }
+}
+
+/**
+ * Build a vertical "skirt" apron around a displaced tile grid: for every edge
+ * segment, a quad hanging `drop` metres straight down from the tile's border.
+ * Neighbouring tiles butt together at their exact extent; this apron sits just
+ * behind the seam and fills any hairline gap where two independently-sampled
+ * edges don't line up — without ever protruding horizontally. Positions are in
+ * the tile's local space (same as the grid), so it rides as a child mesh.
+ */
+function buildSkirtGeometry(
+  grid: THREE.PlaneGeometry,
+  seg: number,
+  drop: number,
+): THREE.BufferGeometry {
+  const p = grid.attributes.position as THREE.BufferAttribute;
+  const nrm = grid.attributes.normal as THREE.BufferAttribute;
+  const n = seg + 1;
+  const vidx = (ix: number, iz: number): number => iz * n + ix;
+  const out: number[] = [];
+  const nout: number[] = [];
+  const quad = (ax: number, az: number, bx: number, bz: number): void => {
+    const a = vidx(ax, az);
+    const b = vidx(bx, bz);
+    const axv = p.getX(a), ayv = p.getY(a), azv = p.getZ(a);
+    const bxv = p.getX(b), byv = p.getY(b), bzv = p.getZ(b);
+    // Shade the skirt with the TERRAIN's edge normals (not the wall's own
+    // outward normal) so the apron reads as a continuation of the surface and
+    // the seam line disappears instead of catching light as a vertical facet.
+    const an = [nrm.getX(a), nrm.getY(a), nrm.getZ(a)];
+    const bn = [nrm.getX(b), nrm.getY(b), nrm.getZ(b)];
+    out.push(axv, ayv, azv, bxv, byv, bzv, bxv, byv - drop, bzv);
+    nout.push(...an, ...bn, ...bn);
+    out.push(axv, ayv, azv, bxv, byv - drop, bzv, axv, ayv - drop, azv);
+    nout.push(...an, ...bn, ...an);
+  };
+  for (let ix = 0; ix < seg; ix++) quad(ix, 0, ix + 1, 0); // north
+  for (let ix = 0; ix < seg; ix++) quad(ix, seg, ix + 1, seg); // south
+  for (let iz = 0; iz < seg; iz++) quad(0, iz, 0, iz + 1); // west
+  for (let iz = 0; iz < seg; iz++) quad(seg, iz, seg, iz + 1); // east
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(out, 3));
+  g.setAttribute("normal", new THREE.Float32BufferAttribute(nout, 3));
+  return g;
 }
 
 /**
@@ -394,6 +445,7 @@ function makeBiomeMaterial(tex: BiomeTextures): THREE.MeshStandardMaterial {
     metalness: 0,
     transparent: true,
     opacity: 0,
+    side: THREE.DoubleSide, // skirt walls stay visible regardless of winding
   });
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.tSand = { value: tex.sand };
