@@ -3,6 +3,7 @@ import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { PlayerController } from "../engine/PlayerController";
 import { KauaiTileStreamer, type KauaiManifest } from "../engine/KauaiTileStreamer";
 import { KauaiHydro } from "../engine/KauaiHydro";
+import { KauaiTrees } from "../engine/KauaiTrees";
 import { assetUrl, loadTexture } from "../engine/assets";
 import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
 
@@ -69,6 +70,7 @@ class KauaiStreamScene implements IScene {
   private readonly ctx: SceneContext;
   private streamer?: KauaiTileStreamer;
   private hydro?: KauaiHydro;
+  private trees?: KauaiTrees;
   private player?: PlayerController;
   private water?: THREE.Mesh;
   private waterNormal?: THREE.Texture;
@@ -131,6 +133,9 @@ class KauaiStreamScene implements IScene {
       this.streamer.update(0, SPAWN.x, SPAWN.z); // kick the first ring
       // Real NHD rivers + lakes, draped on the tiles and streamed with them.
       this.hydro = new KauaiHydro(this.scene);
+      // Billboard forest placed from the baked veg rasters, streamed + grounded
+      // on the tiles, with the same distance alpha-fade as the beach map.
+      this.trees = new KauaiTrees(this.scene);
     } catch (e) {
       console.error("[kauai] manifest load failed", e);
     }
@@ -146,6 +151,18 @@ class KauaiStreamScene implements IScene {
     });
     this.player.placeAt(SPAWN.x, SPAWN.z, SPAWN.facing);
     this.player.setActive(true);
+
+    // Dev-only handle for headless render/inspection of the streaming world.
+    if (import.meta.env.DEV) {
+      (window as unknown as { __kauai?: unknown }).__kauai = {
+        scene: this.scene,
+        camera: this.camera,
+        trees: this.trees,
+        hydro: this.hydro,
+        streamer: this.streamer,
+        player: this.player,
+      };
+    }
 
     this.buildHud();
   }
@@ -195,6 +212,7 @@ class KauaiStreamScene implements IScene {
       const z = this.camera.position.z;
       s.update(dt, x, z);
       this.hydro?.update(dt, s);
+      this.trees?.update(dt, this.camera.position, s);
       // Ride the terrain surface once the standing tile has decoded; over
       // ocean, stay at the water surface (don't sink below sea level).
       if (s.tileReadyAt(x, z)) {
@@ -244,6 +262,7 @@ class KauaiStreamScene implements IScene {
     this.player?.setActive(false);
     this.player?.dispose();
     this.hydro?.dispose();
+    this.trees?.dispose();
     this.streamer?.dispose();
     this.envMap?.dispose();
     this.bgMap?.dispose();

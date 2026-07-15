@@ -153,10 +153,16 @@ export class Game {
     // player on the live site can't URL-skip the intro; on the deployed build
     // the same jump is still reachable through the PIN-gated Dev menu's
     // "Skip to Island".
-    const skip =
-      import.meta.env.DEV &&
-      new URLSearchParams(location.search).get("skip") === "island";
-    await this.scenes.goTo(skip ? createChapterOneScene : initial, false);
+    const skipTo = import.meta.env.DEV
+      ? new URLSearchParams(location.search).get("skip")
+      : null;
+    const first =
+      skipTo === "island"
+        ? createChapterOneScene
+        : skipTo === "kauai"
+          ? createKauaiStreamScene
+          : initial;
+    await this.scenes.goTo(first, false);
     this.running = true;
     this.lastTime = performance.now();
     this.loop();

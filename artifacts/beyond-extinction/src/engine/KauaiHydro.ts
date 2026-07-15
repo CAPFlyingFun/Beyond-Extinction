@@ -22,7 +22,11 @@ import type { KauaiTileStreamer } from "./KauaiTileStreamer";
  * geometry is built lazily on first residency and cached for the scene's life.
  */
 
-const FLOAT_M = 0.3; // ribbon sits this far above the rendered terrain surface
+// River/lake surfaces are re-grounded onto the LIVE streamed terrain at build
+// time (streamer.heightAt) and lifted this tiny amount, so they always sit just
+// above the actual rendered ground — no clipping in/out, no z-fighting, and no
+// coupling to the ocean tide (which only ever moves the separate ocean plane).
+const LIFT_M = 0.075;
 const UV_M = 8; // metres per ripple-normal repeat (same wavelength as the ocean)
 const RIVER_SCROLL = 0.05; // u/s ≈ 0.4 m/s downstream drift
 const LAKE_DRIFT = { x: 0.014, y: 0.01 }; // ocean's ripple drift (u/s)
@@ -130,12 +134,16 @@ function smoothRun(pts: Pt4[]): Pt4[] {
   return out;
 }
 
+/** Terrain-grounded surface height (m) for a water vertex at world (x, z). */
+type GroundY = (x: number, z: number) => number;
+
 /** Triangle-strip ribbon along a run's centerline, XZ-perpendicular offsets. */
 function buildRibbon(
   run: HydroRiver,
   positions: number[],
   uvs: number[],
   indices: number[],
+  groundY: GroundY,
 ): void {
   const pts = smoothRun(run.pts);
   const n = pts.length;
@@ -146,7 +154,7 @@ function buildRibbon(
   const base = positions.length / 3;
   let emitted = 0;
   for (let i = 0; i < n; i++) {
-    const [x, y, z, w] = pts[i];
+    const [x, , z, w] = pts[i]; // baked Y ignored — we re-ground onto terrain
     // central-difference direction (falls back to fwd/back at the ends)
     const a = pts[Math.max(0, i - 1)];
     const b = pts[Math.min(n - 1, i + 1)];
@@ -159,8 +167,11 @@ function buildRibbon(
     const px = -dz; // left-perpendicular in XZ
     const pz = dx;
     const half = w / 2;
-    const yy = y + FLOAT_M;
-    positions.push(x + px * half, yy, z + pz * half, x - px * half, yy, z - pz * half);
+    // Re-ground both banks onto the live terrain (not the baked drape) so the
+    // ribbon hugs the rendered surface exactly and never clips through it.
+    const yl = groundY(x + px * half, z + pz * half);
+    const yr = groundY(x - px * half, z - pz * half);
+    positions.push(x + px * half, yl, z + pz * half, x - px * half, yr, z - pz * half);
     cum += Math.hypot(x - prevX, z - prevZ);
     prevX = x;
     prevZ = z;
@@ -175,12 +186,13 @@ function buildRibbon(
   }
 }
 
-/** Flat lake mesh from ring + holes at the baked waterline. */
+/** Lake mesh from ring + holes, re-grounded onto the live terrain surface. */
 function buildLake(
   lake: HydroLake,
   positions: number[],
   uvs: number[],
   indices: number[],
+  groundY: GroundY,
 ): void {
   const contour = lake.ring.map(([x, z]) => new THREE.Vector2(x, z));
   const holes = lake.holes.map((h) => h.map(([x, z]) => new THREE.Vector2(x, z)));
@@ -193,7 +205,9 @@ function buildLake(
   const all = contour.concat(...holes);
   const base = positions.length / 3;
   for (const v of all) {
-    positions.push(v.x, lake.y, v.y);
+    // v.x = world X, v.y = world Z. Sit the rim on the live ground so the pool
+    // meets its banks cleanly instead of clipping a flat baked plane.
+    positions.push(v.x, groundY(v.x, v.y), v.y);
     uvs.push(v.x / UV_M, v.y / UV_M);
   }
   for (const [a, b, c] of tris) {
@@ -287,8 +301,11 @@ export class KauaiHydro {
     for (const l of doc.lakes) chunkOf(l.tile).lakes.push(l);
   }
 
-  private buildChunk(c: Chunk): void {
+  private buildChunk(c: Chunk, streamer: KauaiTileStreamer): void {
     c.built = true;
+    // Sample the live rendered terrain and lift a hair so water sits just above
+    // the ground surface (never coupled to the ocean tide, never clipping).
+    const groundY: GroundY = (x, z) => streamer.heightAt(x, z) + LIFT_M;
     const make = (
       build: (pos: number[], uv: number[], idx: number[]) => void,
       mat: THREE.Material,
@@ -313,14 +330,14 @@ export class KauaiHydro {
     };
     make(
       (p, u, i) => {
-        for (const r of c.rivers) buildRibbon(r, p, u, i);
+        for (const r of c.rivers) buildRibbon(r, p, u, i, groundY);
       },
       this.riverMat,
       `hydro-${c.tile}-rivers`,
     );
     make(
       (p, u, i) => {
-        for (const l of c.lakes) buildLake(l, p, u, i);
+        for (const l of c.lakes) buildLake(l, p, u, i, groundY);
       },
       this.lakeMat,
       `hydro-${c.tile}-lakes`,
@@ -336,7 +353,7 @@ export class KauaiHydro {
     }
     for (const c of this.chunks.values()) {
       const ready = streamer.tileReadyAt(c.cx, c.cz);
-      if (ready && !c.built) this.buildChunk(c);
+      if (ready && !c.built) this.buildChunk(c, streamer);
       for (const m of c.meshes) m.visible = ready;
     }
   }
