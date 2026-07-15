@@ -77,6 +77,59 @@ function makeWaterMaterial(color: number): THREE.MeshStandardMaterial {
   return mat;
 }
 
+type Pt4 = [number, number, number, number];
+
+/**
+ * Centripetal Catmull-Rom resample of a run's [x, y, z, width] points.
+ *
+ * The baked NHDPlus vertices sit ~34 m apart, so straight segments meeting at
+ * sharp vertices read as a blocky, faceted ribbon. We pass a smooth spline
+ * through the original knots and re-sample it every ~STEP metres so bends round
+ * out. Centripetal parameterisation (alpha = 0.5) is used specifically because
+ * it never self-intersects or overshoots into cusps — the curve stays inside
+ * the channel it was digitised from, so the draped Y won't dive under terrain.
+ * All four channels (position + width) are interpolated together so the ribbon
+ * stays in sync.
+ */
+function smoothRun(pts: Pt4[]): Pt4[] {
+  const n = pts.length;
+  if (n < 3) return pts; // 2 points is already a straight segment
+  const STEP = 6; // target metres between re-sampled points
+  const alpha = 0.5;
+  const planar = (a: Pt4, b: Pt4): number => Math.hypot(b[0] - a[0], b[2] - a[2]);
+  const knot = (a: Pt4, b: Pt4): number => Math.pow(Math.max(planar(a, b), 1e-4), alpha);
+  // Barry-Goldman pyramidal Catmull-Rom, evaluated per channel.
+  const lerp = (p: Pt4, q: Pt4, s: number): Pt4 => [
+    p[0] + (q[0] - p[0]) * s,
+    p[1] + (q[1] - p[1]) * s,
+    p[2] + (q[2] - p[2]) * s,
+    p[3] + (q[3] - p[3]) * s,
+  ];
+  const out: Pt4[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(n - 1, i + 2)];
+    const t0 = 0;
+    const t1 = t0 + knot(p0, p1);
+    const t2 = t1 + knot(p1, p2);
+    const t3 = t2 + knot(p2, p3);
+    const steps = Math.max(1, Math.round(planar(p1, p2) / STEP));
+    for (let s = 0; s < steps; s++) {
+      const t = t1 + ((t2 - t1) * s) / steps;
+      const a1 = lerp(p0, p1, (t - t0) / (t1 - t0));
+      const a2 = lerp(p1, p2, (t - t1) / (t2 - t1));
+      const a3 = lerp(p2, p3, (t - t2) / (t3 - t2));
+      const b1 = lerp(a1, a2, (t - t0) / (t2 - t0));
+      const b2 = lerp(a2, a3, (t - t1) / (t3 - t1));
+      out.push(lerp(b1, b2, (t - t1) / (t2 - t1)));
+    }
+  }
+  out.push(pts[n - 1]);
+  return out;
+}
+
 /** Triangle-strip ribbon along a run's centerline, XZ-perpendicular offsets. */
 function buildRibbon(
   run: HydroRiver,
@@ -84,7 +137,7 @@ function buildRibbon(
   uvs: number[],
   indices: number[],
 ): void {
-  const pts = run.pts;
+  const pts = smoothRun(run.pts);
   const n = pts.length;
   if (n < 2) return;
   let cum = 0;
