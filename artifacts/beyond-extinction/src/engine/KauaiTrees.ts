@@ -24,7 +24,7 @@ import type { KauaiTileStreamer } from "./KauaiTileStreamer";
  */
 
 const CHUNK = 300; // metres per streamed forest cell
-const STEP = 13; // metres between candidate planting sites
+const STEP = 10.2; // metres between candidate planting sites (denser = fuller)
 const BUILD_M = 1050; // build cells within this radius of the player
 const KEEP_M = 2600; // dispose cells past this radius
 const DRAW_M = 900; // trees solid to 75% of this, dither out to it
@@ -35,7 +35,7 @@ const VEG_GRID = 384;
 const MAP_M = 56000; // world square the rasters cover (±28 km)
 
 interface Species {
-  file: string;
+  file: string; // asset path under assets/ (incl. subdir + extension)
   height: number; // metres
   minH: number; // elevation band (m)
   maxH: number;
@@ -43,14 +43,17 @@ interface Species {
   weight: number; // relative pick weight inside its band
 }
 
-// Coast → summit succession, keyed to real Kauaʻi elevation (m).
+// Coast → summit succession, keyed to real Kauaʻi elevation (m). The low, wide
+// bush carpets the understory across nearly the whole vegetated range so the
+// ground layer reads as thick brush between the taller canopy species.
 const SPECIES: Species[] = [
-  { file: "palm", height: 13, minH: 0.5, maxH: 24, sway: 1.2, weight: 0.5 },
-  { file: "cycad", height: 6, minH: 0.5, maxH: 30, sway: 0.5, weight: 0.7 },
-  { file: "sago", height: 6.5, minH: 1, maxH: 45, sway: 0.5, weight: 0.7 },
-  { file: "fern", height: 4.5, minH: 1, maxH: 260, sway: 0.8, weight: 1.0 },
-  { file: "aspen", height: 12, minH: 60, maxH: 680, sway: 1.0, weight: 0.9 },
-  { file: "conifer", height: 14, minH: 460, maxH: 1600, sway: 1.2, weight: 0.85 },
+  { file: "billboards/billboard_bush_01.png", height: 2.6, minH: 0.5, maxH: 620, sway: 0.4, weight: 1.1 },
+  { file: "trees/palm.png", height: 13, minH: 0.5, maxH: 24, sway: 1.2, weight: 0.5 },
+  { file: "trees/cycad.png", height: 6, minH: 0.5, maxH: 30, sway: 0.5, weight: 0.7 },
+  { file: "trees/sago.png", height: 6.5, minH: 1, maxH: 45, sway: 0.5, weight: 0.7 },
+  { file: "trees/fern.png", height: 4.5, minH: 1, maxH: 260, sway: 0.8, weight: 1.0 },
+  { file: "trees/aspen.png", height: 12, minH: 60, maxH: 680, sway: 1.0, weight: 0.9 },
+  { file: "trees/conifer.png", height: 14, minH: 460, maxH: 1600, sway: 1.2, weight: 0.85 },
 ];
 
 /** Stable hash → [0,1), same family as the beach forest so stands are stable. */
@@ -312,7 +315,7 @@ export class KauaiTrees {
     if (this.disposed) return;
 
     const texs = await Promise.all(
-      SPECIES.map((sp) => loadTexture(`assets/trees/${sp.file}.png`)),
+      SPECIES.map((sp) => loadTexture(`assets/${sp.file}`)),
     );
     if (this.disposed) return;
     this.mats = SPECIES.map((sp, s) => {
@@ -400,7 +403,8 @@ export class KauaiTrees {
       im.frustumCulled = true;
       im.castShadow = false;
       im.receiveShadow = false;
-      im.name = `kauai-trees-${sp.file}-${key}`;
+      const spId = sp.file.replace(/^.*\//, "").replace(/\.[a-z]+$/i, "");
+      im.name = `kauai-trees-${spId}-${key}`;
       this.group.add(im);
       meshes.push(im);
     });
