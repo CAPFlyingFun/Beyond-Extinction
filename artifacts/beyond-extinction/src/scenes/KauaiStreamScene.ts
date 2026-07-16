@@ -5,6 +5,8 @@ import { KauaiTileStreamer, type KauaiManifest } from "../engine/KauaiTileStream
 import { KauaiHydro } from "../engine/KauaiHydro";
 import { KauaiTrees } from "../engine/KauaiTrees";
 import { IslandCharacter } from "../engine/IslandCharacter";
+import { SpawnStore } from "../engine/SpawnStore";
+import { SpawnTools } from "../engine/SpawnTools";
 import { assetUrl, loadTexture } from "../engine/assets";
 import { VOICE_CLIPS } from "../data/voiceClips";
 import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
@@ -74,6 +76,12 @@ const SPAWN = { x: 20900, z: 1288, facing: 270 };
 const WATER_SIZE = 80000; // ocean plane extent (m)
 const WATER_REPEAT = 10000; // ripple normal repeats → ~8 m wavelength
 const WATER_Y = -0.4; // surface just below the 0 m waterline (soft shoreline)
+// Tide breathe amplitude (m). Deliberately whisper-small: the coastal flats are
+// nearly level, so a ±0.5 m vertical swing walked the shoreline hundreds of
+// metres inland and back every few seconds (the "jumping waterline" seen from
+// the flyover's high wide shots). ±0.06 m keeps the surface alive up close
+// while the shoreline stays visually pinned.
+const TIDE_AMP = 0.06;
 
 /**
  * Ocean surface material: a translucent MeshStandard blue with an animated
@@ -92,6 +100,12 @@ function makeOceanMaterial(): THREE.MeshStandardMaterial {
     opacity: 0.82,
     envMapIntensity: 1.1,
     normalScale: new THREE.Vector2(0.55, 0.55),
+    // Z-fight guard: push ocean fragments slightly deeper so near-coplanar
+    // terrain (the flat wet-sand shelf right at the waterline) wins the depth
+    // test consistently instead of shimmering between sand and water.
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
   });
   const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
   mat.onBeforeCompile = (sh) => {
@@ -171,6 +185,12 @@ class KauaiStreamScene implements IScene {
   private readonly cinematic: boolean;
   private phase: "loading" | "flyover" | "play" = "play";
   private readonly spawnFocus = new THREE.Vector3(SPAWN.x, 0, SPAWN.z);
+  // Effective spawn: the hardcoded Wailua default unless a dev-saved start
+  // (Dev menu → spawn tools, persisted by SpawnStore) overrides it.
+  private spawnX = SPAWN.x;
+  private spawnZ = SPAWN.z;
+  private spawnFacing = SPAWN.facing;
+  private sarahFacing = Math.PI / 2;
   private journalRoot?: HTMLDivElement;
   private journalTextEl?: HTMLDivElement;
   private loadWrap?: HTMLDivElement;
@@ -196,6 +216,19 @@ class KauaiStreamScene implements IScene {
   }
 
   async enter(): Promise<void> {
+    // Resolve the effective spawn: dev-saved start points (walk somewhere →
+    // Dev menu "Set Jack/Sarah start here") override the Wailua defaults.
+    const savedSpawns = SpawnStore.get();
+    if (savedSpawns.jack) {
+      this.spawnX = savedSpawns.jack.x;
+      this.spawnZ = savedSpawns.jack.z;
+      this.spawnFacing = savedSpawns.jack.rot;
+    }
+    this.spawnFocus.set(this.spawnX, 0, this.spawnZ);
+    this.prevX = this.spawnX;
+    this.prevZ = this.spawnZ;
+    this.camera.position.set(this.spawnX, EYE_JACK, this.spawnZ);
+
     this.scene.background = SKY; // fallback until the HDRI background loads
     // Neutral light haze (not saturated sky-blue) pushed far out, so distant
     // terrain keeps its colour and only melts into a soft horizon haze rather
@@ -219,7 +252,7 @@ class KauaiStreamScene implements IScene {
     water.geometry.rotateX(-Math.PI / 2);
     // Sit the surface a touch below the 0 m waterline so the terrain's soft
     // wet-sand → reef fade forms the shoreline, not a hard water edge.
-    water.position.set(SPAWN.x, WATER_Y, SPAWN.z);
+    water.position.set(this.spawnX, WATER_Y, this.spawnZ);
     water.renderOrder = -1;
     this.scene.add(water);
     this.water = water;
@@ -240,7 +273,7 @@ class KauaiStreamScene implements IScene {
       this.streamer = new KauaiTileStreamer(this.scene, manifest, { radius: 2 });
       // Fresh arrival forces the spawn tile in first (see runArrival); dev/continue
       // kicks the whole ring immediately for an instant drop into first person.
-      if (!this.cinematic) this.streamer.update(0, SPAWN.x, SPAWN.z);
+      if (!this.cinematic) this.streamer.update(0, this.spawnX, this.spawnZ);
       // Real NHD rivers + lakes, draped on the tiles and streamed with them.
       this.hydro = new KauaiHydro(this.scene);
       // Billboard forest placed from the baked veg rasters, streamed + grounded
@@ -260,9 +293,12 @@ class KauaiStreamScene implements IScene {
       crawlMultiplier: 0.3,
       lookSensitivity: 0.0032,
     });
-    this.player.placeAt(SPAWN.x, SPAWN.z, SPAWN.facing);
+    this.player.placeAt(this.spawnX, this.spawnZ, this.spawnFacing);
     // Held inactive through the arrival cinematic; activated in finishArrival().
     if (!this.cinematic) this.player.setActive(true);
+    // Dev-menu spawn tools work on this map: save Jack/Sarah start points from
+    // wherever the player is standing (persisted via SpawnStore).
+    this.registerSpawnTools();
 
     // Hero characters. Jack rides with the player (his body a few metres ahead
     // of the camera so it's visible while we validate grounding); Sarah stands
@@ -270,8 +306,14 @@ class KauaiStreamScene implements IScene {
     // so nothing clips into the sand the way it did on the old beach map.
     // A few metres inland of the spawn camera (which faces west), flanking the
     // centre so both are in view at once for the arrival beat.
-    this.jackPos.set(SPAWN.x - 5, SPAWN.z + 1.8);
-    this.sarahPos.set(SPAWN.x - 5, SPAWN.z - 1.8);
+    this.jackPos.set(this.spawnX - 5, this.spawnZ + 1.8);
+    if (savedSpawns.sarah) {
+      // Dev-saved Sarah start (position + mesh rotation.y in radians).
+      this.sarahPos.set(savedSpawns.sarah.x, savedSpawns.sarah.z);
+      this.sarahFacing = savedSpawns.sarah.rot;
+    } else {
+      this.sarahPos.set(this.spawnX - 5, this.spawnZ - 1.8);
+    }
     void IslandCharacter.load("Jack", 1.83).then((c) => {
       if (this.disposed) return void c.dispose();
       this.jack = c;
@@ -283,7 +325,7 @@ class KauaiStreamScene implements IScene {
     void IslandCharacter.load("Sarah", 1.7).then((c) => {
       if (this.disposed) return void c.dispose();
       this.sarah = c;
-      c.setFacing(Math.PI / 2);
+      c.setFacing(this.sarahFacing);
       this.scene.add(c.group);
       this.groundCharacter(c, this.sarahPos);
       this.applyRoles();
@@ -311,7 +353,7 @@ class KauaiStreamScene implements IScene {
         },
         diveHold: (v: boolean) => (this.diveHeld = v),
         riseHold: (v: boolean) => (this.riseHeld = v),
-        teleport: (x: number, z: number, facing = SPAWN.facing) => {
+        teleport: (x: number, z: number, facing = this.spawnFacing) => {
           this.player?.placeAt(x, z, facing);
           this.grounded = false;
         },
@@ -396,6 +438,37 @@ class KauaiStreamScene implements IScene {
     this.active = this.active === "Jack" ? "Sarah" : "Jack";
     this.applyRoles();
     this.ctx.overlays.showToast(`Now playing: ${this.active}`);
+  }
+
+  /** Dev-menu spawn tools (the shared {@link SpawnTools} bridge): save Jack's or
+   *  Sarah's start point at the player's current spot, persisted by SpawnStore
+   *  so every future load starts there. The Dev menu shows its spawn buttons
+   *  whenever these callbacks are present; dispose() clears them. */
+  private registerSpawnTools(): void {
+    SpawnTools.current = {
+      setJackHere: () => {
+        const x = +this.camera.position.x.toFixed(1);
+        const z = +this.camera.position.z.toFixed(1);
+        // placeAt uses yaw = degToRad(-facing), so facing = -deg(yaw).
+        const facing = +(-THREE.MathUtils.radToDeg(this.player?.yaw ?? 0)).toFixed(1);
+        SpawnStore.setJack({ x, z, rot: facing });
+        return `Jack start saved (${x}, ${z})`;
+      },
+      setSarahHere: () => {
+        const x = +this.camera.position.x.toFixed(1);
+        const z = +this.camera.position.z.toFixed(1);
+        const rot = this.sarah?.group.rotation.y ?? Math.PI / 2;
+        SpawnStore.setSarah({ x, z, rot });
+        this.sarahFacing = rot;
+        this.sarahPos.set(x, z);
+        if (this.sarah) this.groundCharacter(this.sarah, this.sarahPos);
+        return `Sarah start saved (${x}, ${z})`;
+      },
+      reset: () => {
+        SpawnStore.clear();
+        return "Island start points reset to defaults";
+      },
+    };
   }
 
   /** Plant a character's feet on the rendered mesh surface at its XZ (or sea
@@ -553,12 +626,15 @@ class KauaiStreamScene implements IScene {
       // Advance both characters' animation mixers (idle/walk blend).
       this.jack?.update(dt);
       this.sarah?.update(dt);
-      // High/low tide (two incommensurate sines → non-repeating) drives the
-      // ocean surface, used for both the plane and the swim/wade test.
+      // High/low tide (two incommensurate sines → non-repeating) breathes the
+      // ocean surface, used for both the plane and the swim/wade test. Frozen
+      // during the cinematic so the flyover's shoreline is rock-steady; in play
+      // it's a whisper-small ±TIDE_AMP (see the constant for why so small).
       this.waterT += dt;
-      const tide =
-        0.6 * Math.sin(this.waterT * 0.25) + 0.4 * Math.sin(this.waterT * 0.11 + 1.3);
-      const waterY = WATER_Y + 0.5 * tide; // ocean surface (also the plane Y)
+      const tide = play
+        ? 0.6 * Math.sin(this.waterT * 0.25) + 0.4 * Math.sin(this.waterT * 0.11 + 1.3)
+        : 0;
+      const waterY = WATER_Y + TIDE_AMP * tide; // ocean surface (also the plane Y)
 
       // ── Cinematic phases: hold both heroes on the terrain, fly the drone ──
       if (!play) {
@@ -748,7 +824,7 @@ class KauaiStreamScene implements IScene {
 
     // Force the spawn tile in FIRST so Jack has ground before anything else.
     const spawnReady = this.streamer
-      ? this.streamer.ensureTileAt(SPAWN.x, SPAWN.z)
+      ? this.streamer.ensureTileAt(this.spawnX, this.spawnZ)
       : Promise.resolve(false);
 
     // Journal VO + typed text; nightmare stingers ride over the black (non-blocking).
@@ -767,8 +843,11 @@ class KauaiStreamScene implements IScene {
     await spawnReady;
     if (this.disposed) return;
     // Spawn tile exists → kick the resident ring and record Jack's ground height.
-    this.streamer?.update(0, SPAWN.x, SPAWN.z);
-    this.jackFeetY = Math.max(this.streamer?.surfaceHeightAt(SPAWN.x, SPAWN.z) ?? 0, WATER_Y);
+    this.streamer?.update(0, this.spawnX, this.spawnZ);
+    this.jackFeetY = Math.max(
+      this.streamer?.surfaceHeightAt(this.spawnX, this.spawnZ) ?? 0,
+      WATER_Y,
+    );
 
     // Hold black until the journal has finished AND the world around Jack is ready.
     await journalDone;
@@ -833,7 +912,7 @@ class KauaiStreamScene implements IScene {
     const MAX_MS = 45000;
     for (;;) {
       if (this.disposed) return;
-      const ls = s ? s.loadState(SPAWN.x, SPAWN.z) : { ready: 0, total: 1 };
+      const ls = s ? s.loadState(this.spawnX, this.spawnZ) : { ready: 0, total: 1 };
       const tilesReady = ls.total > 0 && ls.ready >= ls.total;
       const treesReady = !!this.trees?.isReady && (this.trees?.cellCount ?? 0) > 0;
       const heroesReady =
@@ -1026,7 +1105,7 @@ class KauaiStreamScene implements IScene {
     this.applyRoles(); // re-hide the played body's head
     this.phase = "play";
     this.grounded = false;
-    this.player?.placeAt(this.jackPos.x, this.jackPos.y, SPAWN.facing);
+    this.player?.placeAt(this.jackPos.x, this.jackPos.y, this.spawnFacing);
     this.player?.setActive(true);
     this.ctx.input.setEnabled(true);
     this.buildHud();
@@ -1053,6 +1132,7 @@ class KauaiStreamScene implements IScene {
 
   dispose(): void {
     this.disposed = true;
+    SpawnTools.current = undefined; // Dev spawn tools leave with the scene
     if (this.typeRaf !== null) cancelAnimationFrame(this.typeRaf);
     this.typeRaf = null;
     this.skipUnsub?.();
