@@ -17,8 +17,8 @@ import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
  * Spawn: G5 / Wailua (east coast) — the locked-in Chapter-2 arrival. Ocean is
  * to the east (+X); you face inland (west) toward the interior + summit.
  */
-const EYE = 1.7; // m
-const CAM_FWD = 0.32; // eye pushed this far ahead of the head so the body renders behind it
+const EYE = 1.62; // m — beach/Godot first-person eye height
+const CAM_FWD = 0.32; // Godot cam_fwd_offset: eye ahead of the head so the body renders behind it
 const SKY = new THREE.Color(0x8fbcd4);
 const SUN = new THREE.Vector3(-0.55, 0.72, 0.42).normalize();
 
@@ -112,7 +112,10 @@ class KauaiStreamScene implements IScene {
   constructor(ctx: SceneContext) {
     this.ctx = ctx;
     const aspect = ctx.renderer.width / ctx.renderer.height;
-    this.camera = new THREE.PerspectiveCamera(62, aspect, 1, 22000);
+    // Near 0.107 m (beach/Godot parity): the camera rides at the head, so a tiny
+    // near plane keeps the first-person BODY from being sliced away underfoot.
+    // Distant terrain is fogged long before depth precision matters.
+    this.camera = new THREE.PerspectiveCamera(62, aspect, 0.107, 22000);
     this.camera.position.set(SPAWN.x, EYE, SPAWN.z);
   }
 
@@ -222,6 +225,7 @@ class KauaiStreamScene implements IScene {
         step: (dt = 0.016, n = 1) => {
           for (let i = 0; i < n; i++) this.update(dt);
         },
+        render: () => this.ctx.renderer.render(this.scene, this.camera),
         dbg: () => {
           const x = this.camera.position.x;
           const z = this.camera.position.z;
