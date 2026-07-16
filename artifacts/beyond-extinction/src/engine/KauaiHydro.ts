@@ -24,15 +24,14 @@ import { riverCarveDepth } from "./kauaiCarveCore";
  * geometry is built lazily on first residency and cached for the scene's life.
  */
 
-// Water surfaces are FLAT pools (RCT-style "fill the depression"), levelled
+// Water surfaces are FLAT pools ACROSS the channel (RCT-style), levelled
 // against the LIVE streamed terrain (streamer.surfaceHeightAt — triangle-exact
-// against the rendered mesh). Rivers pick a pool level per cross-section from
-// the carved channel and clamp it monotonic downstream; lakes sit flat at
-// their baked waterline. Water is never coupled to the ocean tide (that only
-// moves the separate ocean plane).
+// against the rendered mesh). Rivers pick a level per cross-section just above
+// the carved centreline and smooth it ALONG the run; lakes sit flat at their
+// baked waterline. Water is never coupled to the ocean tide (that only moves
+// the separate ocean plane).
 const LIFT_M = 0.12; // min water depth above the channel centreline (m)
-const BANK_FREEBOARD = 0.05; // keep the pool this far below the lower bank (m)
-const POOL_WINDOW = 3; // cross-sections (±) bridged by one pool (~±18 m)
+const SMOOTH_WINDOW = 5; // cross-sections (±) averaged along the run (~±30 m)
 const UV_M = 8; // metres per ripple-normal repeat (same wavelength as the ocean)
 const RIVER_SCROLL = 0.05; // u/s ≈ 0.4 m/s downstream drift
 const LAKE_DRIFT = { x: 0.014, y: 0.01 }; // ocean's ripple drift (u/s)
@@ -49,11 +48,12 @@ function makeWaterMaterial(color: number): THREE.MeshStandardMaterial {
     normalScale: new THREE.Vector2(0.55, 0.55),
     side: THREE.DoubleSide, // ribbons stay visible from below-bank angles
     // Same z-fight guard as the ocean: pool surfaces cross near-coplanar
-    // terrain right at their banks — push water fragments slightly deeper so
-    // the shoreline pixels resolve to ground, not shimmer.
+    // terrain right at their banks — push water fragments deeper so the
+    // shoreline pixels resolve to ground, not shimmer (generous units for
+    // metres-coarse far-distance depth steps, matching the ocean).
     polygonOffset: true,
-    polygonOffsetFactor: 1,
-    polygonOffsetUnits: 1,
+    polygonOffsetFactor: 2,
+    polygonOffsetUnits: 4,
   });
   const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
   mat.onBeforeCompile = (sh) => {
@@ -131,15 +131,20 @@ type GroundY = (x: number, z: number) => number;
 /**
  * Pooled river ribbon: FLAT cross-sections at a water LEVEL, RCT-style.
  *
- * The old ribbon grounded every vertex on the terrain, so the water wrapped
- * the channel (and any dune it crossed) like a blue carpet. Instead each
- * cross-section now picks a pool level inside the carved channel — above the
- * centreline ground, below the lower bank — bridges facet dips with a small
- * windowed max, and clamps the level monotonic DOWNSTREAM (water never flows
- * uphill; behind a terrain bump it simply disappears under the ground until
- * the valley floor drops back below the pool). The cross-section is emitted
- * flat at that level, so the water edge hides inside the banks exactly like a
- * filled depression.
+ * The v75 ribbon grounded every vertex on the terrain, so the water wrapped
+ * the channel (and any dune it crossed) like a blue carpet. The v76 rewrite
+ * went too far the other way: it capped the level at the lower BANK and
+ * clamped it monotonic downstream over the whole run — but the rendered
+ * 36 m-facet terrain undulates constantly along a channel, so one low
+ * stretch dragged every downstream cross-section under the ground and the
+ * river surfaced only in dips (disconnected blue shards).
+ *
+ * Now the level is terrain-FOLLOWING but smoothed: each cross-section wants
+ * to sit a fraction of the carve depth above the centreline ground, the
+ * wanted levels are moving-averaged along the run (~±30 m) to iron out facet
+ * noise, and the result is clamped back into the local channel — never below
+ * the centreline (invisible), never far above it (flooding). Cross-sections
+ * stay flat ACROSS the channel, which is what killed the carpet look.
  */
 function buildRibbon(
   run: HydroRiver,
@@ -151,8 +156,8 @@ function buildRibbon(
   const pts = smoothRun(run.pts);
   const n = pts.length;
   if (n < 2) return;
-  // Valid cross-sections: world frame (centre + XZ-perpendicular), u coord,
-  // baked Y (for downstream orientation) and width.
+  // Valid cross-sections: world frame (centre + XZ-perpendicular), u coord
+  // and width.
   interface CS {
     x: number;
     z: number;
@@ -160,7 +165,6 @@ function buildRibbon(
     pz: number;
     half: number;
     u: number;
-    y: number;
     w: number;
   }
   const cs: CS[] = [];
@@ -168,7 +172,7 @@ function buildRibbon(
   let prevX = pts[0][0];
   let prevZ = pts[0][2];
   for (let i = 0; i < n; i++) {
-    const [x, y, z, w] = pts[i];
+    const [x, , z, w] = pts[i];
     // central-difference direction (falls back to fwd/back at the ends)
     const a = pts[Math.max(0, i - 1)];
     const b = pts[Math.min(n - 1, i + 1)];
@@ -179,43 +183,35 @@ function buildRibbon(
     cum += Math.hypot(x - prevX, z - prevZ);
     prevX = x;
     prevZ = z;
-    cs.push({ x, z, px: -dz / len, pz: dx / len, half: w / 2, u: cum / UV_M, y, w });
+    cs.push({ x, z, px: -dz / len, pz: dx / len, half: w / 2, u: cum / UV_M, w });
   }
   const m = cs.length;
   if (m < 2) return;
-  // Pool level candidate per cross-section: deep enough over the channel
-  // centreline to read as water, but below the lower bank so the edge stays
-  // tucked inside the carved channel. (The rendered carve is shallower than
-  // the data carve on narrow rivers — 36 m mesh facets mute it — so the
-  // centreline floor, not the nominal carve depth, is the anchor.)
+  // Wanted level per cross-section: a fraction of the carve depth above the
+  // channel centreline. (The rendered carve is shallower than the data carve
+  // on narrow rivers — 36 m mesh facets mute it — so the centreline floor,
+  // not the nominal bank height, is the anchor.)
+  const gC = new Float64Array(m);
   const cand = new Float64Array(m);
   for (let i = 0; i < m; i++) {
     const c = cs[i];
-    const gC = groundY(c.x, c.z);
-    const bankL = groundY(c.x + c.px * c.half, c.z + c.pz * c.half);
-    const bankR = groundY(c.x - c.px * c.half, c.z - c.pz * c.half);
-    const lvl = Math.min(
-      gC + 0.35 * riverCarveDepth(c.w),
-      Math.min(bankL, bankR) - BANK_FREEBOARD,
-    );
-    cand[i] = Math.max(lvl, gC + LIFT_M); // never below the centreline ground
+    gC[i] = groundY(c.x, c.z);
+    cand[i] = gC[i] + Math.max(0.35 * riverCarveDepth(c.w), LIFT_M);
   }
-  // One pool spans ~±18 m: windowed max bridges single-facet dips so a lone
-  // low sample doesn't drag a long downstream reach under the terrain.
+  // Moving average along the run irons the facet noise out of the level so
+  // the surface reads as connected water, then a per-section clamp keeps it
+  // inside the local channel: never below the centreline ground (that's the
+  // v76 buried-shards bug), never more than the carve depth above it (that
+  // would sheet over the banks on steep drops).
   const level = new Float64Array(m);
   for (let i = 0; i < m; i++) {
-    let v = -Infinity;
-    const k0 = Math.max(0, i - POOL_WINDOW);
-    const k1 = Math.min(m - 1, i + POOL_WINDOW);
-    for (let k = k0; k <= k1; k++) v = Math.max(v, cand[k]);
-    level[i] = v;
-  }
-  // Monotonic downstream: the baked Y is draped monotonic downstream, so the
-  // lower-Y end of the run is the ocean end. Water level may only fall that way.
-  if (cs[0].y >= cs[m - 1].y) {
-    for (let i = 1; i < m; i++) level[i] = Math.min(level[i], level[i - 1]);
-  } else {
-    for (let i = m - 2; i >= 0; i--) level[i] = Math.min(level[i], level[i + 1]);
+    const k0 = Math.max(0, i - SMOOTH_WINDOW);
+    const k1 = Math.min(m - 1, i + SMOOTH_WINDOW);
+    let sum = 0;
+    for (let k = k0; k <= k1; k++) sum += cand[k];
+    const avg = sum / (k1 - k0 + 1);
+    const d = riverCarveDepth(cs[i].w);
+    level[i] = Math.min(Math.max(avg, gC[i] + LIFT_M), gC[i] + d);
   }
   const base = positions.length / 3;
   for (let i = 0; i < m; i++) {

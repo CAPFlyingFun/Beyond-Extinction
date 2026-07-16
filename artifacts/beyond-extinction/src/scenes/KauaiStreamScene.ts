@@ -101,21 +101,26 @@ function makeOceanMaterial(): THREE.MeshStandardMaterial {
     opacity: 0.82,
     envMapIntensity: 1.1,
     normalScale: new THREE.Vector2(0.55, 0.55),
-    // Z-fight guard: push ocean fragments slightly deeper so near-coplanar
-    // terrain (the flat wet-sand shelf right at the waterline) wins the depth
-    // test consistently instead of shimmering between sand and water.
+    // Z-fight guard: push ocean fragments deeper so near-coplanar terrain
+    // (the flat wet-sand shelf right at the waterline) wins the depth test
+    // consistently instead of shimmering between sand and water. Units are
+    // deliberately generous: at multi-km distances one 24-bit depth step is
+    // metres, so 1/1 still tied on flat far beaches (v76 shimmer).
     polygonOffset: true,
-    polygonOffsetFactor: 1,
-    polygonOffsetUnits: 1,
+    polygonOffsetFactor: 2,
+    polygonOffsetUnits: 4,
   });
   const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
-  // Baked coastline mask (tools → public/assets/terrain/kauai/coast_mask.png):
-  // world-locked alpha that fades the ocean out wherever the terrain is at or
-  // above the waterline. The old plane relied on the depth test alone, so on
-  // near-flat sand a few centimetres of tide (or one coarse mesh facet) walked
-  // the visible waterline tens of metres inland — "shoreline creep". The mask
-  // pins the shoreline to the baked coast regardless of tide/facets. Starts as
-  // a 1×1 white placeholder (mask everywhere = plain ocean) until the PNG loads.
+  // Baked coastline mask (tools/bake_coast_mask.cjs →
+  // public/assets/terrain/kauai/coast_mask.png): world-locked alpha that fades
+  // the ocean out wherever the terrain is near or above the plane (hidden at
+  // ground ≥ −0.5 m — below the lowest tide the plane reaches — fully visible
+  // at ≤ −1.6 m), and is zeroed over below-sea-level ground NOT flood-fill
+  // connected to the open sea (Mānā-plain ditches etc. must not show ocean).
+  // The old plane relied on the depth test alone, so on near-flat sand a few
+  // centimetres of tide (or one coarse mesh facet) walked the visible
+  // waterline tens of metres inland — "shoreline creep". Starts as a 1×1
+  // white placeholder (mask everywhere = plain ocean) until the PNG loads.
   const white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
   white.needsUpdate = true;
   const uCoast = { value: white as THREE.Texture };
