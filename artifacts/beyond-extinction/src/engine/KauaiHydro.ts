@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { loadTexture } from "./assets";
 import type { KauaiTileStreamer } from "./KauaiTileStreamer";
 import { KauaiCarve, type HydroRiver, type HydroLake } from "./KauaiCarve";
+import { riverCarveDepth } from "./kauaiCarveCore";
 
 /**
  * Real Kauaʻi hydrography (USGS NHDPlus HR), baked offline by
@@ -23,12 +24,15 @@ import { KauaiCarve, type HydroRiver, type HydroLake } from "./KauaiCarve";
  * geometry is built lazily on first residency and cached for the scene's life.
  */
 
-// River/lake surfaces are re-grounded onto the LIVE streamed terrain at build
-// time (streamer.surfaceHeightAt — triangle-exact against the rendered mesh)
-// and lifted this small amount, so they always sit just above the actual
-// rendered ground — no clipping in/out, no z-fighting, and no coupling to the
-// ocean tide (which only ever moves the separate ocean plane).
-const LIFT_M = 0.12;
+// Water surfaces are FLAT pools (RCT-style "fill the depression"), levelled
+// against the LIVE streamed terrain (streamer.surfaceHeightAt — triangle-exact
+// against the rendered mesh). Rivers pick a pool level per cross-section from
+// the carved channel and clamp it monotonic downstream; lakes sit flat at
+// their baked waterline. Water is never coupled to the ocean tide (that only
+// moves the separate ocean plane).
+const LIFT_M = 0.12; // min water depth above the channel centreline (m)
+const BANK_FREEBOARD = 0.05; // keep the pool this far below the lower bank (m)
+const POOL_WINDOW = 3; // cross-sections (±) bridged by one pool (~±18 m)
 const UV_M = 8; // metres per ripple-normal repeat (same wavelength as the ocean)
 const RIVER_SCROLL = 0.05; // u/s ≈ 0.4 m/s downstream drift
 const LAKE_DRIFT = { x: 0.014, y: 0.01 }; // ocean's ripple drift (u/s)
@@ -44,6 +48,12 @@ function makeWaterMaterial(color: number): THREE.MeshStandardMaterial {
     envMapIntensity: 1.1,
     normalScale: new THREE.Vector2(0.55, 0.55),
     side: THREE.DoubleSide, // ribbons stay visible from below-bank angles
+    // Same z-fight guard as the ocean: pool surfaces cross near-coplanar
+    // terrain right at their banks — push water fragments slightly deeper so
+    // the shoreline pixels resolve to ground, not shimmer.
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
   });
   const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
   mat.onBeforeCompile = (sh) => {
@@ -119,15 +129,17 @@ function smoothRun(pts: Pt4[]): Pt4[] {
 type GroundY = (x: number, z: number) => number;
 
 /**
- * Grid-conforming ribbon along a run's centerline, XZ-perpendicular offsets.
+ * Pooled river ribbon: FLAT cross-sections at a water LEVEL, RCT-style.
  *
- * Cross-sections are sampled every ~6 m along the run AND subdivided across
- * the width, with EVERY vertex re-grounded on the rendered terrain surface.
- * A 2-vertex cross-section spans up to 36 m of terrain as one straight line —
- * on rough 36 m mesh cells the ground bulges metres above that chord, which is
- * exactly how the old ribbons kept vanishing into hillsides. With ≤ ~7 m
- * between grounded vertices the water hugs the drawn triangles everywhere and
- * the LIFT margin keeps it just above them.
+ * The old ribbon grounded every vertex on the terrain, so the water wrapped
+ * the channel (and any dune it crossed) like a blue carpet. Instead each
+ * cross-section now picks a pool level inside the carved channel — above the
+ * centreline ground, below the lower bank — bridges facet dips with a small
+ * windowed max, and clamps the level monotonic DOWNSTREAM (water never flows
+ * uphill; behind a terrain bump it simply disappears under the ground until
+ * the valley floor drops back below the pool). The cross-section is emitted
+ * flat at that level, so the water edge hides inside the banks exactly like a
+ * filled depression.
  */
 function buildRibbon(
   run: HydroRiver,
@@ -139,61 +151,92 @@ function buildRibbon(
   const pts = smoothRun(run.pts);
   const n = pts.length;
   if (n < 2) return;
-  // Lanes must be CONSTANT per run (width varies along it — use the max) so
-  // the index buffer stays a regular grid.
-  let maxW = 0;
-  for (const p of pts) maxW = Math.max(maxW, p[3]);
-  const lanes = Math.min(7, Math.max(2, Math.ceil(maxW / 7) + 1));
+  // Valid cross-sections: world frame (centre + XZ-perpendicular), u coord,
+  // baked Y (for downstream orientation) and width.
+  interface CS {
+    x: number;
+    z: number;
+    px: number;
+    pz: number;
+    half: number;
+    u: number;
+    y: number;
+    w: number;
+  }
+  const cs: CS[] = [];
   let cum = 0;
   let prevX = pts[0][0];
   let prevZ = pts[0][2];
-  const base = positions.length / 3;
-  let emitted = 0;
   for (let i = 0; i < n; i++) {
-    const [x, , z, w] = pts[i]; // baked Y ignored — we re-ground onto terrain
+    const [x, y, z, w] = pts[i];
     // central-difference direction (falls back to fwd/back at the ends)
     const a = pts[Math.max(0, i - 1)];
     const b = pts[Math.min(n - 1, i + 1)];
-    let dx = b[0] - a[0];
-    let dz = b[2] - a[2];
+    const dx = b[0] - a[0];
+    const dz = b[2] - a[2];
     const len = Math.hypot(dx, dz);
     if (len < 1e-6) continue; // degenerate — skip, quad bridges the gap
-    dx /= len;
-    dz /= len;
-    const px = -dz; // left-perpendicular in XZ
-    const pz = dx;
-    const half = w / 2;
     cum += Math.hypot(x - prevX, z - prevZ);
     prevX = x;
     prevZ = z;
-    const u = cum / UV_M;
-    for (let k = 0; k < lanes; k++) {
-      const t = k / (lanes - 1);
-      const off = half * (1 - 2 * t); // +half (left bank) → −half (right bank)
-      const vx = x + px * off;
-      const vz = z + pz * off;
-      positions.push(vx, groundY(vx, vz), vz);
-      uvs.push(u, (t * w) / UV_M);
-    }
-    emitted++;
+    cs.push({ x, z, px: -dz / len, pz: dx / len, half: w / 2, u: cum / UV_M, y, w });
   }
-  for (let i = 0; i < emitted - 1; i++) {
-    for (let k = 0; k < lanes - 1; k++) {
-      const a = base + i * lanes + k;
-      const b = a + lanes; // same lane, next cross-section
-      // two triangles per cell, wound for +Y normals
-      indices.push(a, b, a + 1, a + 1, b, b + 1);
-    }
+  const m = cs.length;
+  if (m < 2) return;
+  // Pool level candidate per cross-section: deep enough over the channel
+  // centreline to read as water, but below the lower bank so the edge stays
+  // tucked inside the carved channel. (The rendered carve is shallower than
+  // the data carve on narrow rivers — 36 m mesh facets mute it — so the
+  // centreline floor, not the nominal carve depth, is the anchor.)
+  const cand = new Float64Array(m);
+  for (let i = 0; i < m; i++) {
+    const c = cs[i];
+    const gC = groundY(c.x, c.z);
+    const bankL = groundY(c.x + c.px * c.half, c.z + c.pz * c.half);
+    const bankR = groundY(c.x - c.px * c.half, c.z - c.pz * c.half);
+    const lvl = Math.min(
+      gC + 0.35 * riverCarveDepth(c.w),
+      Math.min(bankL, bankR) - BANK_FREEBOARD,
+    );
+    cand[i] = Math.max(lvl, gC + LIFT_M); // never below the centreline ground
+  }
+  // One pool spans ~±18 m: windowed max bridges single-facet dips so a lone
+  // low sample doesn't drag a long downstream reach under the terrain.
+  const level = new Float64Array(m);
+  for (let i = 0; i < m; i++) {
+    let v = -Infinity;
+    const k0 = Math.max(0, i - POOL_WINDOW);
+    const k1 = Math.min(m - 1, i + POOL_WINDOW);
+    for (let k = k0; k <= k1; k++) v = Math.max(v, cand[k]);
+    level[i] = v;
+  }
+  // Monotonic downstream: the baked Y is draped monotonic downstream, so the
+  // lower-Y end of the run is the ocean end. Water level may only fall that way.
+  if (cs[0].y >= cs[m - 1].y) {
+    for (let i = 1; i < m; i++) level[i] = Math.min(level[i], level[i - 1]);
+  } else {
+    for (let i = m - 2; i >= 0; i--) level[i] = Math.min(level[i], level[i + 1]);
+  }
+  const base = positions.length / 3;
+  for (let i = 0; i < m; i++) {
+    const c = cs[i];
+    positions.push(c.x + c.px * c.half, level[i], c.z + c.pz * c.half);
+    positions.push(c.x - c.px * c.half, level[i], c.z - c.pz * c.half);
+    uvs.push(c.u, 0, c.u, c.w / UV_M);
+  }
+  for (let i = 0; i < m - 1; i++) {
+    const a = base + i * 2;
+    // two triangles per quad, wound for +Y normals
+    indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
   }
 }
 
-/** Lake mesh from ring + holes, re-grounded onto the live terrain surface. */
+/** Lake mesh from ring + holes: one FLAT plane at the baked waterline. */
 function buildLake(
   lake: HydroLake,
   positions: number[],
   uvs: number[],
   indices: number[],
-  groundY: GroundY,
 ): void {
   const contour = lake.ring.map(([x, z]) => new THREE.Vector2(x, z));
   const holes = lake.holes.map((h) => h.map(([x, z]) => new THREE.Vector2(x, z)));
@@ -206,9 +249,11 @@ function buildLake(
   const all = contour.concat(...holes);
   const base = positions.length / 3;
   for (const v of all) {
-    // v.x = world X, v.y = world Z. Sit the rim on the live ground so the pool
-    // meets its banks cleanly instead of clipping a flat baked plane.
-    positions.push(v.x, groundY(v.x, v.y), v.y);
+    // v.x = world X, v.y = world Z. Flat at the baked waterline: the carve
+    // floors the bed 2 m below it, so the surface reads as a filled pool and
+    // its edge hides inside the feathered banks (RCT-style), instead of the
+    // old grounded rim that draped the "water" over the terrain.
+    positions.push(v.x, lake.y, v.y);
     uvs.push(v.x / UV_M, v.y / UV_M);
   }
   for (const [a, b, c] of tris) {
@@ -376,9 +421,8 @@ export class KauaiHydro {
 
   private buildChunk(c: Chunk, streamer: KauaiTileStreamer): void {
     c.built = true;
-    // Sample the live rendered terrain and lift a hair so water sits just above
-    // the ground surface (never coupled to the ocean tide, never clipping).
-    const groundY: GroundY = (x, z) => streamer.surfaceHeightAt(x, z) + LIFT_M;
+    // Raw rendered-surface height; pool levels add their own depth/lift.
+    const groundY: GroundY = (x, z) => streamer.surfaceHeightAt(x, z);
     const make = (
       build: (pos: number[], uv: number[], idx: number[]) => void,
       mat: THREE.Material,
@@ -410,7 +454,7 @@ export class KauaiHydro {
     );
     make(
       (p, u, i) => {
-        for (const l of c.lakes) buildLake(l, p, u, i, groundY);
+        for (const l of c.lakes) buildLake(l, p, u, i);
       },
       this.lakeMat,
       `hydro-${c.tile}-lakes`,

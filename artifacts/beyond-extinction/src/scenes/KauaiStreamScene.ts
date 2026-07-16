@@ -304,6 +304,11 @@ class KauaiStreamScene implements IScene {
       if (!tex) return;
       tex.colorSpace = THREE.NoColorSpace; // mask is data, not colour
       tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+      // The bake writes PNG row 0 = north (z = −28 000) and the shader maps
+      // north to v = 0, so the image must be uploaded UNFLIPPED. Three's
+      // default flipY=true mirrored the mask north↔south — ocean vanished
+      // over real sea and bled onto the north-shore land.
+      tex.flipY = false;
       tex.needsUpdate = true;
       const uCoast = waterMat.userData.uCoast as { value: THREE.Texture };
       uCoast.value.dispose(); // the 1×1 placeholder
