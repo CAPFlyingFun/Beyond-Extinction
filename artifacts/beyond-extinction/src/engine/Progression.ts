@@ -1,9 +1,8 @@
 /**
  * Progression — campaign-wide unlocks, persisted to localStorage.
  *
- * The island is played chapter by chapter inside a FIXED story grid (see
- * ChapterOnePlaceholderScene: the player is clamped to a ~500 m box per chapter,
- * larger for bigger chapters). Once every chapter is finished, `unlimitedMode`
+ * The island (the real-scale Kauaʻi streaming map) is played chapter by chapter
+ * inside a FIXED story grid. Once every chapter is finished, `unlimitedMode`
  * unlocks and the clamp is lifted — the whole island opens up as a free sandbox
  * (the "true ARK" mode).
  *

@@ -6,6 +6,7 @@ import { KauaiHydro } from "../engine/KauaiHydro";
 import { KauaiTrees } from "../engine/KauaiTrees";
 import { IslandCharacter } from "../engine/IslandCharacter";
 import { assetUrl, loadTexture } from "../engine/assets";
+import { VOICE_CLIPS } from "../data/voiceClips";
 import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
 
 /**
@@ -36,6 +37,36 @@ const FLOAT_BOB = 0.04; // ± surface float bob (m) — the buoyant idle rock
 const DIVE_BOB = 0.02; // ± hold-depth bob (m) while submerged (neutral buoyancy)
 const STROKE_INTERVAL = 0.85; // s between swim-stroke SFX while stroking along
 const ZONE_DEBOUNCE = 0.6; // s a new land ambience zone must persist before it commits
+
+// ── Arrival cinematic (Chapter Two "Day One") ───────────────────────────────
+// Real-scale island → the establishing drone starts far offshore and high, and
+// dives DEEP before racing in. Numbers are metres (the whole map is 1:1), so the
+// reveal pulls the camera "a lot further back" than the old beach map's flyover.
+const FLYOVER_FOV = 74; // wider lens for the establishing shot (restored to 62 on FP)
+const ISLAND_CENTER = new THREE.Vector2(0, 0); // grid-centre origin (m)
+
+/** Uniform Catmull-Rom through p1→p2 (p0/p3 are the surrounding controls). */
+function catmull(
+  p0: THREE.Vector3,
+  p1: THREE.Vector3,
+  p2: THREE.Vector3,
+  p3: THREE.Vector3,
+  u: number,
+): THREE.Vector3 {
+  const u2 = u * u;
+  const u3 = u2 * u;
+  return new THREE.Vector3(
+    0.5 * ((2 * p1.x) + (-p0.x + p2.x) * u + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * u2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * u3),
+    0.5 * ((2 * p1.y) + (-p0.y + p2.y) * u + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * u2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * u3),
+    0.5 * ((2 * p1.z) + (-p0.z + p2.z) * u + (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * u2 + (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * u3),
+  );
+}
+
+interface FlyWp {
+  p: THREE.Vector3;
+  l: THREE.Vector3;
+  d: number;
+}
 
 // Wailua beach in metres (grid centre origin). Nudged ~1.4 km inland from the
 // waterline so the scout starts on land while G5 finishes decoding.
@@ -133,9 +164,29 @@ class KauaiStreamScene implements IScene {
   private ambZone = "";
   private pendingZone = "";
   private pendingZoneT = 0;
+  // Arrival cinematic. `cinematic` = play the Day-One reveal (fresh story
+  // arrival); false = drop straight into first person (dev/continue). `phase`
+  // gates update(): only "play" runs the FP physics + body binding; "loading"
+  // and "flyover" hold the player while the world streams / the drone flies.
+  private readonly cinematic: boolean;
+  private phase: "loading" | "flyover" | "play" = "play";
+  private readonly spawnFocus = new THREE.Vector3(SPAWN.x, 0, SPAWN.z);
+  private journalRoot?: HTMLDivElement;
+  private journalTextEl?: HTMLDivElement;
+  private loadWrap?: HTMLDivElement;
+  private loadFill?: HTMLDivElement;
+  private loadLabel?: HTMLDivElement;
+  private uwTint?: HTMLDivElement;
+  private typeRaf: number | null = null;
+  private flyoverState: { wps: FlyWp[]; total: number; elapsed: number; resolve: () => void } | null = null;
+  private flyoverSkip = false;
+  private skipUnsub?: () => void;
+  private jackFeetY = 0;
 
-  constructor(ctx: SceneContext) {
+  constructor(ctx: SceneContext, opts: { cinematic?: boolean } = {}) {
     this.ctx = ctx;
+    this.cinematic = !!opts.cinematic;
+    this.phase = this.cinematic ? "loading" : "play";
     const aspect = ctx.renderer.width / ctx.renderer.height;
     // Near 0.107 m (beach/Godot parity): the camera rides at the head, so a tiny
     // near plane keeps the first-person BODY from being sliced away underfoot.
@@ -187,7 +238,9 @@ class KauaiStreamScene implements IScene {
       const res = await fetch(assetUrl("assets/terrain/kauai/manifest.json"));
       const manifest = (await res.json()) as KauaiManifest;
       this.streamer = new KauaiTileStreamer(this.scene, manifest, { radius: 2 });
-      this.streamer.update(0, SPAWN.x, SPAWN.z); // kick the first ring
+      // Fresh arrival forces the spawn tile in first (see runArrival); dev/continue
+      // kicks the whole ring immediately for an instant drop into first person.
+      if (!this.cinematic) this.streamer.update(0, SPAWN.x, SPAWN.z);
       // Real NHD rivers + lakes, draped on the tiles and streamed with them.
       this.hydro = new KauaiHydro(this.scene);
       // Billboard forest placed from the baked veg rasters, streamed + grounded
@@ -208,7 +261,8 @@ class KauaiStreamScene implements IScene {
       lookSensitivity: 0.0032,
     });
     this.player.placeAt(SPAWN.x, SPAWN.z, SPAWN.facing);
-    this.player.setActive(true);
+    // Held inactive through the arrival cinematic; activated in finishArrival().
+    if (!this.cinematic) this.player.setActive(true);
 
     // Hero characters. Jack rides with the player (his body a few metres ahead
     // of the camera so it's visible while we validate grounding); Sarah stands
@@ -247,6 +301,14 @@ class KauaiStreamScene implements IScene {
         input: this.ctx.input,
         switchCharacter: () => this.switchCharacter(),
         getActive: () => this.active,
+        phase: () => this.phase,
+        cinematic: this.cinematic,
+        skipArrival: () => {
+          if (this.phase !== "play") {
+            this.flyoverSkip = true; // let a running flyover settle first
+            if (!this.flyoverState) this.finishArrival();
+          }
+        },
         diveHold: (v: boolean) => (this.diveHeld = v),
         riseHold: (v: boolean) => (this.riseHeld = v),
         teleport: (x: number, z: number, facing = SPAWN.facing) => {
@@ -277,7 +339,14 @@ class KauaiStreamScene implements IScene {
       };
     }
 
-    this.buildHud();
+    if (this.cinematic) {
+      // Fire-and-forget the Day-One reveal: the opaque journal owns the black
+      // screen while the world streams, so enter() can return and let the
+      // SceneManager finish its (fadeless) handoff underneath.
+      void this.runArrival();
+    } else {
+      this.buildHud();
+    }
   }
 
   /** Load the sky HDRI: EXR → PMREM environment, tonemapped JPG → background. */
@@ -467,19 +536,23 @@ class KauaiStreamScene implements IScene {
   }
 
   update(dt: number): void {
-    const p = this.player;
     const s = this.streamer;
-    const moved = p ? p.update(dt) : null;
+    if (!s) return;
+    const play = this.phase === "play";
+    const p = this.player;
+    // Look/move input only advances in free roam; the cinematic owns the camera.
+    const moved = play && p ? p.update(dt) : null;
     if (s) {
-      const x = this.camera.position.x;
-      const z = this.camera.position.z;
-      s.update(dt, x, z);
+      // During the arrival cinematic the world stays focused on the spawn island
+      // (NOT the far-offshore drone) so Jack's tile + forest never unload beneath
+      // the flyover; only free roam follows the live camera.
+      const focus = play ? this.camera.position : this.spawnFocus;
+      s.update(dt, focus.x, focus.z);
       this.hydro?.update(dt, s);
-      this.trees?.update(dt, this.camera.position, s, this.hydro);
+      this.trees?.update(dt, focus, s, this.hydro);
       // Advance both characters' animation mixers (idle/walk blend).
       this.jack?.update(dt);
       this.sarah?.update(dt);
-      // ── Player vertical physics: gravity + jump on land, wade/swim in water ──
       // High/low tide (two incommensurate sines → non-repeating) drives the
       // ocean surface, used for both the plane and the swim/wade test.
       this.waterT += dt;
@@ -487,6 +560,24 @@ class KauaiStreamScene implements IScene {
         0.6 * Math.sin(this.waterT * 0.25) + 0.4 * Math.sin(this.waterT * 0.11 + 1.3);
       const waterY = WATER_Y + 0.5 * tide; // ocean surface (also the plane Y)
 
+      // ── Cinematic phases: hold both heroes on the terrain, fly the drone ──
+      if (!play) {
+        if (this.jack) {
+          this.groundCharacter(this.jack, this.jackPos);
+          this.jack.setMoving(false);
+        }
+        if (this.sarah) {
+          this.groundCharacter(this.sarah, this.sarahPos);
+          this.sarah.setMoving(false);
+        }
+        if (this.phase === "flyover") this.updateFlyover(dt);
+        this.followWater(waterY);
+        return;
+      }
+
+      // ── Player vertical physics: gravity + jump on land, wade/swim in water ──
+      const x = this.camera.position.x;
+      const z = this.camera.position.z;
       if (s.tileReadyAt(x, z)) {
         const ground = s.surfaceHeightAt(x, z);
         if (!this.grounded) {
@@ -611,18 +702,7 @@ class KauaiStreamScene implements IScene {
         this.groundCharacter(npcChar, npcPos);
       }
 
-      if (this.water) {
-        // The plane follows the player in XZ; ripple UVs are world-locked (so
-        // they don't swim with the plane) then scrolled for wave motion.
-        this.water.position.set(this.camera.position.x, waterY, this.camera.position.z);
-        if (this.waterNormal) {
-          const uvpm = WATER_REPEAT / WATER_SIZE;
-          this.waterNormal.offset.set(
-            this.camera.position.x * uvpm + this.waterT * 0.014,
-            this.camera.position.z * uvpm + this.waterT * 0.01,
-          );
-        }
-      }
+      this.followWater(waterY);
       if (this.hud) {
         const col = String.fromCharCode(65 + Math.min(7, Math.max(0, Math.round(x / 7000 + 3.5))));
         const row = Math.min(8, Math.max(1, Math.round(z / 7000 + 3.5) + 1));
@@ -634,6 +714,338 @@ class KauaiStreamScene implements IScene {
     }
   }
 
+  /** Ocean plane + ripple UVs follow the camera in XZ (world-locked ripples). */
+  private followWater(waterY: number): void {
+    if (!this.water) return;
+    this.water.position.set(this.camera.position.x, waterY, this.camera.position.z);
+    if (this.waterNormal) {
+      const uvpm = WATER_REPEAT / WATER_SIZE;
+      this.waterNormal.offset.set(
+        this.camera.position.x * uvpm + this.waterT * 0.014,
+        this.camera.position.z * uvpm + this.waterT * 0.01,
+      );
+    }
+  }
+
+  // ─── Arrival cinematic: black journal → SFX → stream the world → flyover ─────
+
+  /** Day-One arrival: Jack's journal typed over black (with nightmare stingers)
+   *  while the spawn tile + ring + heroes + forest stream in behind it, a live
+   *  loading bar tracking the real (network-bound) progress; then, only once the
+   *  world around Jack is ready, the establishing drone flies in and cuts to FP. */
+  private async runArrival(): Promise<void> {
+    const audio = this.ctx.audio;
+    this.ctx.input.setEnabled(false);
+
+    this.buildArrivalUi();
+    // The prologue cut to black with a fadeless handoff, so the SceneManager veil
+    // may still be up. Our opaque journal now owns the black screen — clear the
+    // leftover veil so the flyover is actually seen when it fades the world in.
+    this.ctx.overlays.setBlackInstant(false);
+
+    await this.waitMs(700);
+    if (this.disposed) return;
+
+    // Force the spawn tile in FIRST so Jack has ground before anything else.
+    const spawnReady = this.streamer
+      ? this.streamer.ensureTileAt(SPAWN.x, SPAWN.z)
+      : Promise.resolve(false);
+
+    // Journal VO + typed text; nightmare stingers ride over the black (non-blocking).
+    this.typewrite(VOICE_CLIPS["ch2_jack_journal"]?.text ?? "", "ch2_jack_journal");
+    const journalDone = audio.playVoice("ch2_jack_journal");
+    audio.playSfx("jungle-crash");
+    void (async () => {
+      await this.waitMs(1400);
+      if (this.disposed || this.phase !== "loading") return;
+      audio.playSfx("roar-distant");
+      await this.waitMs(1600);
+      if (this.disposed || this.phase !== "loading") return;
+      audio.playSfx("breath-gasp");
+    })();
+
+    await spawnReady;
+    if (this.disposed) return;
+    // Spawn tile exists → kick the resident ring and record Jack's ground height.
+    this.streamer?.update(0, SPAWN.x, SPAWN.z);
+    this.jackFeetY = Math.max(this.streamer?.surfaceHeightAt(SPAWN.x, SPAWN.z) ?? 0, WATER_Y);
+
+    // Hold black until the journal has finished AND the world around Jack is ready.
+    await journalDone;
+    if (this.disposed) return;
+    await this.waitForWorldReady();
+    if (this.disposed) return;
+
+    await this.runFlyover();
+    if (this.disposed) return;
+    this.finishArrival();
+  }
+
+  /** The opaque journal page + a dynamic loading bar (real tile-stream progress). */
+  private buildArrivalUi(): void {
+    const root = document.createElement("div");
+    root.className = "be-journal";
+    root.style.transition = "none"; // opaque from the first frame
+    root.classList.add("show");
+    const text = document.createElement("div");
+    text.className = "be-journal__text";
+    root.appendChild(text);
+
+    const wrap = document.createElement("div");
+    wrap.style.cssText =
+      "position:absolute;left:50%;bottom:9%;transform:translateX(-50%);" +
+      "width:min(360px,64vw);z-index:2;display:flex;flex-direction:column;gap:8px;" +
+      "align-items:center;font:600 11px/1 ui-monospace,Menlo,monospace;" +
+      "letter-spacing:.14em;color:rgba(215,232,240,0.7);pointer-events:none;";
+    const track = document.createElement("div");
+    track.style.cssText =
+      "width:100%;height:4px;border-radius:3px;overflow:hidden;background:rgba(120,150,165,0.18);";
+    const fill = document.createElement("div");
+    fill.style.cssText =
+      "width:0%;height:100%;border-radius:3px;background:rgba(120,200,220,0.85);transition:width .3s ease;";
+    track.appendChild(fill);
+    const label = document.createElement("div");
+    label.textContent = "REACHING THE ISLAND…";
+    wrap.append(track, label);
+    root.appendChild(wrap);
+
+    this.ctx.uiLayer.appendChild(root);
+    this.journalRoot = root;
+    this.journalTextEl = text;
+    this.loadWrap = wrap;
+    this.loadFill = fill;
+    this.loadLabel = label;
+  }
+
+  private setLoadProgress(frac: number): void {
+    const pct = Math.round(Math.min(1, Math.max(0, frac)) * 100);
+    if (this.loadFill) this.loadFill.style.width = `${pct}%`;
+    if (this.loadLabel)
+      this.loadLabel.textContent = pct >= 100 ? "READY" : `REACHING THE ISLAND…  ${pct}%`;
+  }
+
+  /** Poll until the resident ring has decoded, the forest has planted, and both
+   *  heroes are loaded + grounded — driving the loading bar from real progress.
+   *  Capped so a slow connection eventually proceeds rather than hanging black. */
+  private async waitForWorldReady(): Promise<void> {
+    const s = this.streamer;
+    const started = performance.now();
+    const MAX_MS = 45000;
+    for (;;) {
+      if (this.disposed) return;
+      const ls = s ? s.loadState(SPAWN.x, SPAWN.z) : { ready: 0, total: 1 };
+      const tilesReady = ls.total > 0 && ls.ready >= ls.total;
+      const treesReady = !!this.trees?.isReady && (this.trees?.cellCount ?? 0) > 0;
+      const heroesReady =
+        !!this.jack &&
+        !!this.sarah &&
+        (s?.tileReadyAt(this.jackPos.x, this.jackPos.y) ?? false);
+      const frac =
+        (ls.total ? ls.ready / ls.total : 1) * 0.8 +
+        (treesReady ? 0.1 : 0) +
+        (heroesReady ? 0.1 : 0);
+      this.setLoadProgress(frac);
+      if (
+        (tilesReady && treesReady && heroesReady) ||
+        performance.now() - started > MAX_MS
+      ) {
+        this.setLoadProgress(1);
+        break;
+      }
+      await this.waitMs(120);
+    }
+    await this.waitMs(300);
+  }
+
+  /** Reveal `text` in sync with voice clip `id` (tracks the real audio clock,
+   *  falls back to the manifest duration when playback is blocked/muted). */
+  private typewrite(text: string, id: string): void {
+    if (this.typeRaf !== null) cancelAnimationFrame(this.typeRaf);
+    const el = this.journalTextEl;
+    if (!el) return;
+    el.textContent = "";
+    const len = Math.max(text.length, 1);
+    const LEAD = 0.92;
+    const fallbackMs = Math.max(this.ctx.audio.getVoiceDuration(id), 1);
+    const startPerf = performance.now();
+    let revealed = 0;
+    const tick = () => {
+      if (this.disposed) return;
+      const pb = this.ctx.audio.getVoicePlayback();
+      const frac =
+        pb.active && pb.duration > 0
+          ? pb.currentTime / (pb.duration * LEAD)
+          : (performance.now() - startPerf) / (fallbackMs * LEAD);
+      const shown = Math.max(revealed, Math.min(1, frac));
+      revealed = shown;
+      el.textContent = text.slice(0, Math.round(shown * len));
+      if (shown < 1) this.typeRaf = requestAnimationFrame(tick);
+      else {
+        el.textContent = text;
+        this.typeRaf = null;
+      }
+    };
+    tick();
+  }
+
+  /** Establishing drone: far offshore + high reveal → descend → skim → DIVE deep
+   *  under → surface → race in → settle just off Jack, then cut to FP. Waypoints
+   *  are metres along the true seaward axis (island centre → Jack). Any key/tap
+   *  skips to the settle. Resolves when the flight (or skip) completes. */
+  private runFlyover(): Promise<void> {
+    const jx = this.jackPos.x;
+    const jz = this.jackPos.y;
+    const jFeet = this.jackFeetY;
+    const s2 = new THREE.Vector2(jx - ISLAND_CENTER.x, jz - ISLAND_CENTER.y);
+    if (s2.lengthSq() < 1e-6) s2.set(1, 0);
+    s2.normalize();
+    const S = new THREE.Vector3(s2.x, 0, s2.y);
+    // `sea` metres offshore of Jack, `up` metres above his feet; underwater legs
+    // clamp to the seabed (+2 m) so the dive never clips terrain.
+    const P = (sea: number, up: number): THREE.Vector3 => {
+      const v = new THREE.Vector3(jx, jFeet, jz).addScaledVector(S, sea);
+      v.y = jFeet + up;
+      if (up < 0) {
+        const bed = this.streamer?.surfaceHeightAt(v.x, v.z) ?? -30;
+        v.y = Math.max(v.y, bed + 2);
+      }
+      return v;
+    };
+    const wps: FlyWp[] = [
+      { p: P(2200, 900), l: P(-800, 130), d: 0 }, // far/high reveal of the whole island
+      { p: P(1750, 430), l: P(-200, 45), d: 5.0 },
+      { p: P(1350, 80), l: P(560, 8), d: 4.5 }, // descend toward the water
+      { p: P(1180, -12), l: P(720, -8), d: 3.0 }, // DIVE under
+      { p: P(1010, -16), l: P(560, -11), d: 3.0 },
+      { p: P(840, -7), l: P(430, -4), d: 3.0 }, // surfacing
+      { p: P(650, 60), l: P(150, 5), d: 3.5 },
+      { p: P(320, 150), l: P(0, 4), d: 5.0 }, // race in toward the shore
+      { p: P(11, 2.2), l: P(0, 1.7), d: 5.0 }, // settle just seaward of Jack → cut to FP
+    ];
+    const total = wps.reduce((sum, w) => sum + w.d, 0);
+
+    this.phase = "flyover";
+    this.camera.fov = FLYOVER_FOV;
+    this.camera.updateProjectionMatrix();
+    // The flight looks AT the heroes — show their heads (re-hidden on the FP cut).
+    this.jack?.setHeadHidden(false);
+    this.sarah?.setHeadHidden(false);
+
+    // Underwater blue wash while the camera dips below the surface.
+    const tint = document.createElement("div");
+    tint.style.cssText =
+      "position:fixed;inset:0;z-index:54;pointer-events:none;background:rgb(13,56,97);opacity:0;";
+    this.ctx.uiLayer.appendChild(tint);
+    this.uwTint = tint;
+
+    // Fade the journal (+ loading bar) off across the first seconds of flight.
+    if (this.loadWrap) this.loadWrap.style.display = "none";
+    const page = this.journalRoot;
+    if (page) {
+      page.style.transition = "opacity 2.2s ease";
+      page.classList.remove("show");
+    }
+
+    // Any key or tap skips to the settle.
+    this.flyoverSkip = false;
+    const skip = () => {
+      this.flyoverSkip = true;
+    };
+    window.addEventListener("keydown", skip);
+    window.addEventListener("pointerdown", skip);
+    this.skipUnsub = () => {
+      window.removeEventListener("keydown", skip);
+      window.removeEventListener("pointerdown", skip);
+    };
+
+    return new Promise<void>((resolve) => {
+      this.flyoverState = { wps, total, elapsed: 0, resolve };
+    });
+  }
+
+  /** Per-frame drone camera: Catmull-Rom through the waypoints + the underwater
+   *  wash cross-fade. Called from update() while flyoverState is set. */
+  private updateFlyover(dt: number): void {
+    const f = this.flyoverState;
+    if (!f) return;
+    f.elapsed = this.flyoverSkip ? f.total : f.elapsed + dt;
+    const t = Math.min(f.elapsed, f.total);
+    const smp = this.flySample(f.wps, t);
+    this.camera.position.copy(smp.p);
+    this.camera.lookAt(smp.l);
+    if (this.uwTint) {
+      const target = this.camera.position.y < WATER_Y ? 0.6 : 0;
+      const a = parseFloat(this.uwTint.style.opacity || "0");
+      const step = Math.min(Math.abs(target - a), dt * 2.5);
+      this.uwTint.style.opacity = (a + Math.sign(target - a) * step).toFixed(3);
+    }
+    if (f.elapsed >= f.total) {
+      this.flyoverState = null;
+      this.skipUnsub?.();
+      this.skipUnsub = undefined;
+      f.resolve();
+    }
+  }
+
+  /** Sample the flight path at time `t` (uniform Catmull-Rom through the four
+   *  surrounding waypoints — both camera position and look target). */
+  private flySample(wps: FlyWp[], t: number): { p: THREE.Vector3; l: THREE.Vector3 } {
+    let acc = 0;
+    let i = 1;
+    while (i < wps.length - 1 && t > acc + wps[i].d) {
+      acc += wps[i].d;
+      i++;
+    }
+    const seg = Math.max(wps[i].d, 0.0001);
+    const u = THREE.MathUtils.clamp((t - acc) / seg, 0, 1);
+    const i0 = Math.max(i - 2, 0);
+    const i3 = Math.min(i + 1, wps.length - 1);
+    return {
+      p: catmull(wps[i0].p, wps[i - 1].p, wps[i].p, wps[i3].p, u),
+      l: catmull(wps[i0].l, wps[i - 1].l, wps[i].l, wps[i3].l, u),
+    };
+  }
+
+  /** Cut from the drone to first person once the flight settles behind Jack. */
+  private finishArrival(): void {
+    const tint = this.uwTint;
+    if (tint) {
+      tint.style.transition = "opacity 0.3s ease";
+      tint.style.opacity = "0";
+      setTimeout(() => tint.remove(), 400);
+      this.uwTint = undefined;
+    }
+    this.journalRoot?.remove();
+    this.journalRoot = undefined;
+    this.journalTextEl = undefined;
+    this.loadWrap = this.loadFill = this.loadLabel = undefined;
+
+    this.camera.fov = 62;
+    this.camera.updateProjectionMatrix();
+    this.active = "Jack";
+    this.applyRoles(); // re-hide the played body's head
+    this.phase = "play";
+    this.grounded = false;
+    this.player?.placeAt(this.jackPos.x, this.jackPos.y, SPAWN.facing);
+    this.player?.setActive(true);
+    this.ctx.input.setEnabled(true);
+    this.buildHud();
+
+    // Jack calls for Sarah, then free roam.
+    void (async () => {
+      await this.waitMs(500);
+      if (this.disposed) return;
+      this.ctx.dialogue.showSubtitle({ speaker: "Jack", text: "SARAH!" });
+      await this.ctx.audio.playVoice("ch2_jack_sarah_shout");
+      if (this.disposed) return;
+      this.ctx.dialogue.hideSubtitle();
+    })();
+  }
+
+  private waitMs(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
   resize(width: number, height: number): void {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
@@ -641,6 +1053,11 @@ class KauaiStreamScene implements IScene {
 
   dispose(): void {
     this.disposed = true;
+    if (this.typeRaf !== null) cancelAnimationFrame(this.typeRaf);
+    this.typeRaf = null;
+    this.skipUnsub?.();
+    this.skipUnsub = undefined;
+    this.flyoverState = null;
     this.player?.setActive(false);
     this.player?.dispose();
     this.jack?.dispose();
@@ -654,10 +1071,17 @@ class KauaiStreamScene implements IScene {
     this.swapBtn?.remove();
     this.diveBtn?.remove();
     this.riseBtn?.remove();
+    this.journalRoot?.remove();
+    this.uwTint?.remove();
     this.ctx.audio.stopMusic();
     this.scene.clear();
   }
 }
 
+/** Dev / continue entry: straight into first person (no arrival cinematic). */
 export const createKauaiStreamScene: SceneFactory = (ctx) =>
   new KauaiStreamScene(ctx);
+
+/** Story entry (fresh Chapter-Two arrival): the Day-One journal + flyover reveal. */
+export const createKauaiArrivalScene: SceneFactory = (ctx) =>
+  new KauaiStreamScene(ctx, { cinematic: true });

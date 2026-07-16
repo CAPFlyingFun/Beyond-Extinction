@@ -29,7 +29,7 @@ import { VOICE_CLIPS } from "../data/voiceClips";
 import { VOICE_DURATIONS } from "../data/voiceDurations";
 import { Minimap } from "../engine/Minimap";
 import { InventoryOverlay } from "../engine/InventoryOverlay";
-import { createChapterOneScene } from "./ChapterOnePlaceholderScene";
+import { createKauaiArrivalScene } from "./KauaiStreamScene";
 import {
   getSettings,
   subscribeSettings,
@@ -3893,9 +3893,10 @@ class PrologueCafeteriaScene implements IScene {
     await this.wait(600);
     if (this.disposed) return;
 
-    // No title card (matches the Godot code) — straight to Chapter One (beach).
+    // No title card (matches the Godot code) — straight into the Chapter Two
+    // arrival on the real-scale Kauaʻi map (journal + flyover reveal).
     this.phase = "done";
-    this.ctx.scenes.goTo(createChapterOneScene, false);
+    this.ctx.scenes.goTo(createKauaiArrivalScene, false);
   }
 
   /** Grow the core vortex disc from its current scale to `target` over `ms`. */

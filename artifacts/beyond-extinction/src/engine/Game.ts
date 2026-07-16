@@ -13,8 +13,7 @@ import { AnimStore } from "./AnimStore";
 import { TerrainEditor } from "./TerrainEditor";
 import { TerrainEdit } from "./TerrainEdit";
 import { DevAccess } from "./DevAccess";
-import { createChapterOneScene } from "../scenes/ChapterOnePlaceholderScene";
-import { createKauaiStreamScene } from "../scenes/KauaiStreamScene";
+import { createKauaiStreamScene, createKauaiArrivalScene } from "../scenes/KauaiStreamScene";
 import type { SceneContext, SceneFactory } from "./IScene";
 
 /**
@@ -158,9 +157,9 @@ export class Game {
       : null;
     const first =
       skipTo === "island"
-        ? createChapterOneScene
+        ? createKauaiArrivalScene // ?skip=island → the Chapter-Two arrival cinematic
         : skipTo === "kauai"
-          ? createKauaiStreamScene
+          ? createKauaiStreamScene // ?skip=kauai → straight into first person
           : initial;
     await this.scenes.goTo(first, false);
     this.running = true;
@@ -168,12 +167,13 @@ export class Game {
     this.loop();
   }
 
-  /** Jump to the island, closing any open editor first (Dev menu shortcut). */
+  /** Jump to the island arrival (Kauaʻi Day-One cinematic), closing any open
+   *  editor first (Dev menu shortcut). */
   private skipToIsland(): void {
     this.markerEditor.close();
     this.animEditor.close();
     this.terrainEditor.close();
-    void this.scenes.goTo(createChapterOneScene);
+    void this.scenes.goTo(createKauaiArrivalScene);
   }
 
   /** Jump to the Kauaʻi streaming-terrain test scene (Dev menu shortcut). */

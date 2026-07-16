@@ -4,7 +4,7 @@ import { CameraManager } from "../engine/CameraManager";
 import { assetUrl } from "../engine/assets";
 import { createJournalIntroScene } from "./JournalIntroScene";
 import { createPrologueScene } from "./PrologueCafeteriaScene";
-import { createChapterOneScene } from "./ChapterOnePlaceholderScene";
+import { createKauaiStreamScene } from "./KauaiStreamScene";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 import { closeHudEditor } from "../engine/HudEditor";
 import { SaveManager, type SaveSnapshot } from "../engine/SaveManager";
@@ -13,7 +13,10 @@ import { DevAccess } from "../engine/DevAccess";
 /** Maps a save's scene id onto the factory that rebuilds it (see SaveManager). */
 const SCENE_FACTORIES: Record<string, SceneFactory> = {
   prologue: createPrologueScene,
-  island: createChapterOneScene,
+  // Legacy "island" saves and Kauaʻi saves both resume onto the Kauaʻi map,
+  // dropping straight into first person (no arrival cinematic on a continue).
+  island: createKauaiStreamScene,
+  "kauai-stream": createKauaiStreamScene,
 };
 
 /** A short "when" string (e.g. "2m ago", "yesterday") for the Load list. */

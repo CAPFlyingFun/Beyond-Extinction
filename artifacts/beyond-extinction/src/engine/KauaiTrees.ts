@@ -344,6 +344,16 @@ export class KauaiTrees {
   private readonly cells = new Map<string, Cell>();
   private readonly buildQueue: { ci: number; cj: number }[] = [];
 
+  /** True once the vegetation rasters + species billboards have decoded and the
+   *  forest can start planting cells (gates the arrival reveal on "trees ready"). */
+  get isReady(): boolean {
+    return this.ready;
+  }
+  /** How many forest cells have actually been scattered/planted so far. */
+  get cellCount(): number {
+    return this.cells.size;
+  }
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     this.group.name = "kauai-trees";

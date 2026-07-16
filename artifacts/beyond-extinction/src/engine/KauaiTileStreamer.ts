@@ -271,6 +271,54 @@ export class KauaiTileStreamer {
     return !!this.tiles.get(`${this.colOf(x)},${this.rowOf(z)}`)?.heights;
   }
 
+  /**
+   * Force the single tile containing world (x, z) to load NOW and resolve once
+   * its heights are decoded (mesh built) — used to bring the arrival/spawn tile
+   * in FIRST, ahead of the surrounding ring, so the player has ground + a
+   * grounded body before the establishing flyover begins. Resolves false for an
+   * ocean-only cell with no baked tile. Polls with a generous cap so a slow
+   * connection still settles rather than hanging forever.
+   */
+  async ensureTileAt(x: number, z: number): Promise<boolean> {
+    const col = Math.min(7, Math.max(0, this.colOf(x)));
+    const row = Math.min(7, Math.max(0, this.rowOf(z)));
+    const id = String.fromCharCode(65 + col) + (row + 1);
+    if (!this.byId.has(id)) return false;
+    const key = `${col},${row}`;
+    if (!this.tiles.has(key)) void this.loadTile(col, row, key);
+    for (let i = 0; i < 600; i++) {
+      if (this.tiles.get(key)?.heights) return true;
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    return !!this.tiles.get(key)?.heights;
+  }
+
+  /**
+   * Progress of the resident ring around (camX, camZ): how many of the wanted
+   * land tiles have decoded vs how many exist. Drives the dynamic loading bar —
+   * because tiles stream at the connection's pace, the bar reflects real network
+   * speed rather than a canned timer. Ocean-only cells (absent from the manifest)
+   * are not counted, so the bar can actually reach 100 %.
+   */
+  loadState(camX: number, camZ: number): { ready: number; total: number } {
+    const col = Math.min(7, Math.max(0, this.colOf(camX)));
+    const row = Math.min(7, Math.max(0, this.rowOf(camZ)));
+    let ready = 0;
+    let total = 0;
+    for (let dc = -this.radius; dc <= this.radius; dc++) {
+      for (let dr = -this.radius; dr <= this.radius; dr++) {
+        const c = col + dc;
+        const r = row + dr;
+        if (c < 0 || c > 7 || r < 0 || r > 7) continue;
+        const id = String.fromCharCode(65 + c) + (r + 1);
+        if (!this.byId.has(id)) continue;
+        total++;
+        if (this.tiles.get(`${c},${r}`)?.heights) ready++;
+      }
+    }
+    return { ready, total };
+  }
+
   /** Stream + advance cross-fades. Call every frame with the camera XZ. */
   update(dt: number, camX: number, camZ: number): void {
     const col = Math.min(7, Math.max(0, this.colOf(camX)));
