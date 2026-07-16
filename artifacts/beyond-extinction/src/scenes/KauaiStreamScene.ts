@@ -17,8 +17,9 @@ import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
  * Spawn: G5 / Wailua (east coast) — the locked-in Chapter-2 arrival. Ocean is
  * to the east (+X); you face inland (west) toward the interior + summit.
  */
-const EYE = 1.7; // m — beach/Godot first-person eye height
-const CAM_FWD = 0.10; // eye ahead of the head (smaller = closer to the head)
+const EYE_JACK = 1.7; // m — Jack's first-person eye height
+const EYE_SARAH = 1.65; // m — Sarah's first-person eye height
+const CAM_FWD = 0.1; // eye ahead of the head (smaller = closer to the head)
 const SKY = new THREE.Color(0x8fbcd4);
 const SUN = new THREE.Vector3(-0.55, 0.72, 0.42).normalize();
 
@@ -103,7 +104,7 @@ class KauaiStreamScene implements IScene {
   private disposed = false;
   // Vertical physics state (feet world Y + vertical velocity + airborne flag),
   // and last frame's XZ so water can drag the horizontal step.
-  private feetY = EYE;
+  private feetY = EYE_JACK;
   private vy = 0;
   private airborne = false;
   private prevX = SPAWN.x;
@@ -116,7 +117,7 @@ class KauaiStreamScene implements IScene {
     // near plane keeps the first-person BODY from being sliced away underfoot.
     // Distant terrain is fogged long before depth precision matters.
     this.camera = new THREE.PerspectiveCamera(62, aspect, 0.107, 22000);
-    this.camera.position.set(SPAWN.x, EYE, SPAWN.z);
+    this.camera.position.set(SPAWN.x, EYE_JACK, SPAWN.z);
   }
 
   async enter(): Promise<void> {
@@ -175,7 +176,7 @@ class KauaiStreamScene implements IScene {
     // First-person player controller — human-scale gameplay speeds. Vertical
     // physics (gravity/jump/wade/swim) is layered on in update().
     this.player = new PlayerController(this.camera, this.ctx.input, {
-      eyeHeight: EYE,
+      eyeHeight: EYE_JACK, // scene physics overrides camera Y per active character
       moveSpeed: 2.8, // ~2.8 m/s walk
       runMultiplier: 3.4, // ~9.5 m/s sprint
       crouchMultiplier: 0.5,
@@ -271,6 +272,11 @@ class KauaiStreamScene implements IScene {
 
   /** Head-hide the played (active) character so the head-height camera doesn't
    *  render skull interior; restore the NPC's head. */
+  /** First-person eye height of whoever the camera is currently bound to. */
+  private get eye(): number {
+    return this.active === "Jack" ? EYE_JACK : EYE_SARAH;
+  }
+
   private applyRoles(): void {
     const activeChar = this.active === "Jack" ? this.jack : this.sarah;
     const npcChar = this.active === "Jack" ? this.sarah : this.jack;
@@ -370,7 +376,7 @@ class KauaiStreamScene implements IScene {
         const jump = this.ctx.input.consumeJump();
         if (depth > SWIM_DEPTH) {
           // SWIM: bob at the surface (eye just above the water), no gravity.
-          const target = waterY - (EYE - SWIM_EYE);
+          const target = waterY - (this.eye - SWIM_EYE);
           this.feetY += (target - this.feetY) * Math.min(1, dt * 6);
           this.vy = 0;
           this.airborne = false;
@@ -392,9 +398,9 @@ class KauaiStreamScene implements IScene {
             this.feetY = ground;
           }
         }
-        this.camera.position.y = this.feetY + EYE;
+        this.camera.position.y = this.feetY + this.eye;
       } else if (!this.grounded) {
-        this.camera.position.y = EYE; // sit at sea level until the first tile lands
+        this.camera.position.y = this.eye; // sit at sea level until the first tile lands
       }
       this.prevX = this.camera.position.x;
       this.prevZ = this.camera.position.z;

@@ -18,7 +18,7 @@
  *
  * Bump VERSION whenever the caching logic changes to retire old caches.
  */
-const VERSION = "v70";
+const VERSION = "v71";
 const CACHE = `beyond-extinction-${VERSION}`;
 
 // Base path this SW is served from, e.g. "/Beyond-Extinction/" or "/".
