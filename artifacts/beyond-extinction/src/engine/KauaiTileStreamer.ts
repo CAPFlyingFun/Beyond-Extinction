@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { assetUrl, loadTexture } from "./assets";
+import { SEG, renderedSurfaceHeight } from "./terrainSampling";
+import { KauaiCarve } from "./KauaiCarve";
 
 /**
  * Streaming terrain for the full-scale Kauaʻi map (Chapter 2+ "Hanifat").
@@ -41,14 +43,8 @@ function decodeElev(r: number, g: number, b: number): number {
   return e < -6000 ? -6000 : e;
 }
 
-// Grid resolution per tile. The source DEM is 513²/tile (~13.7 m/px), so 512 is
-// the real detail ceiling. 192 (193² ≈ 37k verts, ~36 m spacing) halves the old
-// 96's ~73 m facets for much smoother hillsides, and deliberately stays under
-// the 65 536-vertex 16-bit index limit — so tiles keep a Uint16 index buffer
-// and the resident set (~25 tiles) stays ~46 MB of geometry, mobile-safe.
-// (Bumping toward 256/512 smooths further but tips into 32-bit indices and
-// materially more memory — raise only if the target devices have the headroom.)
-const SEG = 192;
+// Grid resolution per tile (SEG) + surface sampling now live in
+// terrainSampling.ts so the pure math is unit-testable and shared.
 // Tiles are baked 513² with a 1-px overlap: a tile's last height column/row is
 // byte-identical to its neighbour's first, and the mesh maps u·(P−1) so that
 // shared sample lands exactly on the tile border. Neighbouring edge vertices
@@ -211,55 +207,19 @@ export class KauaiTileStreamer {
 
   /**
    * Height of the RENDERED terrain surface at world (x, z). Unlike heightAt
-   * (which bilinear-samples the full-resolution heightmap), this samples on the
-   * mesh's SEG-resolution grid and interpolates the four surrounding mesh
-   * vertices — exactly the surface you see. Props grounded here sit on the
-   * visible mesh instead of floating above / sinking below it wherever the
-   * coarse mesh only approximates the finer heightmap (i.e. on curved slopes).
+   * (which bilinear-samples the full-resolution heightmap), this reproduces the
+   * mesh's SEG-resolution grid TRIANGLE-exactly — the same diagonal split
+   * PlaneGeometry draws — so anything grounded here sits ON the visible
+   * surface. (A bilinear blend of the four cell corners differs from the two
+   * drawn triangles by the cell's twist term — metres on rough 36 m cells —
+   * which was how water ribbons kept clipping through hillsides.)
    */
   surfaceHeightAt(x: number, z: number): number {
     const col = this.colOf(x);
     const row = this.rowOf(z);
     const t = this.tiles.get(`${col},${row}`);
     if (!t || !t.heights) return 0;
-    const P = this.P;
-    const h = t.heights;
-    // Height at mesh vertex (gi, gj) = bilinear heightmap sample at that vertex,
-    // matching how the tile mesh sets each vertex's Y at build time.
-    const vh = (gi: number, gj: number): number => {
-      const px = (gi / SEG) * (P - 1);
-      const py = (gj / SEG) * (P - 1);
-      const x0 = Math.floor(px);
-      const y0 = Math.floor(py);
-      const x1 = Math.min(P - 1, x0 + 1);
-      const y1 = Math.min(P - 1, y0 + 1);
-      const tx = px - x0;
-      const ty = py - y0;
-      return (
-        h[y0 * P + x0] * (1 - tx) * (1 - ty) +
-        h[y0 * P + x1] * tx * (1 - ty) +
-        h[y1 * P + x0] * (1 - tx) * ty +
-        h[y1 * P + x1] * tx * ty
-      );
-    };
-    const u = (x - t.cx) / this.S + 0.5;
-    const v = (z - t.cz) / this.S + 0.5;
-    const gu = Math.min(SEG, Math.max(0, u * SEG));
-    const gv = Math.min(SEG, Math.max(0, v * SEG));
-    const gi0 = Math.min(SEG - 1, Math.floor(gu));
-    const gj0 = Math.min(SEG - 1, Math.floor(gv));
-    const fx = gu - gi0;
-    const fz = gv - gj0;
-    const h00 = vh(gi0, gj0);
-    const h10 = vh(gi0 + 1, gj0);
-    const h01 = vh(gi0, gj0 + 1);
-    const h11 = vh(gi0 + 1, gj0 + 1);
-    return (
-      h00 * (1 - fx) * (1 - fz) +
-      h10 * fx * (1 - fz) +
-      h01 * (1 - fx) * fz +
-      h11 * fx * fz
-    );
+    return renderedSurfaceHeight(t.heights, this.P, this.S, x - t.cx, z - t.cz);
   }
 
   /** True once the tile the player is standing in has its heights decoded. */
@@ -411,6 +371,12 @@ export class KauaiTileStreamer {
       if (this.tiles.get(key) === tile) this.tiles.delete(key);
       return;
     }
+    // Press the river channels + lake beds into the height DATA before anyone
+    // sees it (mesh build, physics, planting, hydro all read tile.heights) so
+    // every consumer agrees on the carved ground. ready() resolves even if
+    // hydro.json failed — the tile then builds uncarved rather than never.
+    await KauaiCarve.ready();
+    KauaiCarve.applyToTile(heights, this.P, this.S, col, row);
     const tex = await this.texReady;
     // player may have moved away while decoding
     if (this.tiles.get(key) !== tile) return;

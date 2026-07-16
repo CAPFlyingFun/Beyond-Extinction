@@ -3,6 +3,7 @@ import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { PlayerController } from "../engine/PlayerController";
 import { KauaiTileStreamer, type KauaiManifest } from "../engine/KauaiTileStreamer";
 import { KauaiHydro } from "../engine/KauaiHydro";
+import { KauaiCarve } from "../engine/KauaiCarve";
 import { KauaiTrees } from "../engine/KauaiTrees";
 import { IslandCharacter } from "../engine/IslandCharacter";
 import { SpawnStore } from "../engine/SpawnStore";
@@ -108,10 +109,42 @@ function makeOceanMaterial(): THREE.MeshStandardMaterial {
     polygonOffsetUnits: 1,
   });
   const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
+  // Baked coastline mask (tools → public/assets/terrain/kauai/coast_mask.png):
+  // world-locked alpha that fades the ocean out wherever the terrain is at or
+  // above the waterline. The old plane relied on the depth test alone, so on
+  // near-flat sand a few centimetres of tide (or one coarse mesh facet) walked
+  // the visible waterline tens of metres inland — "shoreline creep". The mask
+  // pins the shoreline to the baked coast regardless of tide/facets. Starts as
+  // a 1×1 white placeholder (mask everywhere = plain ocean) until the PNG loads.
+  const white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+  white.needsUpdate = true;
+  const uCoast = { value: white as THREE.Texture };
+  mat.userData.uCoast = uCoast;
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uSky = { value: sky };
+    sh.uniforms.uCoast = uCoast;
+    sh.vertexShader = sh.vertexShader
+      .replace("#include <common>", "#include <common>\nvarying vec3 vOceanWpos;")
+      .replace(
+        "#include <project_vertex>",
+        `#include <project_vertex>
+        vOceanWpos = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
+      );
     sh.fragmentShader = sh.fragmentShader
-      .replace("#include <common>", "#include <common>\nuniform vec3 uSky;")
+      .replace(
+        "#include <common>",
+        "#include <common>\nuniform vec3 uSky;\nuniform sampler2D uCoast;\nvarying vec3 vOceanWpos;",
+      )
+      .replace(
+        "#include <map_fragment>",
+        `#include <map_fragment>
+        {
+          // island spans 56 km centred on origin — same mapping the bake used
+          float coast = texture2D(uCoast, vOceanWpos.xz / 56000.0 + 0.5).r;
+          diffuseColor.a *= coast;
+          if (diffuseColor.a < 0.01) discard;
+        }`,
+      )
       .replace(
         "#include <lights_fragment_end>",
         `#include <lights_fragment_end>
@@ -265,6 +298,22 @@ class KauaiStreamScene implements IScene {
       waterMat.needsUpdate = true;
       this.waterNormal = tex;
     });
+    // Swap in the baked coastline mask (see makeOceanMaterial). Until it
+    // arrives the placeholder shows plain ocean everywhere — same as v74.
+    void loadTexture("assets/terrain/kauai/coast_mask.png").then((tex) => {
+      if (!tex) return;
+      tex.colorSpace = THREE.NoColorSpace; // mask is data, not colour
+      tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.needsUpdate = true;
+      const uCoast = waterMat.userData.uCoast as { value: THREE.Texture };
+      uCoast.value.dispose(); // the 1×1 placeholder
+      uCoast.value = tex;
+    });
+
+    // Kick the shared hydro.json fetch NOW, in parallel with the manifest —
+    // every tile decode awaits it before carving river/lake channels into the
+    // height data, so starting early keeps tile loads off the critical path.
+    void KauaiCarve.prefetch();
 
     // Load the manifest and start streaming around the spawn.
     try {

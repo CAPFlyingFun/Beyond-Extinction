@@ -1,6 +1,7 @@
 import * as THREE from "three";
-import { assetUrl, loadTexture } from "./assets";
+import { loadTexture } from "./assets";
 import type { KauaiTileStreamer } from "./KauaiTileStreamer";
+import { KauaiCarve, type HydroRiver, type HydroLake } from "./KauaiCarve";
 
 /**
  * Real Kauaʻi hydrography (USGS NHDPlus HR), baked offline by
@@ -23,34 +24,14 @@ import type { KauaiTileStreamer } from "./KauaiTileStreamer";
  */
 
 // River/lake surfaces are re-grounded onto the LIVE streamed terrain at build
-// time (streamer.heightAt) and lifted this tiny amount, so they always sit just
-// above the actual rendered ground — no clipping in/out, no z-fighting, and no
-// coupling to the ocean tide (which only ever moves the separate ocean plane).
-const LIFT_M = 0.075;
+// time (streamer.surfaceHeightAt — triangle-exact against the rendered mesh)
+// and lifted this small amount, so they always sit just above the actual
+// rendered ground — no clipping in/out, no z-fighting, and no coupling to the
+// ocean tide (which only ever moves the separate ocean plane).
+const LIFT_M = 0.12;
 const UV_M = 8; // metres per ripple-normal repeat (same wavelength as the ocean)
 const RIVER_SCROLL = 0.05; // u/s ≈ 0.4 m/s downstream drift
 const LAKE_DRIFT = { x: 0.014, y: 0.01 }; // ocean's ripple drift (u/s)
-
-interface HydroRiver {
-  tile: string;
-  name: string | null;
-  toOcean: boolean;
-  order: number;
-  /** [x, y, z, width] per point, upstream → downstream */
-  pts: [number, number, number, number][];
-}
-interface HydroLake {
-  tile: string;
-  name: string | null;
-  y: number;
-  ring: [number, number][];
-  holes: [number, number][][];
-}
-interface HydroDoc {
-  version: number;
-  rivers: HydroRiver[];
-  lakes: HydroLake[];
-}
 
 /** Ocean-family water material (see KauaiStreamScene.makeOceanMaterial). */
 function makeWaterMaterial(color: number): THREE.MeshStandardMaterial {
@@ -137,7 +118,17 @@ function smoothRun(pts: Pt4[]): Pt4[] {
 /** Terrain-grounded surface height (m) for a water vertex at world (x, z). */
 type GroundY = (x: number, z: number) => number;
 
-/** Triangle-strip ribbon along a run's centerline, XZ-perpendicular offsets. */
+/**
+ * Grid-conforming ribbon along a run's centerline, XZ-perpendicular offsets.
+ *
+ * Cross-sections are sampled every ~6 m along the run AND subdivided across
+ * the width, with EVERY vertex re-grounded on the rendered terrain surface.
+ * A 2-vertex cross-section spans up to 36 m of terrain as one straight line —
+ * on rough 36 m mesh cells the ground bulges metres above that chord, which is
+ * exactly how the old ribbons kept vanishing into hillsides. With ≤ ~7 m
+ * between grounded vertices the water hugs the drawn triangles everywhere and
+ * the LIFT margin keeps it just above them.
+ */
 function buildRibbon(
   run: HydroRiver,
   positions: number[],
@@ -148,6 +139,11 @@ function buildRibbon(
   const pts = smoothRun(run.pts);
   const n = pts.length;
   if (n < 2) return;
+  // Lanes must be CONSTANT per run (width varies along it — use the max) so
+  // the index buffer stays a regular grid.
+  let maxW = 0;
+  for (const p of pts) maxW = Math.max(maxW, p[3]);
+  const lanes = Math.min(7, Math.max(2, Math.ceil(maxW / 7) + 1));
   let cum = 0;
   let prevX = pts[0][0];
   let prevZ = pts[0][2];
@@ -167,22 +163,27 @@ function buildRibbon(
     const px = -dz; // left-perpendicular in XZ
     const pz = dx;
     const half = w / 2;
-    // Re-ground both banks onto the live terrain (not the baked drape) so the
-    // ribbon hugs the rendered surface exactly and never clips through it.
-    const yl = groundY(x + px * half, z + pz * half);
-    const yr = groundY(x - px * half, z - pz * half);
-    positions.push(x + px * half, yl, z + pz * half, x - px * half, yr, z - pz * half);
     cum += Math.hypot(x - prevX, z - prevZ);
     prevX = x;
     prevZ = z;
     const u = cum / UV_M;
-    uvs.push(u, 0, u, w / UV_M);
+    for (let k = 0; k < lanes; k++) {
+      const t = k / (lanes - 1);
+      const off = half * (1 - 2 * t); // +half (left bank) → −half (right bank)
+      const vx = x + px * off;
+      const vz = z + pz * off;
+      positions.push(vx, groundY(vx, vz), vz);
+      uvs.push(u, (t * w) / UV_M);
+    }
     emitted++;
   }
   for (let i = 0; i < emitted - 1; i++) {
-    const v0 = base + i * 2;
-    // two triangles per quad, wound for +Y normals
-    indices.push(v0, v0 + 2, v0 + 1, v0 + 1, v0 + 2, v0 + 3);
+    for (let k = 0; k < lanes - 1; k++) {
+      const a = base + i * lanes + k;
+      const b = a + lanes; // same lane, next cross-section
+      // two triangles per cell, wound for +Y normals
+      indices.push(a, b, a + 1, a + 1, b, b + 1);
+    }
   }
 }
 
@@ -275,15 +276,10 @@ export class KauaiHydro {
   }
 
   private async load(): Promise<void> {
-    let doc: HydroDoc;
-    try {
-      const res = await fetch(assetUrl("assets/terrain/kauai/hydro.json"));
-      if (!res.ok) throw new Error(`hydro.json ${res.status}`);
-      doc = (await res.json()) as HydroDoc;
-    } catch (e) {
-      console.error("[kauai-hydro] load failed — no rivers/lakes this session", e);
-      return;
-    }
+    // Single shared fetch: KauaiCarve owns hydro.json (it also presses the
+    // channels into the terrain heights at tile-decode time).
+    const doc = await KauaiCarve.prefetch();
+    if (!doc) return; // KauaiCarve already logged the failure
     if (this.disposed) return;
     const chunkOf = (tile: string): Chunk => {
       let c = this.chunks.get(tile);
