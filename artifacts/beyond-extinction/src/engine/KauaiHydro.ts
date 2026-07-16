@@ -30,14 +30,32 @@ import { riverCarveDepth } from "./kauaiCarveCore";
 // the carved centreline and smooth it ALONG the run; lakes sit flat at their
 // baked waterline. Water is never coupled to the ocean tide (that only moves
 // the separate ocean plane).
-const LIFT_M = 0.12; // min water depth above the channel centreline (m)
+const LIFT_M = 0.18; // min water depth above the channel centreline (m)
 const SMOOTH_WINDOW = 5; // cross-sections (±) averaged along the run (~±30 m)
 const UV_M = 8; // metres per ripple-normal repeat (same wavelength as the ocean)
 const RIVER_SCROLL = 0.05; // u/s ≈ 0.4 m/s downstream drift
 const LAKE_DRIFT = { x: 0.014, y: 0.01 }; // ocean's ripple drift (u/s)
 
-/** Ocean-family water material (see KauaiStreamScene.makeOceanMaterial). */
-function makeWaterMaterial(color: number): THREE.MeshStandardMaterial {
+/**
+ * Ocean-family water material (see KauaiStreamScene.makeOceanMaterial).
+ *
+ * `sink` picks the polygon-offset direction, and this is the whole reason
+ * rivers used to break into shards:
+ *
+ *  • LAKES sit in a real 2 m-carved basin, so — like the ocean — they want the
+ *    terrain to WIN near-coplanar ties at their feathered rim (positive offset,
+ *    fragments pushed DEEPER). The water then hides cleanly inside the bank.
+ *  • RIVERS have no real trench at mesh resolution: the channel carve (≤ a few
+ *    metres, ≤ 1 mesh facet wide) is muted to almost nothing by the 36 m-facet
+ *    render grid, so a river ribbon lies essentially ON its bed. The ocean's
+ *    positive offset then pushed those fragments BEHIND the bed — and because
+ *    one depth step is metres at distance, the whole ribbon lost the depth test
+ *    from a few dozen metres out and surfaced only in the odd dip: the
+ *    "disconnected blue shards". Rivers therefore need the OPPOSITE bias
+ *    (negative offset) so the thin sheet of water reliably beats the bed it
+ *    rests on, at every distance.
+ */
+function makeWaterMaterial(color: number, sink = true): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({
     color,
     roughness: 0.13,
@@ -47,13 +65,15 @@ function makeWaterMaterial(color: number): THREE.MeshStandardMaterial {
     envMapIntensity: 1.1,
     normalScale: new THREE.Vector2(0.55, 0.55),
     side: THREE.DoubleSide, // ribbons stay visible from below-bank angles
-    // Same z-fight guard as the ocean: pool surfaces cross near-coplanar
-    // terrain right at their banks — push water fragments deeper so the
-    // shoreline pixels resolve to ground, not shimmer (generous units for
-    // metres-coarse far-distance depth steps, matching the ocean).
+    // Polygon-offset z-fight guard. Positive (sink) pushes fragments DEEPER so
+    // near-coplanar terrain wins — right for pools/ocean whose edge should hide
+    // in the bank. Negative LIFTS river fragments toward the camera so the
+    // draped-flat sheet wins over the bed it sits on (see the doc comment).
+    // Units are deliberately generous: at multi-km distance one 24-bit depth
+    // step is metres, so a small factor still ties on flat far terrain.
     polygonOffset: true,
-    polygonOffsetFactor: 2,
-    polygonOffsetUnits: 4,
+    polygonOffsetFactor: sink ? 2 : -2,
+    polygonOffsetUnits: sink ? 4 : -4,
   });
   const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
   mat.onBeforeCompile = (sh) => {
@@ -291,9 +311,11 @@ export class KauaiHydro {
     this.group.name = "kauai-hydro";
     scene.add(this.group);
     // Slightly deeper blue-green than the open ocean so channels read as
-    // river water, while staying in the same material family.
-    this.riverMat = makeWaterMaterial(0x175b66);
-    this.lakeMat = makeWaterMaterial(0x14526e);
+    // river water, while staying in the same material family. Rivers lift
+    // toward the camera (sink = false) so the thin channel sheet beats its
+    // bed; lakes sink like the ocean so their rim hides in the bank.
+    this.riverMat = makeWaterMaterial(0x175b66, false);
+    this.lakeMat = makeWaterMaterial(0x14526e, true);
     void this.loadNormals();
     void this.load();
   }

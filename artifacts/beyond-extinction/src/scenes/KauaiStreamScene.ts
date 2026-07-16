@@ -685,15 +685,20 @@ class KauaiStreamScene implements IScene {
       // Advance both characters' animation mixers (idle/walk blend).
       this.jack?.update(dt);
       this.sarah?.update(dt);
-      // High/low tide (two incommensurate sines → non-repeating) breathes the
-      // ocean surface, used for both the plane and the swim/wade test. Frozen
-      // during the cinematic so the flyover's shoreline is rock-steady; in play
-      // it's a whisper-small ±TIDE_AMP (see the constant for why so small).
+      // High/low tide (two incommensurate sines → non-repeating). It now drives
+      // ONLY the swim/wade depth test — NEVER the visible plane. Even a
+      // whisper-small ±TIDE_AMP vertical swing walked the waterline in and out
+      // across the near-level coastal flats every few seconds (the reported
+      // "ocean fluctuating along the shoreline"): a pinned shoreline and a
+      // vertically-moving plane simply can't coexist on a flat beach. The plane
+      // is therefore held dead-flat at WATER_Y (see followWater) and the
+      // world-locked coast mask owns the shoreline; surface life comes from the
+      // scrolling ripple normals, not from moving the plane up and down.
       this.waterT += dt;
       const tide = play
         ? 0.6 * Math.sin(this.waterT * 0.25) + 0.4 * Math.sin(this.waterT * 0.11 + 1.3)
         : 0;
-      const waterY = WATER_Y + TIDE_AMP * tide; // ocean surface (also the plane Y)
+      const waterY = WATER_Y + TIDE_AMP * tide; // swim/wade surface only (NOT the plane)
 
       // ── Cinematic phases: hold both heroes on the terrain, fly the drone ──
       if (!play) {
@@ -706,7 +711,7 @@ class KauaiStreamScene implements IScene {
           this.sarah.setMoving(false);
         }
         if (this.phase === "flyover") this.updateFlyover(dt);
-        this.followWater(waterY);
+        this.followWater(WATER_Y);
         return;
       }
 
@@ -837,7 +842,7 @@ class KauaiStreamScene implements IScene {
         this.groundCharacter(npcChar, npcPos);
       }
 
-      this.followWater(waterY);
+      this.followWater(WATER_Y);
       if (this.hud) {
         const col = String.fromCharCode(65 + Math.min(7, Math.max(0, Math.round(x / 7000 + 3.5))));
         const row = Math.min(8, Math.max(1, Math.round(z / 7000 + 3.5) + 1));
@@ -849,10 +854,12 @@ class KauaiStreamScene implements IScene {
     }
   }
 
-  /** Ocean plane + ripple UVs follow the camera in XZ (world-locked ripples). */
-  private followWater(waterY: number): void {
+  /** Ocean plane + ripple UVs follow the camera in XZ (world-locked ripples).
+   *  `planeY` is held constant (WATER_Y) so the shoreline never walks in/out —
+   *  see the tide comment in update(); the coast mask owns the waterline. */
+  private followWater(planeY: number): void {
     if (!this.water) return;
-    this.water.position.set(this.camera.position.x, waterY, this.camera.position.z);
+    this.water.position.set(this.camera.position.x, planeY, this.camera.position.z);
     if (this.waterNormal) {
       const uvpm = WATER_REPEAT / WATER_SIZE;
       this.waterNormal.offset.set(
