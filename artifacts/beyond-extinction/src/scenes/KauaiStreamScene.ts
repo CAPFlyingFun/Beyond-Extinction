@@ -31,6 +31,11 @@ const SWIM_DEPTH = 1.3; // deeper than this → swim; shallower → wade on the 
 const SWIM_EYE = 0.25; // eye height above the surface while swimming
 const WADE_SLOW = 0.6; // horizontal speed factor while wading
 const SWIM_SLOW = 0.45; // horizontal speed factor while swimming
+const DIVE_SPEED = 1.4; // m/s the eye descends/rises while DIVE/RISE is held
+const FLOAT_BOB = 0.04; // ± surface float bob (m) — the buoyant idle rock
+const DIVE_BOB = 0.02; // ± hold-depth bob (m) while submerged (neutral buoyancy)
+const STROKE_INTERVAL = 0.85; // s between swim-stroke SFX while stroking along
+const ZONE_DEBOUNCE = 0.6; // s a new land ambience zone must persist before it commits
 
 // Wailua beach in metres (grid centre origin). Nudged ~1.4 km inland from the
 // waterline so the scout starts on land while G5 finishes decoding.
@@ -109,6 +114,25 @@ class KauaiStreamScene implements IScene {
   private airborne = false;
   private prevX = SPAWN.x;
   private prevZ = SPAWN.z;
+  // Swim / dive state. `sub` = how far the eye sits BELOW the water surface (m):
+  // negative = floating with the head above water (rest = -SWIM_EYE), positive =
+  // submerged. DIVE/RISE nudge it; with neither held it holds depth when
+  // submerged (neutral buoyancy — no buoy bob-up) and only drifts back up once
+  // at/near the surface. `*Held` are driven by the on-screen DIVE/RISE buttons.
+  private sub = -SWIM_EYE;
+  private diveHeld = false;
+  private riseHeld = false;
+  private diveBtn?: HTMLButtonElement;
+  private riseBtn?: HTMLButtonElement;
+  private strokeT = 0;
+  // Transition edges for water SFX (dive splash / gasp / exit splash).
+  private wasSwimming = false;
+  private wasSubmerged = false;
+  private wasInWater = false;
+  // Environmental ambience: the currently-sounding bed + a debounce for the next.
+  private ambZone = "";
+  private pendingZone = "";
+  private pendingZoneT = 0;
 
   constructor(ctx: SceneContext) {
     this.ctx = ctx;
@@ -223,6 +247,12 @@ class KauaiStreamScene implements IScene {
         input: this.ctx.input,
         switchCharacter: () => this.switchCharacter(),
         getActive: () => this.active,
+        diveHold: (v: boolean) => (this.diveHeld = v),
+        riseHold: (v: boolean) => (this.riseHeld = v),
+        teleport: (x: number, z: number, facing = SPAWN.facing) => {
+          this.player?.placeAt(x, z, facing);
+          this.grounded = false;
+        },
         step: (dt = 0.016, n = 1) => {
           for (let i = 0; i < n; i++) this.update(dt);
         },
@@ -238,6 +268,10 @@ class KauaiStreamScene implements IScene {
             vy: +this.vy.toFixed(2),
             airborne: this.airborne,
             camY: +this.camera.position.y.toFixed(2),
+            sub: +this.sub.toFixed(3),
+            swimming: this.wasSwimming,
+            submerged: this.wasSubmerged,
+            ambZone: this.ambZone,
           };
         },
       };
@@ -303,6 +337,66 @@ class KauaiStreamScene implements IScene {
     c.place(at.x, Math.max(s.surfaceHeightAt(at.x, at.y), 0), at.y);
   }
 
+  /**
+   * Pick the ambience bed for the player's spot — an elevation/terrain HYBRID
+   * (per the Godot design): elevation bands drive it, but terrain overrides so a
+   * pond in the middle of the island never sounds like the open ocean.
+   *   • submerged  → underwater loop (muffled world)
+   *   • standing water at sea level → ocean; inland standing water → swamp
+   *   • dry land by elevation → beach → jungle-light → jungle-deep → highland →
+   *     crags → volcano (summit)
+   */
+  private ambientZoneFor(ground: number, depth: number, submerged: boolean): string {
+    if (submerged) return "amb-underwater";
+    if (depth > WATER_ENTER) return ground <= 2 ? "amb-ocean" : "amb-swamp";
+    if (ground < 6) return "amb-beach";
+    if (ground < 120) return "amb-jungle-light";
+    if (ground < 400) return "amb-jungle-deep";
+    if (ground < 850) return "amb-highland";
+    if (ground < 1250) return "amb-crags";
+    return "amb-volcano";
+  }
+
+  /**
+   * Crossfade the ambience toward the current zone's bed. Water transitions
+   * (in/out/under) switch immediately; land-zone changes must persist for
+   * ZONE_DEBOUNCE so you don't flicker beds while skirting a band boundary. The
+   * single music channel means only one bed sounds at a time — exactly the
+   * ocean-gives-way-to-jungle behaviour we want.
+   */
+  private updateAmbience(ground: number, depth: number, submerged: boolean, dt: number): void {
+    const zone = this.ambientZoneFor(ground, depth, submerged);
+    if (zone === this.ambZone) {
+      this.pendingZone = "";
+      this.pendingZoneT = 0;
+      return;
+    }
+    const immediate =
+      this.ambZone === "" ||
+      zone === "amb-underwater" ||
+      this.ambZone === "amb-underwater" ||
+      zone === "amb-ocean" ||
+      this.ambZone === "amb-ocean";
+    if (immediate) {
+      this.ambZone = zone;
+      this.pendingZone = "";
+      this.pendingZoneT = 0;
+      this.ctx.audio.playMusic(zone);
+      return;
+    }
+    if (zone !== this.pendingZone) {
+      this.pendingZone = zone;
+      this.pendingZoneT = 0;
+    }
+    this.pendingZoneT += dt;
+    if (this.pendingZoneT >= ZONE_DEBOUNCE) {
+      this.ambZone = zone;
+      this.pendingZone = "";
+      this.pendingZoneT = 0;
+      this.ctx.audio.playMusic(zone);
+    }
+  }
+
   private buildHud(): void {
     const hud = document.createElement("div");
     hud.style.cssText =
@@ -329,6 +423,47 @@ class KauaiStreamScene implements IScene {
     });
     this.ctx.uiLayer.appendChild(swap);
     this.swapBtn = swap;
+
+    // DIVE / RISE buttons (bottom-right, stacked): held-down controls, shown only
+    // while swimming. RISE ascends toward the surface; DIVE descends; releasing
+    // both holds the current depth (neutral buoyancy) rather than bobbing up.
+    const mkDepthBtn = (label: string, bottom: number): HTMLButtonElement => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      b.style.cssText =
+        `position:absolute;right:14px;bottom:${bottom}px;z-index:61;` +
+        "width:76px;height:56px;border:0;border-radius:14px;" +
+        "background:rgba(6,14,22,0.66);color:#dff;" +
+        "font:800 14px/1 ui-monospace,Menlo,monospace;letter-spacing:.05em;" +
+        "backdrop-filter:blur(6px);touch-action:none;cursor:pointer;display:none;" +
+        "user-select:none;-webkit-user-select:none;";
+      this.ctx.uiLayer.appendChild(b);
+      return b;
+    };
+    const rise = mkDepthBtn("▲ RISE", 118);
+    const dive = mkDepthBtn("▼ DIVE", 52);
+    const bind = (b: HTMLButtonElement, set: (v: boolean) => void) => {
+      const down = (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        set(true);
+        b.style.background = "rgba(40,120,150,0.82)";
+      };
+      const up = (e: Event) => {
+        e.preventDefault();
+        set(false);
+        b.style.background = "rgba(6,14,22,0.66)";
+      };
+      b.addEventListener("pointerdown", down);
+      b.addEventListener("pointerup", up);
+      b.addEventListener("pointercancel", up);
+      b.addEventListener("pointerleave", up);
+    };
+    bind(rise, (v) => (this.riseHeld = v));
+    bind(dive, (v) => (this.diveHeld = v));
+    this.riseBtn = rise;
+    this.diveBtn = dive;
   }
 
   update(dt: number): void {
@@ -374,12 +509,41 @@ class KauaiStreamScene implements IScene {
         }
 
         const jump = this.ctx.input.consumeJump();
-        if (depth > SWIM_DEPTH) {
-          // SWIM: bob at the surface (eye just above the water), no gravity.
-          const target = waterY - (this.eye - SWIM_EYE);
+        const swimming = depth > SWIM_DEPTH;
+        if (swimming) {
+          // SWIM. On breaking into deep water, enter at the float line + splash.
+          if (!this.wasSwimming) {
+            this.sub = -SWIM_EYE;
+            this.ctx.audio.playSfx("splash-dive");
+          }
+          // Neutral-buoyancy dive/rise. DIVE sinks the eye, RISE lifts it; with
+          // neither held the diver HOLDS depth when submerged (no buoy bob-up)
+          // and only drifts back up once at/near the surface. Clamp so the eye
+          // can't rise above the float line nor sink through the bed.
+          const subMax = Math.max(0, waterY - ground - this.eye);
+          if (this.diveHeld) this.sub += DIVE_SPEED * dt;
+          else if (this.riseHeld) this.sub -= DIVE_SPEED * dt;
+          else if (this.sub < 0)
+            this.sub += (-SWIM_EYE - this.sub) * Math.min(1, dt * 2); // buoy up
+          this.sub = Math.max(-SWIM_EYE, Math.min(subMax, this.sub));
+
+          const diving = this.sub > 0.02; // head under the surface → hold-depth bob
+          const bob = (diving ? DIVE_BOB : FLOAT_BOB) * Math.sin(this.waterT * 2.2);
+          const target = waterY - this.sub + bob - this.eye;
           this.feetY += (target - this.feetY) * Math.min(1, dt * 6);
           this.vy = 0;
           this.airborne = false;
+
+          // Swim-stroke SFX pulsed while actually stroking through the water.
+          if (moved?.moving) {
+            this.strokeT += dt;
+            if (this.strokeT >= STROKE_INTERVAL) {
+              this.strokeT = 0;
+              this.ctx.audio.playSfx("swim-stroke");
+            }
+          } else {
+            this.strokeT = STROKE_INTERVAL; // next stroke fires promptly on move
+          }
         } else {
           // LAND / WADE: stick to the ground (or riverbed), jump + gravity.
           if (jump && !this.airborne) {
@@ -399,6 +563,29 @@ class KauaiStreamScene implements IScene {
           }
         }
         this.camera.position.y = this.feetY + this.eye;
+
+        // ── Water SFX edges + environmental ambience (elevation/terrain hybrid) ──
+        const submerged = swimming && this.sub > 0.02;
+        const inWater = depth > WATER_ENTER;
+        if (this.wasSubmerged && !submerged) this.ctx.audio.playSfx("breath-gasp");
+        if (this.wasInWater && !inWater) this.ctx.audio.playSfx("splash-exit");
+        this.updateAmbience(ground, depth, submerged, dt);
+        this.wasSwimming = swimming;
+        this.wasSubmerged = submerged;
+        this.wasInWater = inWater;
+
+        // The depth controls only make sense while swimming; hide + release them
+        // (and reset the stroke clock) the moment you're back on the bed/land.
+        const showDepth = swimming ? "block" : "none";
+        if (this.diveBtn && this.diveBtn.style.display !== showDepth) {
+          this.diveBtn.style.display = showDepth;
+          this.riseBtn!.style.display = showDepth;
+          if (!swimming) {
+            this.diveHeld = this.riseHeld = false;
+            this.diveBtn.style.background = this.riseBtn!.style.background =
+              "rgba(6,14,22,0.66)";
+          }
+        }
       } else if (!this.grounded) {
         this.camera.position.y = this.eye; // sit at sea level until the first tile lands
       }
@@ -465,6 +652,9 @@ class KauaiStreamScene implements IScene {
     this.bgMap?.dispose();
     this.hud?.remove();
     this.swapBtn?.remove();
+    this.diveBtn?.remove();
+    this.riseBtn?.remove();
+    this.ctx.audio.stopMusic();
     this.scene.clear();
   }
 }

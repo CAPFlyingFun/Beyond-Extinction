@@ -12,6 +12,21 @@ const MUSIC_TRACKS: Record<string, string> = {
   "lab-suspense": "assets/audio/lab-suspense.mp3",
   // Island ambience (Chapter Two) — the looping beach bed under free roam.
   "beach-dawn": "assets/audio/ambient-beach.mp3",
+  // Kauaʻi streaming-map ambience beds. These crossfade into one another as the
+  // player moves between elevation/terrain zones (see KauaiStreamScene) — the
+  // single music channel means only one bed sounds at a time, exactly the
+  // desired behaviour (ocean gives way to jungle gives way to highland …).
+  "amb-ocean": "assets/audio/ambient-ocean.mp3",
+  "amb-beach": "assets/audio/ambient-beach.mp3",
+  "amb-jungle-light": "assets/audio/ambient-jungle-light.mp3",
+  "amb-jungle-deep": "assets/audio/ambient-jungle-deep.mp3",
+  "amb-highland": "assets/audio/ambient-highland.mp3",
+  "amb-crags": "assets/audio/ambient-crags.mp3",
+  "amb-volcano": "assets/audio/ambient-volcano.mp3",
+  "amb-swamp": "assets/audio/ambient-swamp.mp3",
+  // The submerged bed — swapped in for the surface ambience while diving so the
+  // world goes muffled underwater, then back to the zone bed on surfacing.
+  "amb-underwater": "assets/audio/underwater-loop.mp3",
   // The Dilophosaurus first-encounter — drives the reveal/chase sting.
   "dilo-chase": "assets/audio/dilo-chase.mp3",
 };
@@ -40,6 +55,15 @@ const SFX_TRACKS: Record<string, string> = {
   "dilo-spit": "assets/audio/dilo-spit.mp3",
   "large-creature-hiss": "assets/audio/dilo-snarl.mp3",
   "dodo-cluck": "assets/audio/dodo-cluck.mp3",
+  // Swim / dive one-shots (Kauaʻi streaming map). splash-dive on breaking the
+  // surface downward, splash-exit on climbing back out onto land, swim-stroke
+  // pulsed while stroking through water, breath-gasp on surfacing for air.
+  "splash-dive": "assets/audio/splash-dive.mp3",
+  "splash-exit": "assets/audio/splash-exit.mp3",
+  "swim-stroke": "assets/audio/swim-stroke.mp3",
+  "breath-gasp": "assets/audio/breath-gasp.mp3",
+  // Footsteps on sand (beach/shore of the streaming map).
+  "footsteps-sand": "assets/audio/footsteps-sand.mp3",
 };
 
 // Base music level. Kept deliberately low so the score is atmosphere, not a
