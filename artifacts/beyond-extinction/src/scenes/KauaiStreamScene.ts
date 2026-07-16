@@ -17,7 +17,7 @@ import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
  * Spawn: G5 / Wailua (east coast) — the locked-in Chapter-2 arrival. Ocean is
  * to the east (+X); you face inland (west) toward the interior + summit.
  */
-const EYE = 1.62; // m — beach/Godot first-person eye height
+const EYE = 1.8; // m — beach/Godot first-person eye height
 const CAM_FWD = 0.10; // eye ahead of the head (smaller = closer to the head)
 const SKY = new THREE.Color(0x8fbcd4);
 const SUN = new THREE.Vector3(-0.55, 0.72, 0.42).normalize();
