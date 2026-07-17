@@ -59,8 +59,11 @@ export function riverCarveRadius(w: number): number {
 export function riverCarveDepth(w: number): number {
   return Math.min(Math.max(w * 0.6, 3.0), 6.0);
 }
-/** Fraction of the carve radius that is a FLAT bed (rest is the cos² wall). */
-export const FLAT_FRAC = 0.5;
+/** Fraction of the carve radius that is a FLAT bed (rest is the cos² wall). A
+ *  WIDE flat bed keeps most of the channel at full depth, so the water reads as
+ *  one filled body rather than a thin deep core with wide pale shallow shoulders
+ *  (the shallow ramps let the light bed show through the translucent surface). */
+export const FLAT_FRAC = 0.72;
 /** Lakes floor to (waterline − LAKE_DEPTH), feathered over LAKE_FEATHER m. */
 export const LAKE_DEPTH = 2;
 export const LAKE_FEATHER = 15;

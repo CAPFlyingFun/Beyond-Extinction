@@ -550,6 +550,7 @@ export class KauaiHydro {
     // toward the camera (sink = false) so the thin channel sheet beats its
     // bed; lakes sink like the ocean so their rim hides in the bank.
     this.riverMat = makeWaterMaterial(0x175b66, false);
+    this.riverMat.opacity = 0.9; // less see-through so the pale bed doesn't wash out the shallows
     this.lakeMat = makeWaterMaterial(0x14526e, true);
     this.cascadeMat = makeCascadeMaterial();
     void this.loadNormals();
