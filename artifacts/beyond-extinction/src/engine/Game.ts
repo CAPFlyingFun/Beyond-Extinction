@@ -103,6 +103,7 @@ export class Game {
       onTerrainEditor: () => this.terrainEditor.toggle(),
       onSkipToIsland: () => this.skipToIsland(),
       onKauaiStream: () => this.skipToKauai(),
+      onWaterLab: () => this.skipToWaterLab(),
       showToast: (m) => this.overlays.showToast(m),
     });
     // The inventory's DEV tab opens the same PIN gate directly (no 10s hold).
@@ -185,6 +186,14 @@ export class Game {
     this.animEditor.close();
     this.terrainEditor.close();
     void this.scenes.goTo(createKauaiStreamScene);
+  }
+
+  /** Jump to the WaterLab 3×3 water R&D testbed (Dev menu shortcut). */
+  private skipToWaterLab(): void {
+    this.markerEditor.close();
+    this.animEditor.close();
+    this.terrainEditor.close();
+    void this.scenes.goTo(createWaterLabScene);
   }
 
   private loop = () => {
