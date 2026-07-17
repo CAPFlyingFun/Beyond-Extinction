@@ -431,7 +431,7 @@ class KauaiStreamScene implements IScene {
     // reflections + image-based light; the tonemapped JPG is the cheap visible
     // background. The env supplies most of the ambient, so keep the fill lights
     // low and let the sun handle direct light + shadows.
-    this.scene.add(new THREE.HemisphereLight(0xe6f2ff, 0x6b7550, 0.35));
+    this.scene.add(new THREE.HemisphereLight(0xe6f2ff, 0x6b7550, 0.75));
     const sun = new THREE.DirectionalLight(0xfff3e0, 1.35);
     sun.position.copy(SUN).multiplyScalar(1000);
     this.scene.add(sun);
@@ -1162,7 +1162,7 @@ class KauaiStreamScene implements IScene {
   private async waitForWorldReady(): Promise<void> {
     const s = this.streamer;
     const started = performance.now();
-    const MAX_MS = 45000;
+    const MAX_MS = 120000; // slow connections need the terrain fully in before the camera starts
     for (;;) {
       if (this.disposed) return;
       const ls = s ? s.loadState(this.spawnX, this.spawnZ) : { ready: 0, total: 1 };

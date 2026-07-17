@@ -34,8 +34,7 @@ const LIFT_M = 0.18; // min water depth above the channel centreline (m)
 const FILL_DEPTH = 2.4; // target water depth above the carved bed (m) — swimmable
 const BANK_FREEBOARD = 0.05; // keep the surface this far below the trench rim (m)
 const EDGE_SMOOTH = 4; // ± samples averaged to smooth the canal width (curved banks)
-const WEIR_STEP = 2; // pool → pool surface drop (m); a new pool every WEIR_STEP of bed fall
-const BED_SMOOTH = 4; // ± samples the bed is averaged over BEFORE banding (kills facet-noise flips)
+const LEVEL_SMOOTH = 8; // ± samples averaged to flatten the surface (still within the ghost budget)
 const UV_M = 8; // metres per ripple-normal repeat (same wavelength as the ocean)
 const RIVER_SCROLL = 0.05; // u/s ≈ 0.4 m/s downstream drift
 const LAKE_DRIFT = { x: 0.014, y: 0.01 }; // ocean's ripple drift (u/s)
@@ -234,33 +233,25 @@ function buildRibbon(
     const rimR = groundY(c.x - c.px * R, c.z - c.pz * R);
     rimCap[i] = Math.min(rimL, rimR) - BANK_FREEBOARD;
   }
-  // Surface level: FLAT POOLS that step down at weirs (the "dead-flat pool level
-  // that steps down" this file has always described). The surface is QUANTIZED
-  // to WEIR_STEP-height elevation bands — (bed + FILL_DEPTH) snapped DOWN to the
-  // band — so it holds ONE flat level while the bed descends within that band (a
-  // still pool, deepest at its downstream end) and drops a whole WEIR_STEP the
-  // moment the bed crosses into the next band (the rapids/waterfall). Quantizing
-  // by ABSOLUTE bed elevation, not a walk from some segment start, is what keeps
-  // the level seam-deterministic: neighbouring tiles compute the same band at a
-  // shared point, so the v87 per-tile joins stay matched. FILL_DEPTH > WEIR_STEP
-  // guarantees the shallow (upstream) end of every pool still holds water.
-  // Pre-smooth the bed over a fixed window before banding so 36 m-facet noise
-  // doesn't flip a pool up/down a band (which read as water piling uphill). The
-  // window is symmetric and, thanks to the ghost context, samples the same
-  // points on both sides of a tile seam, so the banded level stays matched.
+  // Surface level: a SMOOTH sheet a swimmable depth above the carved bed. The
+  // hard "stepped pool" banding read as ugly vertical blue walls in-game, so the
+  // level is instead a wide moving average of (bed + FILL_DEPTH) — flatter than
+  // the raw terrain slope, but with no abrupt steps — clamped above the bed and
+  // under the rim. The ±LEVEL_SMOOTH window stays inside the ghost-context
+  // budget, so the level is seam-deterministic and the v87 tile joins hold.
+  const rawLevel = new Float64Array(m);
+  for (let i = 0; i < m; i++) {
+    rawLevel[i] = Math.min(Math.max(gC[i] + FILL_DEPTH, gC[i] + LIFT_M), rimCap[i]);
+  }
   const level = new Float64Array(m);
   for (let i = 0; i < m; i++) {
-    const k0 = Math.max(0, i - BED_SMOOTH);
-    const k1 = Math.min(m - 1, i + BED_SMOOTH);
+    const k0 = Math.max(0, i - LEVEL_SMOOTH);
+    const k1 = Math.min(m - 1, i + LEVEL_SMOOTH);
     let s = 0;
-    for (let k = k0; k <= k1; k++) s += gC[k];
-    const bed = s / (k1 - k0 + 1);
-    const banded = Math.floor((bed + FILL_DEPTH) / WEIR_STEP) * WEIR_STEP;
-    // Clamp against the SMOOTHED bed (not the noisy per-sample gC) so a lone
-    // facet spike can't lift the flat surface — the river material's negative
-    // depth bias already floats the thin sheet over minor bed pokes.
-    const floor = bed + LIFT_M;
-    level[i] = Math.min(Math.max(banded, floor), Math.max(rimCap[i], floor));
+    for (let k = k0; k <= k1; k++) s += rawLevel[k];
+    const avg = s / (k1 - k0 + 1);
+    const floor = gC[i] + LIFT_M;
+    level[i] = Math.min(Math.max(avg, floor), Math.max(rimCap[i], floor));
   }
   // Water edge per side: march outward from the centreline until the RENDERED
   // bank rises to the water level — that's the true waterline, so the edge

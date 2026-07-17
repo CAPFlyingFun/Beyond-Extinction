@@ -654,7 +654,10 @@ vec3 triplanar(sampler2D tex, vec3 wp, vec3 n, float scale) {
   // Soft shoreline (no hard cut at e=0): the beach dampens to wet sand as it
   // nears the waterline, then the reef/seafloor fades in over a few metres and
   // deepens with depth — the same kind of smoothstep blend as the biome bands.
-  gWet = smoothstep(1.4, -0.8, e);               // 0 dry -> 1 at/below waterline
+  // Wet sheen is a BAND at the water's edge, not the whole seabed: it ramps up
+  // as the beach nears the waterline, then fades back to matte a few metres
+  // under, so the submerged floor doesn't carry a glossy glare.
+  gWet = smoothstep(1.4, -0.8, e) * smoothstep(-4.0, -0.8, e);
   c = mix(c, c * 0.66, smoothstep(1.3, 0.0, e)); // wet-sand band
   {
     float d = clamp(-e / 55.0, 0.0, 1.0);
