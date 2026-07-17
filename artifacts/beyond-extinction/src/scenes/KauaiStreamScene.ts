@@ -476,6 +476,10 @@ class KauaiStreamScene implements IScene {
       const res = await fetch(assetUrl("assets/terrain/kauai/manifest.json"));
       const manifest = (await res.json()) as KauaiManifest;
       this.streamer = new KauaiTileStreamer(this.scene, manifest, { radius: 2 });
+      // During the arrival flyover, dark-deep the whole underwater seabed so the
+      // light coral shelf can't z-fight the ocean in the high wide shots; the
+      // coral shallows come back when the player takes control (finishArrival).
+      if (this.cinematic) this.streamer.setDeepen(1);
       // Fresh arrival forces the spawn tile in first (see runArrival); dev/continue
       // kicks the whole ring immediately for an instant drop into first person.
       if (!this.cinematic) this.streamer.update(0, this.spawnX, this.spawnZ);
@@ -1357,6 +1361,9 @@ class KauaiStreamScene implements IScene {
     this.active = "Jack";
     this.applyRoles(); // re-hide the played body's head
     this.phase = "play";
+    // Player now has control (close, low, no shelf z-fight) → restore the coral
+    // shallows the flyover had darkened.
+    this.streamer?.setDeepen(0);
     this.grounded = false;
     this.player?.placeAt(this.jackPos.x, this.jackPos.y, this.spawnFacing);
     this.player?.setActive(true);
