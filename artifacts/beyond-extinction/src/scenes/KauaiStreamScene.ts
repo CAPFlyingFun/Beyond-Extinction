@@ -32,7 +32,7 @@ const GRAVITY = 22; // m/s² (snappy game gravity)
 const JUMP_V = 7.5; // m/s → ~1.3 m jump apex
 const WATER_ENTER = 0.35; // water at least this deep starts to slow you
 const SWIM_DEPTH = 1.3; // deeper than this → swim; shallower → wade on the bed
-const SWIM_EYE = 0.25; // eye height above the surface while swimming
+const SWIM_EYE = 0.42; // eye height above the surface while swimming (above the swell)
 const WADE_SLOW = 0.6; // horizontal speed factor while wading
 const SWIM_SLOW = 0.45; // horizontal speed factor while swimming
 const DIVE_SPEED = 1.4; // m/s the eye descends/rises while DIVE/RISE is held
@@ -84,6 +84,86 @@ const WATER_Y = -0.4; // surface just below the 0 m waterline (soft shoreline)
 // while the shoreline stays visually pinned.
 const TIDE_AMP = 0.06;
 
+// ── Ocean swell (sum-of-sines) ──────────────────────────────────────────────
+// A handful of directional sine waves displace the ocean surface and give the
+// player (and, later, floating objects) real buoyant bob. Sum-of-sines rather
+// than full Gerstner so the height at a world XZ is EXACT (no horizontal roll),
+// which makes CPU buoyancy a direct evaluation. Cheap enough for mobile — no
+// FFT, no compute, just a few sines per vertex on a coarse radial grid.
+// Each wave: [dirX, dirZ (unit), wavelength m, amplitude m, angular speed rad/s].
+// Gentle calm-coast swell. Amplitudes are deliberately small: a first-person
+// swimmer floats with the eye barely above the waterline, so a tall swell would
+// tower crests above the eye and fill the lower view with (currently un-fogged,
+// so black) underwater. Kept low, the surface still rolls and bobs the player
+// without swamping the camera. (Full underwater rendering is a follow-up.)
+const OCEAN_WAVES: readonly [number, number, number, number, number][] = [
+  [1.0, 0.0, 118, 0.12, 0.82],
+  [0.6, 0.8, 67, 0.07, 0.98],
+  [-0.7593, 0.6508, 39, 0.04, 1.2],
+];
+
+/** Exact swell height (m, relative to the base plane) at world (x,z) & time t. */
+function oceanWaveHeight(x: number, z: number, t: number): number {
+  let h = 0;
+  for (const [dx, dz, len, amp, w] of OCEAN_WAVES) {
+    const k = (2 * Math.PI) / len;
+    h += amp * Math.sin(k * (dx * x + dz * z) - w * t);
+  }
+  return h;
+}
+
+/** GLSL for oceanH()/oceanGrad() built from OCEAN_WAVES — one source of truth. */
+function oceanWaveGLSL(): string {
+  let hL = "";
+  let gL = "";
+  for (const [dx, dz, len, amp, w] of OCEAN_WAVES) {
+    const k = (2 * Math.PI) / len;
+    const ph = `${k.toFixed(8)}*(${dx.toFixed(4)}*p.x+${dz.toFixed(4)}*p.y)-${w.toFixed(4)}*t`;
+    hL += `h+=${amp.toFixed(4)}*sin(${ph});`;
+    gL += `g+=${(amp * k).toFixed(8)}*cos(${ph})*vec2(${dx.toFixed(4)},${dz.toFixed(4)});`;
+  }
+  return `
+    float oceanH(vec2 p, float t){ float h=0.0; ${hL} return h; }
+    vec2 oceanGrad(vec2 p, float t){ vec2 g=vec2(0.0); ${gL} return g; }`;
+}
+
+/**
+ * A radial (polar) grid centred on the camera: dense rings near the viewer for
+ * visible waves, growing geometrically to the fog distance so the far ocean is
+ * a cheap coarse sheet. ~rings·sectors verts total. The wave shader fades the
+ * displacement out beyond a near radius (and in the shallows), so the coarse
+ * far rings stay flat and don't alias.
+ */
+function buildOceanGrid(rings: number, sectors: number, r0: number, rMax: number): THREE.BufferGeometry {
+  const pos: number[] = [0, 0, 0]; // centre vertex
+  const ratio = Math.pow(rMax / r0, 1 / (rings - 1));
+  for (let i = 0; i < rings; i++) {
+    const r = r0 * Math.pow(ratio, i);
+    for (let j = 0; j < sectors; j++) {
+      const a = (j / sectors) * Math.PI * 2;
+      pos.push(Math.cos(a) * r, 0, Math.sin(a) * r);
+    }
+  }
+  const idx: number[] = [];
+  for (let j = 0; j < sectors; j++) idx.push(0, 1 + ((j + 1) % sectors), 1 + j); // centre fan
+  for (let i = 0; i < rings - 1; i++) {
+    const base = 1 + i * sectors;
+    const next = 1 + (i + 1) * sectors;
+    for (let j = 0; j < sectors; j++) {
+      const a = base + j;
+      const b = base + ((j + 1) % sectors);
+      const c = next + j;
+      const d = next + ((j + 1) % sectors);
+      idx.push(a, d, c, a, b, d);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeBoundingSphere();
+  return g;
+}
+
 /**
  * Ocean surface material: a translucent MeshStandard blue with an animated
  * ripple normal map (set by the scene) for moving wavelets + travelling sun
@@ -91,16 +171,21 @@ const TIDE_AMP = 0.06;
  * any angle — the moving normals modulate the fresnel into a live shimmer. No
  * white foam yet (deferred).
  */
-/** Flat translucent ocean (the v51 look — no vertex swells). */
-function makeOceanMaterial(): THREE.MeshStandardMaterial {
+/** Translucent ocean. `waves` adds sum-of-sines vertex swell + analytic normal. */
+function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({
-    color: 0x14526e,
-    roughness: 0.13,
-    metalness: 0.22, // reflect the sky HDRI (scene.environment) off the ripples
+    color: 0x1a6389,
+    roughness: 0.18,
+    // Keep metalness LOW: a mirror-like surface viewed steeply (a swimmer looking
+    // down into deep water) reflects the dark water below and reads near-black.
+    // Low metalness keeps the diffuse blue at every angle; the fresnel sheen adds
+    // the bright sky glint at grazing.
+    metalness: 0.1,
     transparent: true,
-    opacity: 0.82,
-    envMapIntensity: 0.8,
+    opacity: 0.9,
+    envMapIntensity: 0.9,
     normalScale: new THREE.Vector2(0.55, 0.55),
+    side: waves ? THREE.DoubleSide : THREE.FrontSide, // see the swell from below
     // Z-fight guard: push ocean fragments deeper so near-coplanar terrain
     // (the flat wet-sand shelf right at the waterline) wins the depth test
     // consistently instead of shimmering between sand and water. Units are
@@ -125,17 +210,60 @@ function makeOceanMaterial(): THREE.MeshStandardMaterial {
   const deep = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
   deep.needsUpdate = true;
   const uCoast = { value: deep as THREE.Texture };
+  const uTime = { value: 0 };
   mat.userData.uCoast = uCoast;
+  mat.userData.uTime = uTime;
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uSky = { value: sky };
     sh.uniforms.uCoast = uCoast;
-    sh.vertexShader = sh.vertexShader
-      .replace("#include <common>", "#include <common>\nvarying vec3 vOceanWpos;")
-      .replace(
-        "#include <project_vertex>",
-        `#include <project_vertex>
+    sh.uniforms.uTime = uTime;
+    if (waves) {
+      // Sum-of-sines swell: displace Y and set an ANALYTIC normal so the surface
+      // shades as real waves. Faded out beyond a near radius (so the coarse far
+      // rings stay flat, no aliasing) and in the shallows (so the swell never
+      // walks the shoreline the way a vertical tide would).
+      sh.vertexShader = sh.vertexShader
+        .replace(
+          "#include <common>",
+          `#include <common>
+          varying vec3 vOceanWpos;
+          uniform float uTime;
+          ${oceanWaveGLSL()}
+          float wH; // filled in beginnormal, reused in begin_vertex`,
+        )
+        .replace(
+          "#include <beginnormal_vertex>",
+          `#include <beginnormal_vertex>
+          vec3 wWp = (modelMatrix * vec4(position, 1.0)).xyz;
+          // Distance fade only — no vertex texture fetch (unreliable on some
+          // mobile GPUs / swiftshader → NaN → black triangles). Shallow-water
+          // waves are simply hidden by the fragment coast-alpha, and the CPU
+          // buoyancy applies its own shore fade so the swell never walks the
+          // shoreline.
+          float wFade = 1.0 - smoothstep(180.0, 1400.0, length(wWp.xz - cameraPosition.xz));
+          wH = oceanH(wWp.xz, uTime) * wFade;
+          vec2 wG = oceanGrad(wWp.xz, uTime) * wFade;
+          objectNormal = normalize(vec3(-wG.x, 1.0, -wG.y));`,
+        )
+        .replace(
+          "#include <begin_vertex>",
+          `#include <begin_vertex>
+          transformed.y += wH;`,
+        )
+        .replace(
+          "#include <project_vertex>",
+          `#include <project_vertex>
+          vOceanWpos = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
+        );
+    } else {
+      sh.vertexShader = sh.vertexShader
+        .replace("#include <common>", "#include <common>\nvarying vec3 vOceanWpos;")
+        .replace(
+          "#include <project_vertex>",
+          `#include <project_vertex>
         vOceanWpos = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
-      );
+        );
+    }
     sh.fragmentShader = sh.fragmentShader
       .replace(
         "#include <common>",
@@ -169,13 +297,12 @@ function makeOceanMaterial(): THREE.MeshStandardMaterial {
         "#include <lights_fragment_end>",
         `#include <lights_fragment_end>
         {
-          // Fresnel sky sheen, but CAPPED at grazing angles: an uncapped fres→1
-          // at the horizon blew the far ocean plane out to a bright white band
-          // (the high wide flyover shots). Clamp the grazing contribution so the
-          // sheen reads as a soft glint, not a white strip, and let fog carry the
-          // far surface into the sky.
+          // Fresnel sky sheen. The wave NORMALS now break grazing angles into
+          // sparkle instead of one uniform strip, so we can brighten it back up
+          // (the near-black deep water in the flat-surface era) without the old
+          // white-band blowout — the cap only tames the flattest far rings.
           float fres = pow(1.0 - clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0), 3.0);
-          totalEmissiveRadiance += uSky * min(fres, 0.5) * 0.18;
+          totalEmissiveRadiance += uSky * min(fres, 0.85) * 0.5;
         }`,
       );
   };
@@ -232,6 +359,9 @@ class KauaiStreamScene implements IScene {
   private wasSwimming = false;
   private wasSubmerged = false;
   private wasInWater = false;
+  private wasUnderwater = false;
+  private airFog!: THREE.Fog; // light haze above water
+  private uwFog!: THREE.Fog; // dense teal below the surface
   // Environmental ambience: the currently-sounding bed + a debounce for the next.
   private ambZone = "";
   private pendingZone = "";
@@ -291,7 +421,11 @@ class KauaiStreamScene implements IScene {
     // Neutral light haze (not saturated sky-blue) pushed far out, so distant
     // terrain keeps its colour and only melts into a soft horizon haze rather
     // than a blue fade. With streamer radius 2 the loaded edge sits past this.
-    this.scene.fog = new THREE.Fog(0xbcc6cc, 6500, 17000);
+    // Underwater the fog swaps to dense teal (see the swim physics) so dipping
+    // below the surface reads as being IN the water, not a black void.
+    this.airFog = new THREE.Fog(0xbcc6cc, 6500, 17000);
+    this.uwFog = new THREE.Fog(0x0a3f52, 0.5, 24);
+    this.scene.fog = this.airFog;
 
     // Sky HDRI (ambientCG, CC0): EXR → PMREM environment for real sky
     // reflections + image-based light; the tonemapped JPG is the cheap visible
@@ -303,26 +437,18 @@ class KauaiStreamScene implements IScene {
     this.scene.add(sun);
     this.loadSky();
 
-    // Ocean plane at sea level, follows the camera in XZ. An animated ripple
-    // normal map gives moving wavelets + travelling specular glints (no foam).
-    const waterMat = makeOceanMaterial();
-    const water = new THREE.Mesh(new THREE.PlaneGeometry(WATER_SIZE, WATER_SIZE), waterMat);
-    water.geometry.rotateX(-Math.PI / 2);
-    // Sit the surface a touch below the 0 m waterline so the terrain's soft
-    // wet-sand → reef fade forms the shoreline, not a hard water edge.
-    water.position.set(this.spawnX, WATER_Y, this.spawnZ);
+    // Ocean: a camera-centred radial grid (dense near the viewer, coarse to the
+    // fog) carrying a sum-of-sines swell in the vertex shader, so the surface
+    // visibly rolls and the player bobs on it (see oceanHeightAt / followWater).
+    // The swell fades out far away and in the shallows, leaving the coast fade to
+    // own the shoreline.
+    const waterMat = makeOceanMaterial(true);
+    const water = new THREE.Mesh(buildOceanGrid(56, 96, 3, 18000), waterMat);
+    water.position.set(this.camera.position.x, WATER_Y, this.camera.position.z);
+    water.frustumCulled = false; // camera-centred; its bounds always surround us
     water.renderOrder = -1;
     this.scene.add(water);
     this.water = water;
-    void loadTexture("assets/textures/water_normal.png").then((tex) => {
-      if (!tex) return;
-      tex.colorSpace = THREE.NoColorSpace; // normal maps are linear data
-      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-      tex.repeat.set(WATER_REPEAT, WATER_REPEAT);
-      waterMat.normalMap = tex;
-      waterMat.needsUpdate = true;
-      this.waterNormal = tex;
-    });
     // Swap in the baked coastline mask (see makeOceanMaterial). Until it
     // arrives the placeholder shows plain ocean everywhere — same as v74.
     void loadTexture("assets/terrain/kauai/coast_mask.png").then((tex) => {
@@ -763,7 +889,12 @@ class KauaiStreamScene implements IScene {
         // ground (huge negative depth) so the river level wins; at the coast with
         // no waterway the river term is absent and the ocean owns the surface.
         const riverLvl = this.hydro?.waterLevelAt(x, z);
-        const surfY = Math.max(waterY, riverLvl ?? -Infinity);
+        // Ocean surface here = base/tide + the swell (faded out in the shallows,
+        // exactly matching the shader's wShore), so a swimmer BOBS on the waves
+        // while the shoreline stays put. Rivers/lakes are flat pools.
+        const shoreF = Math.min(1, Math.max(0, (-1 - ground) / 3));
+        const oceanSurf = waterY + oceanWaveHeight(x, z, this.waterT) * shoreF;
+        const surfY = Math.max(oceanSurf, riverLvl ?? -Infinity);
         if (!this.grounded) {
           this.feetY = Math.max(ground, surfY);
           this.grounded = true;
@@ -839,6 +970,14 @@ class KauaiStreamScene implements IScene {
         }
         this.camera.position.y = this.feetY + this.eye;
 
+        // Underwater fog: when the eye drops below the water surface, swap the
+        // haze for dense teal so diving/dipping reads as being IN the water.
+        const underwater = this.camera.position.y < surfY - 0.02;
+        if (underwater !== this.wasUnderwater) {
+          this.scene.fog = underwater ? this.uwFog : this.airFog;
+          this.wasUnderwater = underwater;
+        }
+
         // ── Water SFX edges + environmental ambience (elevation/terrain hybrid) ──
         const submerged = swimming && this.sub > 0.02;
         const inWater = depth > WATER_ENTER;
@@ -905,19 +1044,16 @@ class KauaiStreamScene implements IScene {
     }
   }
 
-  /** Ocean plane + ripple UVs follow the camera in XZ (world-locked ripples).
-   *  `planeY` is held constant (WATER_Y) so the shoreline never walks in/out —
-   *  see the tide comment in update(); the coast mask owns the waterline. */
+  /** The camera-centred ocean grid follows the viewer in XZ; the swell itself is
+   *  world-locked (phase uses world XZ) so it doesn't swim as you move. `planeY`
+   *  is the constant base (WATER_Y) — the coast mask owns the waterline. */
   private followWater(planeY: number): void {
     if (!this.water) return;
     this.water.position.set(this.camera.position.x, planeY, this.camera.position.z);
-    if (this.waterNormal) {
-      const uvpm = WATER_REPEAT / WATER_SIZE;
-      this.waterNormal.offset.set(
-        this.camera.position.x * uvpm + this.waterT * 0.014,
-        this.camera.position.z * uvpm + this.waterT * 0.01,
-      );
-    }
+    const uTime = (this.water.material as THREE.Material).userData.uTime as
+      | { value: number }
+      | undefined;
+    if (uTime) uTime.value = this.waterT;
   }
 
   // ─── Arrival cinematic: black journal → SFX → stream the world → flyover ─────
