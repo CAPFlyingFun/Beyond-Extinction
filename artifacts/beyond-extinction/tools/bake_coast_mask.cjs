@@ -31,9 +31,16 @@ const WORLD = 56000; // full world extent (m) — must match the shader mapping
 const N = 2048; // mask resolution (~27.3 m/px)
 
 // Ocean fades in between these ground heights (m). HIDDEN_G must stay below
-// WATER_Y − TIDE_AMP (−0.46) or the plane z-fights near-coplanar sand.
+// WATER_Y − TIDE_AMP (−0.46) or the plane z-fights near-coplanar sand; keeping
+// it at −0.5 pins the up-close shoreline exactly where it reads well on the
+// beach. VISIBLE_G is pushed DEEP (−3 m) so the ocean only reaches full opacity
+// once the seabed is clearly below the surface: across the shallow reef shelf
+// (−0.5 … −3 m) the plane stays faint, so even where it ties the seabed in the
+// depth test the flicker is nearly invisible (was a hard turquoise band that
+// shimmered on/off in the high flyover). The long ramp also reads as real
+// reef-shallow turquoise fading to open-ocean blue.
 const HIDDEN_G = -0.5;
-const VISIBLE_G = -1.6;
+const VISIBLE_G = -3.0;
 // Sea/land split used ONLY for connectivity (generous: anything below the old
 // waterline can carry the flood fill through shallow shelf strips).
 const CONNECT_G = -0.15;

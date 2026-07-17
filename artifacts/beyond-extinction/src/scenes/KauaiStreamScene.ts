@@ -99,16 +99,19 @@ function makeOceanMaterial(): THREE.MeshStandardMaterial {
     metalness: 0.22, // reflect the sky HDRI (scene.environment) off the ripples
     transparent: true,
     opacity: 0.82,
-    envMapIntensity: 1.1,
+    envMapIntensity: 0.8,
     normalScale: new THREE.Vector2(0.55, 0.55),
     // Z-fight guard: push ocean fragments deeper so near-coplanar terrain
     // (the flat wet-sand shelf right at the waterline) wins the depth test
     // consistently instead of shimmering between sand and water. Units are
-    // deliberately generous: at multi-km distances one 24-bit depth step is
-    // metres, so 1/1 still tied on flat far beaches (v76 shimmer).
+    // deliberately generous AND distance-adaptive: a depth-buffer unit is a
+    // fraction of a millimetre up close but grows to metres at multi-km range,
+    // so a large unit count barely moves the near shoreline yet decisively
+    // sinks the ocean behind the shallow reef shelf in the high wide flyover
+    // shots (where the shelf and the plane were near-coplanar and shimmered).
     polygonOffset: true,
     polygonOffsetFactor: 2,
-    polygonOffsetUnits: 4,
+    polygonOffsetUnits: 12,
   });
   const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
   // Baked coastline mask (tools/bake_coast_mask.cjs →
@@ -154,8 +157,13 @@ function makeOceanMaterial(): THREE.MeshStandardMaterial {
         "#include <lights_fragment_end>",
         `#include <lights_fragment_end>
         {
+          // Fresnel sky sheen, but CAPPED at grazing angles: an uncapped fres→1
+          // at the horizon blew the far ocean plane out to a bright white band
+          // (the high wide flyover shots). Clamp the grazing contribution so the
+          // sheen reads as a soft glint, not a white strip, and let fog carry the
+          // far surface into the sky.
           float fres = pow(1.0 - clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0), 3.0);
-          totalEmissiveRadiance += uSky * fres * 0.35; // subtle sheen atop the HDRI reflection
+          totalEmissiveRadiance += uSky * min(fres, 0.5) * 0.18;
         }`,
       );
   };
