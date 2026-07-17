@@ -39,6 +39,18 @@ const UV_M = 8; // metres per ripple-normal repeat (same wavelength as the ocean
 const RIVER_SCROLL = 0.05; // u/s ≈ 0.4 m/s downstream drift
 const LAKE_DRIFT = { x: 0.014, y: 0.01 }; // ocean's ripple drift (u/s)
 
+// Grid-joint cascades: a fast whitewater streak laid along the flow wherever a
+// waterway crosses a tile boundary, so the seam between two per-tile ribbons
+// reads as continuous tumbling rapids rather than a visible join. The streak is
+// centred on the crossing and runs CASCADE_LEN along the flow direction (well
+// past the seam on both sides), so it stays put and looks the same no matter
+// which side's tile faded in first.
+const GRID_LINES = [-21000, -14000, -7000, 0, 7000, 14000, 21000]; // tile seams (m)
+const CASCADE_LEN = 64; // m — whitewater streak length along flow, spanning the seam
+const CASCADE_STATIONS = 12; // vertices along the streak (smooth follow of the bed)
+const CASCADE_SCROLL = 0.55; // v/s — fast tumble so it reads as rapids, not still water
+const CASCADE_LIFT = 0.06; // m above the ribbon surface so the foam sits on top
+
 /**
  * Ocean-family water material (see KauaiStreamScene.makeOceanMaterial).
  *
@@ -371,6 +383,102 @@ function buildLake(
   }
 }
 
+/** Bright foam material for the grid-joint cascades — translucent whitewater
+ *  that scrolls fast along the flow. depthWrite off + a negative polygon offset
+ *  so it blends cleanly on TOP of the river ribbon it overlays. */
+function makeCascadeMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: 0xdff2f5,
+    roughness: 0.55,
+    metalness: 0.0,
+    transparent: true,
+    opacity: 0.72,
+    emissive: new THREE.Color(0xbfe4ea),
+    emissiveIntensity: 0.28,
+    side: THREE.DoubleSide,
+    normalScale: new THREE.Vector2(0.9, 0.9),
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -3,
+    polygonOffsetUnits: -6,
+  });
+}
+
+/** One point where a river polyline crosses a tile-boundary grid line. */
+interface Crossing {
+  x: number;
+  z: number;
+  dx: number; // unit flow direction (downstream)
+  dz: number;
+  w: number; // river width here (m)
+}
+
+/** Every tile-boundary crossing along one run, with the local flow direction. */
+function runCrossings(run: HydroRiver): Crossing[] {
+  const out: Crossing[] = [];
+  const pts = run.pts;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const w = (a[3] + b[3]) / 2;
+    let dx = b[0] - a[0];
+    let dz = b[2] - a[2];
+    const len = Math.hypot(dx, dz) || 1;
+    dx /= len;
+    dz /= len;
+    for (const B of GRID_LINES) {
+      if ((a[0] - B) * (b[0] - B) < 0) {
+        const t = (B - a[0]) / (b[0] - a[0]);
+        out.push({ x: B, z: a[2] + t * (b[2] - a[2]), dx, dz, w });
+      }
+      if ((a[2] - B) * (b[2] - B) < 0) {
+        const t = (B - a[2]) / (b[2] - a[2]);
+        out.push({ x: a[0] + t * (b[0] - a[0]), z: B, dx, dz, w });
+      }
+    }
+  }
+  return out;
+}
+
+/** Build a whitewater streak at every grid-joint crossing of these runs. The
+ *  streak is a thin strip centred on the crossing, running CASCADE_LEN along the
+ *  flow, draped a hair above the water surface so it masks the per-tile seam. */
+function buildCascades(
+  rivers: HydroRiver[],
+  positions: number[],
+  uvs: number[],
+  indices: number[],
+  surfaceY: (x: number, z: number) => number,
+): void {
+  for (const run of rivers) {
+    for (const c of runCrossings(run)) {
+      const px = -c.dz; // perpendicular to flow (XZ)
+      const pz = c.dx;
+      const halfW = Math.min(Math.max(c.w * 0.6, 3), 14);
+      // Anchor the whole streak to the water surface AT the crossing — that
+      // point always sits over this chunk's own just-built ribbon, so it reads
+      // the true (smoothed, near-flat) pool level. Sampling per-station instead
+      // would fall back to bed+fill on the neighbour side (ribbon not built yet)
+      // and push the foam metres under/over the water on steep ground.
+      const y = surfaceY(c.x, c.z) + CASCADE_LIFT;
+      const base = positions.length / 3;
+      for (let s = 0; s < CASCADE_STATIONS; s++) {
+        const f = s / (CASCADE_STATIONS - 1) - 0.5; // -0.5 … 0.5 along flow
+        const cx = c.x + c.dx * (CASCADE_LEN * f);
+        const cz = c.z + c.dz * (CASCADE_LEN * f);
+        const v = (f + 0.5) * (CASCADE_LEN / UV_M);
+        positions.push(cx + px * halfW, y, cz + pz * halfW);
+        positions.push(cx - px * halfW, y, cz - pz * halfW);
+        uvs.push(0, v, 1, v);
+      }
+      for (let s = 0; s < CASCADE_STATIONS - 1; s++) {
+        const a = base + s * 2;
+        indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+      }
+    }
+  }
+}
+
 /** Even-odd point-in-polygon in world XZ. */
 function insideRing(x: number, z: number, ring: [number, number][]): boolean {
   let inside = false;
@@ -428,8 +536,10 @@ export class KauaiHydro {
   private readonly riverLeads = new Map<HydroRiver, { in: Pt4[]; out: Pt4[] }>();
   private riverMat: THREE.MeshStandardMaterial;
   private lakeMat: THREE.MeshStandardMaterial;
+  private cascadeMat: THREE.MeshStandardMaterial;
   private riverNormal?: THREE.Texture;
   private lakeNormal?: THREE.Texture;
+  private cascadeNormal?: THREE.Texture;
   private t = 0;
   private disposed = false;
   private loaded = false;
@@ -449,6 +559,7 @@ export class KauaiHydro {
     // bed; lakes sink like the ocean so their rim hides in the bank.
     this.riverMat = makeWaterMaterial(0x175b66, false);
     this.lakeMat = makeWaterMaterial(0x14526e, true);
+    this.cascadeMat = makeCascadeMaterial();
     void this.loadNormals();
     void this.load();
   }
@@ -462,13 +573,18 @@ export class KauaiHydro {
       t.needsUpdate = true;
       return t;
     };
-    // independent clones: rivers scroll downstream, lakes drift like the ocean
+    // independent clones: rivers scroll downstream, lakes drift like the ocean,
+    // cascades tumble fast along the flow
     this.riverNormal = prep(tex.clone());
     this.lakeNormal = prep(tex.clone());
+    this.cascadeNormal = prep(tex.clone());
+    this.cascadeNormal.repeat.set(1, 3); // more foam detail packed along the flow
     this.riverMat.normalMap = this.riverNormal;
     this.riverMat.needsUpdate = true;
     this.lakeMat.normalMap = this.lakeNormal;
     this.lakeMat.needsUpdate = true;
+    this.cascadeMat.normalMap = this.cascadeNormal;
+    this.cascadeMat.needsUpdate = true;
   }
 
   private async load(): Promise<void> {
@@ -699,6 +815,16 @@ export class KauaiHydro {
       this.riverMat,
       `hydro-${c.tile}-rivers`,
     );
+    // Grid-joint cascades — built AFTER the ribbons so surfaceY can read this
+    // chunk's just-built water samples; falls back to the carved bed + fill
+    // depth where a neighbour ribbon across the seam hasn't built yet.
+    const surfaceY = (x: number, z: number): number =>
+      this.waterLevelAt(x, z) ?? groundY(x, z) + FILL_DEPTH;
+    make(
+      (p, u, i) => buildCascades(c.rivers, p, u, i, surfaceY),
+      this.cascadeMat,
+      `hydro-${c.tile}-cascades`,
+    );
     make(
       (p, u, i) => {
         for (const l of c.lakes) buildLake(l, p, u, i);
@@ -715,6 +841,9 @@ export class KauaiHydro {
     if (this.lakeNormal) {
       this.lakeNormal.offset.set(this.t * LAKE_DRIFT.x, this.t * LAKE_DRIFT.y);
     }
+    // Cascades tumble downstream (v runs 0→len along the flow) — fast scroll so
+    // the seam reads as churning rapids.
+    if (this.cascadeNormal) this.cascadeNormal.offset.set(0, -this.t * CASCADE_SCROLL);
     for (const c of this.chunks.values()) {
       const ready = streamer.tileReadyAt(c.cx, c.cz);
       // Build only once the 4 orthogonal neighbour tiles are also resident, so
@@ -759,8 +888,10 @@ export class KauaiHydro {
     this.chunks.clear();
     this.riverMat.dispose();
     this.lakeMat.dispose();
+    this.cascadeMat.dispose();
     this.riverNormal?.dispose();
     this.lakeNormal?.dispose();
+    this.cascadeNormal?.dispose();
     this.scene.remove(this.group);
   }
 }
