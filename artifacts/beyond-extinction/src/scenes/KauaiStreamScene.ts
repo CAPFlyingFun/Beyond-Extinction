@@ -115,18 +115,16 @@ function makeOceanMaterial(): THREE.MeshStandardMaterial {
   });
   const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
   // Baked coastline mask (tools/bake_coast_mask.cjs →
-  // public/assets/terrain/kauai/coast_mask.png): world-locked alpha that fades
-  // the ocean out wherever the terrain is near or above the plane (hidden at
-  // ground ≥ −0.5 m — below the lowest tide the plane reaches — fully visible
-  // at ≤ −1.6 m), and is zeroed over below-sea-level ground NOT flood-fill
-  // connected to the open sea (Mānā-plain ditches etc. must not show ocean).
-  // The old plane relied on the depth test alone, so on near-flat sand a few
-  // centimetres of tide (or one coarse mesh facet) walked the visible
-  // waterline tens of metres inland — "shoreline creep". Starts as a 1×1
-  // white placeholder (mask everywhere = plain ocean) until the PNG loads.
-  const white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
-  white.needsUpdate = true;
-  const uCoast = { value: white as THREE.Texture };
+  // public/assets/terrain/kauai/coast_mask.png): world-locked GROUND HEIGHT
+  // (encoded over [−8, +2] m) that the shader fades to alpha by height AND
+  // camera distance — a tight up-close shoreline that opens out far away so the
+  // shallow shelf can't shimmer in the flyover. Below-sea-level ground NOT
+  // flood-fill connected to the open sea (Mānā-plain ditches etc.) is baked to
+  // the land sentinel so it never shows ocean. Starts as a 1×1 deep-ocean
+  // placeholder (enc 0 → ground −8 m → plain ocean everywhere) until it loads.
+  const deep = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+  deep.needsUpdate = true;
+  const uCoast = { value: deep as THREE.Texture };
   mat.userData.uCoast = uCoast;
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uSky = { value: sky };
@@ -147,8 +145,22 @@ function makeOceanMaterial(): THREE.MeshStandardMaterial {
         "#include <map_fragment>",
         `#include <map_fragment>
         {
-          // island spans 56 km centred on origin — same mapping the bake used
-          float coast = texture2D(uCoast, vOceanWpos.xz / 56000.0 + 0.5).r;
+          // coast_mask stores the CLAMPED GROUND HEIGHT (see bake_coast_mask.cjs),
+          // decoded here over [-8, +2] m. island spans 56 km centred on origin.
+          float enc = texture2D(uCoast, vOceanWpos.xz / 56000.0 + 0.5).r;
+          float ground = -8.0 + enc * 10.0;
+          // DISTANCE-ADAPTIVE shoreline: near the camera keep a tight waterline
+          // (fade in from just below the plane), but far away raise the hide
+          // threshold so the whole shallow reef shelf goes transparent — that
+          // near-coplanar sheet is what shimmered on/off in the moving high
+          // flyover (far + >30° grazing). Deep water stays full ocean at any
+          // distance, so only the thin shelf band is affected.
+          float camDist = distance(vOceanWpos, cameraPosition);
+          float f = clamp((camDist - 350.0) / 2650.0, 0.0, 1.0); // 0 @350 m → 1 @3 km
+          float hiddenG = mix(-0.5, -2.8, f);   // ground at/above → no ocean
+          float visibleG = mix(-1.8, -5.5, f);  // ground at/below → full ocean
+          float t = clamp((ground - hiddenG) / (visibleG - hiddenG), 0.0, 1.0);
+          float coast = t * t * (3.0 - 2.0 * t); // smoothstep
           diffuseColor.a *= coast;
           if (diffuseColor.a < 0.01) discard;
         }`,

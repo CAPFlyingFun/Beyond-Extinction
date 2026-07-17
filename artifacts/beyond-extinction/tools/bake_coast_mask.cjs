@@ -30,17 +30,13 @@ const HALF = 28000; // half world extent (m)
 const WORLD = 56000; // full world extent (m) — must match the shader mapping
 const N = 2048; // mask resolution (~27.3 m/px)
 
-// Ocean fades in between these ground heights (m). HIDDEN_G must stay below
-// WATER_Y − TIDE_AMP (−0.46) or the plane z-fights near-coplanar sand; keeping
-// it at −0.5 pins the up-close shoreline exactly where it reads well on the
-// beach. VISIBLE_G is pushed DEEP (−3 m) so the ocean only reaches full opacity
-// once the seabed is clearly below the surface: across the shallow reef shelf
-// (−0.5 … −3 m) the plane stays faint, so even where it ties the seabed in the
-// depth test the flicker is nearly invisible (was a hard turquoise band that
-// shimmered on/off in the high flyover). The long ramp also reads as real
-// reef-shallow turquoise fading to open-ocean blue.
-const HIDDEN_G = -0.5;
-const VISIBLE_G = -3.0;
+// The mask now stores the CLAMPED GROUND HEIGHT (not a pre-baked alpha) so the
+// ocean shader can fade by ground height AND camera distance at draw time: keep
+// the tight up-close shoreline, but far away (the high flyover) hide the ocean
+// over the whole shallow shelf so there is no near-coplanar sheet left to
+// shimmer. Ground is encoded linearly over [GENC_MIN, GENC_MAX] → 0..255.
+const GENC_MIN = -8; // ground ≤ −8 m → 0   (deep water, always ocean)
+const GENC_MAX = 2; //  ground ≥ +2 m → 255 (land, never ocean)
 // Sea/land split used ONLY for connectivity (generous: anything below the old
 // waterline can carry the flood fill through shallow shelf strips).
 const CONNECT_G = -0.15;
@@ -134,12 +130,16 @@ console.log("writing mask…");
 const out = new PNG({ width: N, height: N });
 let pocketPx = 0;
 for (let p = 0; p < N * N; p++) {
-  let a = smoothstep(HIDDEN_G, VISIBLE_G, g[p]);
-  if (a > 0 && !conn[p]) {
-    a = 0; // inland pocket — never ocean
+  // Store the clamped ground height. Inland pockets (below sea level but NOT
+  // flood-connected to the open sea) are forced to the land sentinel so the
+  // shader's height→alpha fade zeroes them regardless of depth.
+  let ground = g[p];
+  if (ground < 0 && !conn[p]) {
+    ground = GENC_MAX; // inland pocket — never ocean
     pocketPx++;
   }
-  const v = Math.round(a * 255);
+  const t = Math.min(1, Math.max(0, (ground - GENC_MIN) / (GENC_MAX - GENC_MIN)));
+  const v = Math.round(t * 255);
   const o = p * 4;
   out.data[o] = v;
   out.data[o + 1] = v;
