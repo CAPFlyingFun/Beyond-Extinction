@@ -14,6 +14,7 @@ import { TerrainEditor } from "./TerrainEditor";
 import { TerrainEdit } from "./TerrainEdit";
 import { DevAccess } from "./DevAccess";
 import { createKauaiStreamScene, createKauaiArrivalScene } from "../scenes/KauaiStreamScene";
+import { createWaterLabScene } from "../scenes/WaterLabScene";
 import type { SceneContext, SceneFactory } from "./IScene";
 
 /**
@@ -152,15 +153,17 @@ export class Game {
     // player on the live site can't URL-skip the intro; on the deployed build
     // the same jump is still reachable through the PIN-gated Dev menu's
     // "Skip to Island".
-    const skipTo = import.meta.env.DEV
-      ? new URLSearchParams(location.search).get("skip")
-      : null;
+    const params = import.meta.env.DEV ? new URLSearchParams(location.search) : null;
+    const skipTo = params?.get("skip") ?? null;
+    const sceneTo = params?.get("scene") ?? null;
     const first =
-      skipTo === "island"
-        ? createKauaiArrivalScene // ?skip=island → the Chapter-Two arrival cinematic
-        : skipTo === "kauai"
-          ? createKauaiStreamScene // ?skip=kauai → straight into first person
-          : initial;
+      sceneTo === "waterlab"
+        ? createWaterLabScene // ?scene=waterlab → isolated 3×3 water R&D testbed
+        : skipTo === "island"
+          ? createKauaiArrivalScene // ?skip=island → the Chapter-Two arrival cinematic
+          : skipTo === "kauai"
+            ? createKauaiStreamScene // ?skip=kauai → straight into first person
+            : initial;
     await this.scenes.goTo(first, false);
     this.running = true;
     this.lastTime = performance.now();

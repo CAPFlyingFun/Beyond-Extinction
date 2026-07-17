@@ -76,7 +76,7 @@ interface FlyWp {
 const SPAWN = { x: 20900, z: 1288, facing: 270 };
 const WATER_SIZE = 80000; // ocean plane extent (m)
 const WATER_REPEAT = 10000; // ripple normal repeats → ~8 m wavelength
-const WATER_Y = -0.4; // surface just below the 0 m waterline (soft shoreline)
+export const WATER_Y = -0.4; // surface just below the 0 m waterline (soft shoreline)
 // Tide breathe amplitude (m). Deliberately whisper-small: the coastal flats are
 // nearly level, so a ±0.5 m vertical swing walked the shoreline hundreds of
 // metres inland and back every few seconds (the "jumping waterline" seen from
@@ -103,7 +103,7 @@ const OCEAN_WAVES: readonly [number, number, number, number, number][] = [
 ];
 
 /** Exact swell height (m, relative to the base plane) at world (x,z) & time t. */
-function oceanWaveHeight(x: number, z: number, t: number): number {
+export function oceanWaveHeight(x: number, z: number, t: number): number {
   let h = 0;
   for (const [dx, dz, len, amp, w] of OCEAN_WAVES) {
     const k = (2 * Math.PI) / len;
@@ -134,7 +134,7 @@ function oceanWaveGLSL(): string {
  * displacement out beyond a near radius (and in the shallows), so the coarse
  * far rings stay flat and don't alias.
  */
-function buildOceanGrid(rings: number, sectors: number, r0: number, rMax: number): THREE.BufferGeometry {
+export function buildOceanGrid(rings: number, sectors: number, r0: number, rMax: number): THREE.BufferGeometry {
   const pos: number[] = [0, 0, 0]; // centre vertex
   const ratio = Math.pow(rMax / r0, 1 / (rings - 1));
   for (let i = 0; i < rings; i++) {
@@ -172,7 +172,7 @@ function buildOceanGrid(rings: number, sectors: number, r0: number, rMax: number
  * white foam yet (deferred).
  */
 /** Translucent ocean. `waves` adds sum-of-sines vertex swell + analytic normal. */
-function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
+export function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({
     color: 0x1a6389,
     roughness: 0.18,
