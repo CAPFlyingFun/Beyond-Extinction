@@ -1244,9 +1244,13 @@ class KauaiStreamScene implements IScene {
       return v;
     };
     const wps: FlyWp[] = [
-      { p: P(2200, 900), l: P(-800, 130), d: 0 }, // far/high reveal of the whole island
-      { p: P(1750, 430), l: P(-200, 45), d: 5.0 },
-      { p: P(1350, 80), l: P(560, 8), d: 4.5 }, // descend toward the water
+      // Low sea-skimming approach (replaces the old far/high reveal): start just
+      // 100 m up, far out over open water, and descend to skim the surface — so
+      // the camera never takes the high, far, grazing angle over the shallow reef
+      // shelf that made the ocean/seabed z-fight visible.
+      { p: P(2500, 100), l: P(-200, 90), d: 0 }, // far/low reveal of the island ahead
+      { p: P(2000, 20), l: P(400, 18), d: 5.0 }, // drop toward the water, aim at the coast
+      { p: P(1500, 5), l: P(820, -3), d: 4.5 }, // skim the surface, aim at the dive point
       { p: P(1180, -12), l: P(720, -8), d: 3.0 }, // DIVE under
       { p: P(1010, -16), l: P(560, -11), d: 3.0 },
       { p: P(840, -7), l: P(430, -4), d: 3.0 }, // surfacing
