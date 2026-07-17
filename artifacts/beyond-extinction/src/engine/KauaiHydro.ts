@@ -34,6 +34,9 @@ const FILL_DEPTH = 2.4; // target water depth above the carved bed (m) — swimm
 const BANK_FREEBOARD = 0.05; // keep the surface this far below the trench rim (m)
 const EDGE_SMOOTH = 4; // ± samples averaged to smooth the canal width (curved banks)
 const UV_M = 8; // metres per ripple-normal repeat (same wavelength as the ocean)
+const BED_UV_M = 3.5; // metres per riverbed-texture tile (pebble scale under the water)
+const BED_LIFT = 0.1; // streambed sits this far above the carved terrain (kills z-fight)
+const BED_SINK = 0.06; // …but always at least this far below the water surface
 const RIVER_SCROLL = 0.05; // u/s ≈ 0.4 m/s downstream drift
 const LAKE_DRIFT = { x: 0.014, y: 0.01 }; // ocean's ripple drift (u/s)
 
@@ -184,6 +187,7 @@ function buildRibbon(
   samples: RiverSample[],
   leadIn: Pt4[],
   leadOut: Pt4[],
+  bed: { pos: number[]; uv: number[]; idx: number[] },
 ): void {
   // GHOST CONTEXT: the bake splits each river into per-tile runs that share
   // exact endpoints, but if every piece is smoothed/filled from ITS points
@@ -322,12 +326,27 @@ function buildRibbon(
   }
   if (i0 > i1) [i0, i1] = [i1, i0];
   const base = positions.length / 3;
+  const bedBase = bed.pos.length / 3;
   let emitted = 0;
   for (let i = i0; i <= i1; i++) {
     const c = cs[i];
-    positions.push(c.x + c.px * hL[i], level[i], c.z + c.pz * hL[i]);
-    positions.push(c.x - c.px * hR[i], level[i], c.z - c.pz * hR[i]);
+    const lx = c.x + c.px * hL[i];
+    const lz = c.z + c.pz * hL[i];
+    const rx = c.x - c.px * hR[i];
+    const rz = c.z - c.pz * hR[i];
+    positions.push(lx, level[i], lz);
+    positions.push(rx, level[i], rz);
     uvs.push(c.u, 0, c.u, (hL[i] + hR[i]) / UV_M);
+    // Streambed: a textured sheet on the CARVED bed under the (translucent)
+    // water — left edge, centre, right edge, each dropped to the real ground but
+    // always kept just under the surface so it never pokes through. World-planar
+    // UVs so the pebble scale is constant and doesn't stretch on wide reaches.
+    const cap = level[i] - BED_SINK;
+    const by = (x: number, z: number): number => Math.min(groundY(x, z) + BED_LIFT, cap);
+    bed.pos.push(lx, by(lx, lz), lz);
+    bed.pos.push(c.x, by(c.x, c.z), c.z);
+    bed.pos.push(rx, by(rx, rz), rz);
+    bed.uv.push(lx / BED_UV_M, lz / BED_UV_M, c.x / BED_UV_M, c.z / BED_UV_M, rx / BED_UV_M, rz / BED_UV_M);
     // Water-level query sample (for swim physics), decimated every 3rd
     // cross-section (~18 m apart) — the generous half reach overlaps the gaps,
     // and the caller's depth = level − ground test discards any dry-bank
@@ -341,6 +360,10 @@ function buildRibbon(
     const a = base + k * 2;
     // two triangles per quad, wound for +Y normals
     indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+    // Streambed: two quad strips (left→centre, centre→right) per span.
+    const b = bedBase + k * 3;
+    bed.idx.push(b, b + 3, b + 1, b + 1, b + 3, b + 4); // left strip
+    bed.idx.push(b + 1, b + 4, b + 2, b + 2, b + 4, b + 5); // right strip
   }
 }
 
@@ -529,9 +552,11 @@ export class KauaiHydro {
   private riverMat: THREE.MeshStandardMaterial;
   private lakeMat: THREE.MeshStandardMaterial;
   private cascadeMat: THREE.MeshStandardMaterial;
+  private bedMat: THREE.MeshStandardMaterial;
   private riverNormal?: THREE.Texture;
   private lakeNormal?: THREE.Texture;
   private cascadeNormal?: THREE.Texture;
+  private bedTex?: THREE.Texture;
   private t = 0;
   private disposed = false;
   private loaded = false;
@@ -550,11 +575,38 @@ export class KauaiHydro {
     // toward the camera (sink = false) so the thin channel sheet beats its
     // bed; lakes sink like the ocean so their rim hides in the bank.
     this.riverMat = makeWaterMaterial(0x175b66, false);
-    this.riverMat.opacity = 0.9; // less see-through so the pale bed doesn't wash out the shallows
+    this.riverMat.opacity = 0.68; // see-through enough that the pebble streambed reads under it
     this.lakeMat = makeWaterMaterial(0x14526e, true);
     this.cascadeMat = makeCascadeMaterial();
+    // Wet river-stone bed, drawn on the carved floor UNDER the translucent water
+    // so the shallows read as streambed, not beach. Opaque, sunk a touch so the
+    // water always wins the depth test above it.
+    this.bedMat = new THREE.MeshStandardMaterial({
+      color: 0x9a9086,
+      roughness: 0.72,
+      metalness: 0.0,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 3,
+    });
     void this.loadNormals();
+    void this.loadBedTexture();
     void this.load();
+  }
+
+  /** Load the wet river-stone albedo for the streambed sheets. */
+  private async loadBedTexture(): Promise<void> {
+    const tex = await loadTexture("assets/textures/riverbed.jpg");
+    if (!tex || this.disposed) return;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    tex.needsUpdate = true;
+    this.bedTex = tex;
+    this.bedMat.map = tex;
+    this.bedMat.color.setHex(0xffffff); // let the texture carry the colour
+    this.bedMat.needsUpdate = true;
   }
 
   private async loadNormals(): Promise<void> {
@@ -785,12 +837,15 @@ export class KauaiHydro {
       c.meshes.push(mesh);
       this.group.add(mesh);
     };
+    // The streambed sheets (drawn under the water) accumulate across all this
+    // tile's rivers into one mesh, built alongside the ribbons.
+    const bed = { pos: [] as number[], uv: [] as number[], idx: [] as number[] };
     make(
       (p, u, i) => {
         for (const r of c.rivers) {
           const samples: RiverSample[] = [];
           const lead = this.riverLeads.get(r);
-          buildRibbon(r, p, u, i, groundY, samples, lead?.in ?? [], lead?.out ?? []);
+          buildRibbon(r, p, u, i, groundY, samples, lead?.in ?? [], lead?.out ?? [], bed);
           if (samples.length < 2) continue;
           let minX = Infinity;
           let maxX = -Infinity;
@@ -808,6 +863,21 @@ export class KauaiHydro {
       this.riverMat,
       `hydro-${c.tile}-rivers`,
     );
+    // Streambed mesh (opaque, drawn BEFORE the translucent water via renderOrder).
+    if (bed.idx.length > 0) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(bed.pos, 3));
+      geo.setAttribute("uv", new THREE.Float32BufferAttribute(bed.uv, 2));
+      geo.setIndex(bed.idx);
+      geo.computeVertexNormals();
+      geo.computeBoundingSphere();
+      const mesh = new THREE.Mesh(geo, this.bedMat);
+      mesh.name = `hydro-${c.tile}-bed`;
+      mesh.visible = false;
+      mesh.renderOrder = -1;
+      c.meshes.push(mesh);
+      this.group.add(mesh);
+    }
     // Grid-joint cascades — built AFTER the ribbons so surfaceY can read this
     // chunk's just-built water samples; falls back to the carved bed + fill
     // depth where a neighbour ribbon across the seam hasn't built yet.
@@ -882,9 +952,11 @@ export class KauaiHydro {
     this.riverMat.dispose();
     this.lakeMat.dispose();
     this.cascadeMat.dispose();
+    this.bedMat.dispose();
     this.riverNormal?.dispose();
     this.lakeNormal?.dispose();
     this.cascadeNormal?.dispose();
+    this.bedTex?.dispose();
     this.scene.remove(this.group);
   }
 }
