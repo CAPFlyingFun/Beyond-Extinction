@@ -41,15 +41,18 @@ export interface CarveLakeSpec {
 /** Half the world extent (8 tiles × 7 km): world x/z ∈ [−28 000, 28 000]. */
 export const HALF_WORLD = 28000;
 
-// Channel shaping. R keeps a floor of 9 m so even thin streams press a swale
-// at least one DEM pixel wide (13.7 m/px data, 36 m mesh facets — narrower
-// carves would vanish entirely at mesh resolution). Depth scales with river
-// width; the big Wailua-class channels (~36 m) hit the 4.5 m cap.
+// Channel shaping — sized for the RCT/Planet-Coaster "flat canal" look. A thin
+// swale vanishes at 36 m mesh-facet resolution, so the water had no rendered
+// banks to pool flat behind (it draped the terrain instead). R now floors at
+// 24 m (≈ a 48 m trench, ≥1 mesh facet each side) and depth floors at 1.8 m, so
+// every channel presses a REAL trench the mesh can show — deep and wide enough
+// to hold a dead-flat water surface with visible banks. The big Wailua-class
+// channels (~36 m) widen to match and hit the 4 m depth cap.
 export function riverCarveRadius(w: number): number {
-  return Math.max(w * 0.9, 9);
+  return Math.max(w, 24);
 }
 export function riverCarveDepth(w: number): number {
-  return Math.min(Math.max(w * 0.35, 0.8), 4.5);
+  return Math.min(Math.max(w * 0.45, 1.8), 4.0);
 }
 /** Lakes floor to (waterline − LAKE_DEPTH), feathered over LAKE_FEATHER m. */
 export const LAKE_DEPTH = 2;

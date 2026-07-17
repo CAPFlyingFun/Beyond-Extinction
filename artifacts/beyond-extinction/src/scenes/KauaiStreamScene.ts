@@ -617,6 +617,18 @@ class KauaiStreamScene implements IScene {
     this.ctx.uiLayer.appendChild(hud);
     this.hud = hud;
 
+    // Underwater blue-green wash for GAMEPLAY diving: without it the translucent
+    // ocean plane read as clear glass from below, so diving looked like standing
+    // in tinted air. Fades in with head-submersion depth (see the play update).
+    // Reuse the cinematic tint if the arrival flyover already made one.
+    if (!this.uwTint) {
+      const uw = document.createElement("div");
+      uw.style.cssText =
+        "position:fixed;inset:0;z-index:54;pointer-events:none;background:rgb(11,58,74);opacity:0;";
+      this.ctx.uiLayer.appendChild(uw);
+      this.uwTint = uw;
+    }
+
     // Character-swap button (top-left): bind the FP camera to Jack or Sarah.
     const swap = document.createElement("button");
     swap.type = "button";
@@ -806,6 +818,13 @@ class KauaiStreamScene implements IScene {
         // ── Water SFX edges + environmental ambience (elevation/terrain hybrid) ──
         const submerged = swimming && this.sub > 0.02;
         const inWater = depth > WATER_ENTER;
+        // Underwater wash: ramp opacity with how far the head is under, so
+        // diving reads as submerged (clear at the surface, deep blue-green down).
+        if (this.uwTint) {
+          const tgt = submerged ? Math.min(0.62, 0.3 + Math.max(0, this.sub) * 0.14) : 0;
+          const cur = parseFloat(this.uwTint.style.opacity || "0");
+          this.uwTint.style.opacity = (cur + (tgt - cur) * Math.min(1, dt * 6)).toFixed(3);
+        }
         if (this.wasSubmerged && !submerged) this.ctx.audio.playSfx("breath-gasp");
         if (this.wasInWater && !inWater) this.ctx.audio.playSfx("splash-exit");
         this.updateAmbience(ground, depth, submerged, dt);

@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { loadTexture } from "./assets";
 import type { KauaiTileStreamer } from "./KauaiTileStreamer";
 import { KauaiCarve, type HydroRiver, type HydroLake } from "./KauaiCarve";
-import { riverCarveDepth } from "./kauaiCarveCore";
+import { riverCarveRadius } from "./kauaiCarveCore";
 
 /**
  * Real Kauaʻi hydrography (USGS NHDPlus HR), baked offline by
@@ -24,14 +24,16 @@ import { riverCarveDepth } from "./kauaiCarveCore";
  * geometry is built lazily on first residency and cached for the scene's life.
  */
 
-// Water surfaces are FLAT pools ACROSS the channel (RCT-style), levelled
+// Water surfaces are FLAT canals (RCT / Planet-Coaster autofill), levelled
 // against the LIVE streamed terrain (streamer.surfaceHeightAt — triangle-exact
-// against the rendered mesh). Rivers pick a level per cross-section just above
-// the carved centreline and smooth it ALONG the run; lakes sit flat at their
-// baked waterline. Water is never coupled to the ocean tide (that only moves
-// the separate ocean plane).
+// against the rendered mesh). Rivers fill a widened, deepened trench (see
+// riverCarveRadius/Depth) to a dead-flat pool level that steps down at weirs;
+// lakes sit flat at their baked waterline. Water is never coupled to the ocean
+// tide (that only moves the separate ocean plane).
 const LIFT_M = 0.18; // min water depth above the channel centreline (m)
-const SMOOTH_WINDOW = 5; // cross-sections (±) averaged along the run (~±30 m)
+const BANK_FREEBOARD = 0.05; // keep a flat pool this far below the lower bank (m)
+const EDGE_SMOOTH = 4; // ± samples averaged to smooth the canal width (curved banks)
+const LEVEL_SMOOTH = 3; // ± samples averaged to round the weir steps in the surface
 const UV_M = 8; // metres per ripple-normal repeat (same wavelength as the ocean)
 const RIVER_SCROLL = 0.05; // u/s ≈ 0.4 m/s downstream drift
 const LAKE_DRIFT = { x: 0.014, y: 0.01 }; // ocean's ripple drift (u/s)
@@ -149,22 +151,22 @@ function smoothRun(pts: Pt4[]): Pt4[] {
 type GroundY = (x: number, z: number) => number;
 
 /**
- * Pooled river ribbon: FLAT cross-sections at a water LEVEL, RCT-style.
+ * Flat-canal river ribbon (RCT / Planet-Coaster "autofill" water).
  *
- * The v75 ribbon grounded every vertex on the terrain, so the water wrapped
- * the channel (and any dune it crossed) like a blue carpet. The v76 rewrite
- * went too far the other way: it capped the level at the lower BANK and
- * clamped it monotonic downstream over the whole run — but the rendered
- * 36 m-facet terrain undulates constantly along a channel, so one low
- * stretch dragged every downstream cross-section under the ground and the
- * river surfaced only in dips (disconnected blue shards).
+ * Earlier passes fought a losing battle against mesh resolution: a thin
+ * channel carve is muted to nothing by the 36 m render facets, so the water
+ * had no rendered banks to pool behind. It could only drape the terrain (a
+ * sloping "carpet") or, if held flat, bury itself in the facets and surface as
+ * disconnected shards. The fix is upstream: {@link riverCarveRadius}/
+ * {@link riverCarveDepth} now press a genuinely WIDE, DEEP trench (≥48 m,
+ * ≥1.8 m) that the mesh can actually show, and the water is widened to fill it.
  *
- * Now the level is terrain-FOLLOWING but smoothed: each cross-section wants
- * to sit a fraction of the carve depth above the centreline ground, the
- * wanted levels are moving-averaged along the run (~±30 m) to iron out facet
- * noise, and the result is clamped back into the local channel — never below
- * the centreline (invisible), never far above it (flooding). Cross-sections
- * stay flat ACROSS the channel, which is what killed the carpet look.
+ * With a real trench the surface can be what the reference asks for: DEAD FLAT
+ * along a reach, stepping down at weirs. Each cross-section is flat across the
+ * canal; the level is a downhill staircase held flat between the trench floor
+ * and its brim (see below), so reaches read as long still pools rather than a
+ * draped ribbon — and because the level never drops below the local floor it
+ * can never bury into shards.
  */
 function buildRibbon(
   run: HydroRiver,
@@ -203,42 +205,76 @@ function buildRibbon(
     cum += Math.hypot(x - prevX, z - prevZ);
     prevX = x;
     prevZ = z;
-    cs.push({ x, z, px: -dz / len, pz: dx / len, half: w / 2, u: cum / UV_M, w });
+    // Canal water width: fill most of the carved trench (radius R) but keep the
+    // edge inside the rim so the banks contain the flat surface. 0.72·R sits
+    // where the cos² carve is still ~½ its depth below the original ground.
+    const half = 0.72 * riverCarveRadius(w);
+    cs.push({ x, z, px: -dz / len, pz: dx / len, half, u: cum / UV_M, w });
   }
   const m = cs.length;
   if (m < 2) return;
-  // Wanted level per cross-section: a fraction of the carve depth above the
-  // channel centreline. (The rendered carve is shallower than the data carve
-  // on narrow rivers — 36 m mesh facets mute it — so the centreline floor,
-  // not the nominal bank height, is the anchor.)
+  // Smooth the half-WIDTH along the run so the banks read as flowing curves, not
+  // a zig-zag of abruptly wider/narrower quads (the baked per-point widths jump
+  // step-wise). A moving average over ~±EDGE_SMOOTH samples irons the edge.
+  const halfS = new Float64Array(m);
+  for (let i = 0; i < m; i++) {
+    const k0 = Math.max(0, i - EDGE_SMOOTH);
+    const k1 = Math.min(m - 1, i + EDGE_SMOOTH);
+    let s = 0;
+    for (let k = k0; k <= k1; k++) s += cs[k].half;
+    halfS[i] = s / (k1 - k0 + 1);
+  }
+  for (let i = 0; i < m; i++) cs[i].half = halfS[i];
+  // Per cross-section: the channel-floor sample (gC, the carved centreline — the
+  // trench's low point) and the lower of the two banks at the water edge, a
+  // hair below which the flat pool must stay so it fills the trench without
+  // sheeting out over open ground.
   const gC = new Float64Array(m);
-  const cand = new Float64Array(m);
+  const bankCap = new Float64Array(m);
   for (let i = 0; i < m; i++) {
     const c = cs[i];
     gC[i] = groundY(c.x, c.z);
-    cand[i] = gC[i] + Math.max(0.35 * riverCarveDepth(c.w), LIFT_M);
+    const bankL = groundY(c.x + c.px * c.half, c.z + c.pz * c.half);
+    const bankR = groundY(c.x - c.px * c.half, c.z - c.pz * c.half);
+    bankCap[i] = Math.min(bankL, bankR) - BANK_FREEBOARD;
   }
-  // Moving average along the run irons the facet noise out of the level so
-  // the surface reads as connected water, then a per-section clamp keeps it
-  // inside the local channel: never below the centreline ground (that's the
-  // v76 buried-shards bug), never more than the carve depth above it (that
-  // would sheet over the banks on steep drops).
+  // RCT / Planet-Coaster "autofill": the surface is DEAD FLAT along a reach and
+  // steps down at weirs. Walk DOWNHILL (higher-ground end → ocean end) holding
+  // one pool level: keep it flat while it still fits the trench (floor ≤ level ≤
+  // brim), drop it to the brim where the banks fall away (a weir — a new lower
+  // pool), lift it to the floor where the bed humps up (so water never buries).
+  // With the widened/deepened carve the brim now sits well above the floor, so
+  // reaches read as long flat pools instead of a draped ribbon.
   const level = new Float64Array(m);
+  const downhillForward = gC[0] >= gC[m - 1];
+  const first = downhillForward ? 0 : m - 1;
+  const last = downhillForward ? m - 1 : 0;
+  const stepDir = downhillForward ? 1 : -1;
+  let held = gC[first] + LIFT_M;
+  for (let i = first; ; i += stepDir) {
+    const floor = gC[i] + LIFT_M;
+    const brim = Math.max(floor, bankCap[i]); // brim is never below the floor
+    held = Math.min(Math.max(held, floor), brim);
+    level[i] = held;
+    if (i === last) break;
+  }
+  // Round the hard weir steps into gentle transitions: a light moving average
+  // along the run, re-clamped above the local bed so the smoothing can never
+  // dip the surface below the ground (which would re-introduce shards).
+  const slevel = new Float64Array(m);
   for (let i = 0; i < m; i++) {
-    const k0 = Math.max(0, i - SMOOTH_WINDOW);
-    const k1 = Math.min(m - 1, i + SMOOTH_WINDOW);
-    let sum = 0;
-    for (let k = k0; k <= k1; k++) sum += cand[k];
-    const avg = sum / (k1 - k0 + 1);
-    const d = riverCarveDepth(cs[i].w);
-    level[i] = Math.min(Math.max(avg, gC[i] + LIFT_M), gC[i] + d);
+    const k0 = Math.max(0, i - LEVEL_SMOOTH);
+    const k1 = Math.min(m - 1, i + LEVEL_SMOOTH);
+    let s = 0;
+    for (let k = k0; k <= k1; k++) s += level[k];
+    slevel[i] = Math.max(s / (k1 - k0 + 1), gC[i] + LIFT_M);
   }
   const base = positions.length / 3;
   for (let i = 0; i < m; i++) {
     const c = cs[i];
-    positions.push(c.x + c.px * c.half, level[i], c.z + c.pz * c.half);
-    positions.push(c.x - c.px * c.half, level[i], c.z - c.pz * c.half);
-    uvs.push(c.u, 0, c.u, c.w / UV_M);
+    positions.push(c.x + c.px * c.half, slevel[i], c.z + c.pz * c.half);
+    positions.push(c.x - c.px * c.half, slevel[i], c.z - c.pz * c.half);
+    uvs.push(c.u, 0, c.u, (c.half * 2) / UV_M);
   }
   for (let i = 0; i < m - 1; i++) {
     const a = base + i * 2;
