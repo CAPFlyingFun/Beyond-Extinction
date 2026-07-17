@@ -172,8 +172,20 @@ function buildRibbon(
   indices: number[],
   groundY: GroundY,
   samples: RiverSample[],
+  leadIn: Pt4[],
+  leadOut: Pt4[],
 ): void {
-  const pts = smoothRun(run.pts);
+  // GHOST CONTEXT: the bake splits each river into per-tile runs that share
+  // exact endpoints, but if every piece is smoothed/filled from ITS points
+  // alone the shared boundary cross-section lands differently on each side and
+  // the ribbons don't meet (the visible seam). Prepend/append a few of the
+  // NEIGHBOUR run's points (from load()) so the polyline is continuous across
+  // the tile edge; both tiles then see the SAME points around the shared
+  // endpoint and — because the terrain heights are seam-deterministic — compute
+  // an identical boundary cross-section. We build over the extended polyline for
+  // context but only EMIT the geometry for this run's real span.
+  const fullPts = leadIn.length || leadOut.length ? [...leadIn, ...run.pts, ...leadOut] : run.pts;
+  const pts = smoothRun(fullPts);
   const n = pts.length;
   if (n < 2) return;
   // Valid cross-sections: world frame (centre + XZ-perpendicular), u coord
@@ -280,8 +292,30 @@ function buildRibbon(
   };
   const hL = smoothWidth(halfL);
   const hR = smoothWidth(halfR);
-  const base = positions.length / 3;
+  // Emit only this run's REAL span (the ghost lead-in/out was context only):
+  // the cross-sections nearest the run's own first & last points.
+  const first = run.pts[0];
+  const last = run.pts[run.pts.length - 1];
+  let i0 = 0;
+  let i1 = m - 1;
+  let b0 = Infinity;
+  let b1 = Infinity;
   for (let i = 0; i < m; i++) {
+    const d0 = (cs[i].x - first[0]) ** 2 + (cs[i].z - first[2]) ** 2;
+    if (d0 < b0) {
+      b0 = d0;
+      i0 = i;
+    }
+    const d1 = (cs[i].x - last[0]) ** 2 + (cs[i].z - last[2]) ** 2;
+    if (d1 < b1) {
+      b1 = d1;
+      i1 = i;
+    }
+  }
+  if (i0 > i1) [i0, i1] = [i1, i0];
+  const base = positions.length / 3;
+  let emitted = 0;
+  for (let i = i0; i <= i1; i++) {
     const c = cs[i];
     positions.push(c.x + c.px * hL[i], level[i], c.z + c.pz * hL[i]);
     positions.push(c.x - c.px * hR[i], level[i], c.z - c.pz * hR[i]);
@@ -290,12 +324,13 @@ function buildRibbon(
     // cross-section (~18 m apart) — the generous half reach overlaps the gaps,
     // and the caller's depth = level − ground test discards any dry-bank
     // overshoot. Keeps the per-frame waterLevelAt scan cheap on mobile.
-    if (i % 3 === 0) {
+    if (emitted % 3 === 0) {
       samples.push({ x: c.x, z: c.z, level: level[i], half: Math.max(hL[i], hR[i]) + 3 });
     }
+    emitted++;
   }
-  for (let i = 0; i < m - 1; i++) {
-    const a = base + i * 2;
+  for (let k = 0; k < emitted - 1; k++) {
+    const a = base + k * 2;
     // two triangles per quad, wound for +Y normals
     indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
   }
@@ -385,6 +420,8 @@ export class KauaiHydro {
 
   private readonly scene: THREE.Scene;
   private readonly chunks = new Map<string, Chunk>();
+  /** Ghost lead-in/out points per run (neighbour context for seamless joins). */
+  private readonly riverLeads = new Map<HydroRiver, { in: Pt4[]; out: Pt4[] }>();
   private riverMat: THREE.MeshStandardMaterial;
   private lakeMat: THREE.MeshStandardMaterial;
   private riverNormal?: THREE.Texture;
@@ -457,7 +494,54 @@ export class KauaiHydro {
     };
     for (const r of doc.rivers) chunkOf(r.tile).rivers.push(r);
     for (const l of doc.lakes) chunkOf(l.tile).lakes.push(l);
+    this.computeRiverLeads(doc.rivers);
     this.loaded = true;
+  }
+
+  /**
+   * For each per-tile run, find the neighbour run it joins at each end (they
+   * share an exact endpoint) and record a few of that neighbour's points just
+   * across the seam. buildRibbon feeds these as ghost context so both sides of
+   * a tile boundary compute the SAME join cross-section — no more disconnect.
+   */
+  private computeRiverLeads(rivers: HydroRiver[]): void {
+    const K = 4; // ghost points each side (covers the smoothing windows)
+    const key = (p: Pt4): string => `${Math.round(p[0] * 2)},${Math.round(p[2] * 2)}`;
+    // endpoint → list of (run, atStart) touching it
+    const ends = new Map<string, { r: HydroRiver; atStart: boolean }[]>();
+    const add = (k: string, r: HydroRiver, atStart: boolean): void => {
+      const a = ends.get(k);
+      if (a) a.push({ r, atStart });
+      else ends.set(k, [{ r, atStart }]);
+    };
+    for (const r of rivers) {
+      if (r.pts.length < 2) continue;
+      add(key(r.pts[0]), r, true);
+      add(key(r.pts[r.pts.length - 1]), r, false);
+    }
+    // The K neighbour points adjacent to the shared endpoint, taken from either
+    // the neighbour's start (nearest = its 2nd point) or its end (nearest = its
+    // 2nd-last). fromStart keeps nearest FIRST; fromEnd keeps nearest LAST.
+    const fromStart = (s: HydroRiver): Pt4[] => s.pts.slice(1, 1 + K);
+    const fromEnd = (s: HydroRiver): Pt4[] =>
+      s.pts.slice(Math.max(0, s.pts.length - 1 - K), s.pts.length - 1);
+    const leadAt = (r: HydroRiver, atStart: boolean): Pt4[] => {
+      const p = r.pts;
+      const k = key(atStart ? p[0] : p[p.length - 1]);
+      const nb = (ends.get(k) ?? []).find((t) => t.r !== r);
+      if (!nb) return [];
+      const s = nb.r;
+      if (atStart) {
+        // LEAD-IN (prepend): nearest point must come LAST.
+        return nb.atStart ? fromStart(s).reverse() : fromEnd(s);
+      }
+      // LEAD-OUT (append): nearest point must come FIRST.
+      return nb.atStart ? fromStart(s) : fromEnd(s).reverse();
+    };
+    for (const r of rivers) {
+      if (r.pts.length < 2) continue;
+      this.riverLeads.set(r, { in: leadAt(r, true), out: leadAt(r, false) });
+    }
   }
 
   /**
@@ -592,7 +676,8 @@ export class KauaiHydro {
       (p, u, i) => {
         for (const r of c.rivers) {
           const samples: RiverSample[] = [];
-          buildRibbon(r, p, u, i, groundY, samples);
+          const lead = this.riverLeads.get(r);
+          buildRibbon(r, p, u, i, groundY, samples, lead?.in ?? [], lead?.out ?? []);
           if (samples.length < 2) continue;
           let minX = Infinity;
           let maxX = -Infinity;
@@ -628,9 +713,34 @@ export class KauaiHydro {
     }
     for (const c of this.chunks.values()) {
       const ready = streamer.tileReadyAt(c.cx, c.cz);
-      if (ready && !c.built) this.buildChunk(c, streamer);
+      // Build only once the 4 orthogonal neighbour tiles are also resident, so
+      // the ghost-context samples across every seam read real (seam-deterministic)
+      // terrain — the boundary cross-sections then match and STAY matched (built
+      // once, never rebuilt). Off-grid edges count as ready (no seam there).
+      if (ready && !c.built && this.neighboursReady(c, streamer)) {
+        this.buildChunk(c, streamer);
+      }
       for (const m of c.meshes) m.visible = ready;
     }
+  }
+
+  /** True if every in-grid orthogonal neighbour tile of `c` has heights loaded. */
+  private neighboursReady(c: Chunk, streamer: KauaiTileStreamer): boolean {
+    const col = c.tile.charCodeAt(0) - 65;
+    const row = parseInt(c.tile.slice(1), 10) - 1;
+    const S = 7000;
+    for (const [dc, dr] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const nc = col + dc;
+      const nr = row + dr;
+      if (nc < 0 || nc > 7 || nr < 0 || nr > 7) continue; // off-grid: no seam
+      if (!streamer.tileReadyAt(c.cx + dc * S, c.cz + dr * S)) return false;
+    }
+    return true;
   }
 
   dispose(): void {
