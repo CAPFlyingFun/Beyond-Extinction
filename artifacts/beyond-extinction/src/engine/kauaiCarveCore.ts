@@ -21,9 +21,12 @@ export interface CarveSeg {
   az: number;
   bx: number;
   bz: number;
+  /** Baked centreline ground elevation at a / b (m), monotonic downstream. */
+  ay: number;
+  by: number;
   /** Carve half-radius from the centerline (m). */
   r: number;
-  /** Full carve depth at the centerline (m). */
+  /** Channel depth below the baked centreline (m). */
   depth: number;
 }
 
@@ -130,30 +133,41 @@ export function carveTileHeights(
   const step = S / (P - 1);
   const g0x = col * (P - 1); // global pixel index of this tile's first column
   const g0z = row * (P - 1);
-  // Rivers: rasterize each segment's reach, accumulating the DEEPEST carve per
-  // sample (max — confluences don't stack, the bigger channel wins).
-  const carve = new Float32Array(P * P);
+  // Rivers: BURN the channel down to the baked monotonic centreline profile.
+  // Rather than subtracting a fixed depth from the wandering 36 m mesh (which
+  // let the coarse bed poke back up THROUGH the water), each sample's target bed
+  // is the interpolated baked ground along the segment MINUS the channel depth,
+  // blended out to the original terrain across the cos² wall. Because the baked
+  // profile descends monotonically, the burned trench does too — the water fills
+  // it continuously, at full width, and strictly downhill. Taking the LOWEST
+  // target across overlapping segments (min) and only ever lowering h keeps the
+  // result order-independent and seam-deterministic (bit-identical border rows).
+  const bed = new Float64Array(P * P).fill(Infinity);
   for (const s of segs) {
     const r = s.r;
+    const dx = s.bx - s.ax;
+    const dz = s.bz - s.az;
+    const segLenSq = dx * dx + dz * dz;
     const gxMin = Math.max(g0x, Math.floor((Math.min(s.ax, s.bx) - r + HALF_WORLD) / step));
     const gxMax = Math.min(g0x + P - 1, Math.ceil((Math.max(s.ax, s.bx) + r + HALF_WORLD) / step));
     const gzMin = Math.max(g0z, Math.floor((Math.min(s.az, s.bz) - r + HALF_WORLD) / step));
     const gzMax = Math.min(g0z + P - 1, Math.ceil((Math.max(s.az, s.bz) + r + HALF_WORLD) / step));
     const rSq = r * r;
+    const rFlat = r * FLAT_FRAC;
     for (let gz = gzMin; gz <= gzMax; gz++) {
       const z = gz * step - HALF_WORLD; // global-index coords: seam-identical
       const jBase = (gz - g0z) * P - g0x;
       for (let gx = gxMin; gx <= gxMax; gx++) {
         const x = gx * step - HALF_WORLD;
-        const dSq = distSqToSeg(x, z, s.ax, s.az, s.bx, s.bz);
+        // Projection param t (clamped) + perpendicular distance to the segment.
+        let t = segLenSq > 0 ? ((x - s.ax) * dx + (z - s.az) * dz) / segLenSq : 0;
+        t = Math.min(1, Math.max(0, t));
+        const ex = x - (s.ax + dx * t);
+        const ez = z - (s.az + dz * t);
+        const dSq = ex * ex + ez * ez;
         if (dSq >= rSq) continue;
-        // Flat-bottomed U-channel: full depth across the inner FLAT_FRAC of the
-        // radius (a real flat bed the 36 m mesh can land a vertex in → a trench
-        // that actually renders and holds swimmable water), then a cos² wall out
-        // to r. A pure cos² "V" put full depth only at the exact centreline, so
-        // between mesh vertices it muted to nothing and the water floated.
+        // Flat bed across the inner FLAT_FRAC, cos² wall out to r.
         const dist = Math.sqrt(dSq);
-        const rFlat = r * FLAT_FRAC;
         let prof: number;
         if (dist <= rFlat) {
           prof = 1;
@@ -161,13 +175,14 @@ export function carveTileHeights(
           const c = Math.cos((Math.PI / 2) * ((dist - rFlat) / (r - rFlat)));
           prof = c * c;
         }
-        const depth = s.depth * prof;
         const idx = jBase + gx;
-        if (depth > carve[idx]) carve[idx] = depth;
+        const targetBed = s.ay + (s.by - s.ay) * t - s.depth; // baked ground − depth
+        const blended = h[idx] * (1 - prof) + targetBed * prof;
+        if (blended < bed[idx]) bed[idx] = blended;
       }
     }
   }
-  for (let i = 0; i < carve.length; i++) h[i] -= carve[i];
+  for (let i = 0; i < bed.length; i++) if (bed[i] < h[i]) h[i] = bed[i];
   // Lakes (after rivers, fixed order everywhere): floor the interior toward
   // (waterline − LAKE_DEPTH), feathered from the shoreline inward. min() only —
   // a DEM bed already deeper than the target is never raised.

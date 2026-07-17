@@ -30,11 +30,9 @@ import { riverCarveRadius } from "./kauaiCarveCore";
 // riverCarveRadius/Depth) to a dead-flat pool level that steps down at weirs;
 // lakes sit flat at their baked waterline. Water is never coupled to the ocean
 // tide (that only moves the separate ocean plane).
-const LIFT_M = 0.18; // min water depth above the channel centreline (m)
 const FILL_DEPTH = 2.4; // target water depth above the carved bed (m) — swimmable
 const BANK_FREEBOARD = 0.05; // keep the surface this far below the trench rim (m)
 const EDGE_SMOOTH = 4; // ± samples averaged to smooth the canal width (curved banks)
-const LEVEL_SMOOTH = 8; // ± samples averaged to flatten the surface (still within the ghost budget)
 const UV_M = 8; // metres per ripple-normal repeat (same wavelength as the ocean)
 const RIVER_SCROLL = 0.05; // u/s ≈ 0.4 m/s downstream drift
 const LAKE_DRIFT = { x: 0.014, y: 0.01 }; // ocean's ripple drift (u/s)
@@ -209,13 +207,14 @@ function buildRibbon(
     pz: number;
     u: number;
     w: number;
+    gy: number; // BAKED centreline ground elevation (monotonic downstream)
   }
   const cs: CS[] = [];
   let cum = 0;
   let prevX = pts[0][0];
   let prevZ = pts[0][2];
   for (let i = 0; i < n; i++) {
-    const [x, , z, w] = pts[i];
+    const [x, gy, z, w] = pts[i];
     // central-difference direction (falls back to fwd/back at the ends)
     const a = pts[Math.max(0, i - 1)];
     const b = pts[Math.min(n - 1, i + 1)];
@@ -226,44 +225,37 @@ function buildRibbon(
     cum += Math.hypot(x - prevX, z - prevZ);
     prevX = x;
     prevZ = z;
-    cs.push({ x, z, px: -dz / len, pz: dx / len, u: cum / UV_M, w });
+    cs.push({ x, z, px: -dz / len, pz: dx / len, u: cum / UV_M, w, gy });
   }
   const m = cs.length;
   if (m < 2) return;
-  // The carve presses a REAL trench (see riverCarveRadius/Depth) that the water
-  // fills as a chain of flat pools (levels set just below). gC is the rendered
-  // channel-floor (the trench's low point) sampled per cross-section; rimCap is
-  // the lower bank at ±R, which the pool level must stay under so it can't sheet
-  // out over open ground.
-  const gC = new Float64Array(m);
+  // rimCap is the lower LIVE bank at ±R — the surface must stay under it so the
+  // water can't sheet out over open ground.
   const rimCap = new Float64Array(m);
   for (let i = 0; i < m; i++) {
     const c = cs[i];
     const R = riverCarveRadius(c.w);
-    gC[i] = groundY(c.x, c.z);
     const rimL = groundY(c.x + c.px * R, c.z + c.pz * R);
     const rimR = groundY(c.x - c.px * R, c.z - c.pz * R);
     rimCap[i] = Math.min(rimL, rimR) - BANK_FREEBOARD;
   }
-  // Surface level: a SMOOTH sheet a swimmable depth above the carved bed. The
-  // hard "stepped pool" banding read as ugly vertical blue walls in-game, so the
-  // level is instead a wide moving average of (bed + FILL_DEPTH) — flatter than
-  // the raw terrain slope, but with no abrupt steps — clamped above the bed and
-  // under the rim. The ±LEVEL_SMOOTH window stays inside the ghost-context
-  // budget, so the level is seam-deterministic and the v87 tile joins hold.
-  const rawLevel = new Float64Array(m);
-  for (let i = 0; i < m; i++) {
-    rawLevel[i] = Math.min(Math.max(gC[i] + FILL_DEPTH, gC[i] + LIFT_M), rimCap[i]);
-  }
+  // Surface level from the BAKED monotonic centreline (cs[].gy): the bake draped
+  // a strictly-downhill profile along every river, so levelling from IT — not the
+  // wandering 36 m live mesh — is what stops the water climbing uphill. Steps:
+  //  1. start at the baked ground, sunk a hair (BANK_FREEBOARD) so the edge tucks
+  //     into the channel; clamp under the live banks so it can't flood out;
+  //  2. a strict downstream pass (level[i] = min(level[i], level[i-1])) GUARANTEES
+  //     a non-increasing surface — pools sit flat, drops become steps/waterfalls,
+  //     and nowhere does the water rise as it flows on.
+  // Seam-safe: the baked gy at a shared tile-boundary point is byte-identical in
+  // both runs, and the ghost lead-in feeds the same upstream context, so both
+  // sides settle on the same monotone level.
   const level = new Float64Array(m);
   for (let i = 0; i < m; i++) {
-    const k0 = Math.max(0, i - LEVEL_SMOOTH);
-    const k1 = Math.min(m - 1, i + LEVEL_SMOOTH);
-    let s = 0;
-    for (let k = k0; k <= k1; k++) s += rawLevel[k];
-    const avg = s / (k1 - k0 + 1);
-    const floor = gC[i] + LIFT_M;
-    level[i] = Math.min(Math.max(avg, floor), Math.max(rimCap[i], floor));
+    level[i] = Math.min(cs[i].gy - BANK_FREEBOARD, rimCap[i]);
+  }
+  for (let i = 1; i < m; i++) {
+    if (level[i] > level[i - 1]) level[i] = level[i - 1]; // never rise downstream
   }
   // Water edge per side: march outward from the centreline until the RENDERED
   // bank rises to the water level — that's the true waterline, so the edge

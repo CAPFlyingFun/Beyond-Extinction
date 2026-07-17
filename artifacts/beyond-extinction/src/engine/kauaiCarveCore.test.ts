@@ -32,6 +32,8 @@ test("river carve is bit-identical on the shared border column of two tiles", ()
     az: -6000,
     bx: -4,
     bz: -1000,
+    ay: 100, // baked ground = the flat tile elevation → burns to 100 − depth
+    by: 100,
     r: riverCarveRadius(20),
     depth: riverCarveDepth(20),
   };
@@ -59,7 +61,7 @@ test("river carve depth and reach follow the cos² profile", () => {
   const h = flatTile(50);
   // Segment along z through the tile centre of tile (3,3) (centre −3500,−3500).
   const cx = worldX(3, Math.floor(P / 2));
-  const seg: CarveSeg = { ax: cx, az: -6000, bx: cx, bz: -1000, r, depth: d };
+  const seg: CarveSeg = { ax: cx, az: -6000, bx: cx, bz: -1000, ay: 50, by: 50, r, depth: d };
   carveTileHeights(h, P, S, 3, 3, [seg], []);
   const j = Math.floor(P / 2);
   const centre = h[j * P + Math.floor(P / 2)];

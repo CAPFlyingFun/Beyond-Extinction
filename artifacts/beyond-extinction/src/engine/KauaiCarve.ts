@@ -88,6 +88,8 @@ class KauaiCarveSingleton {
           az: a[2],
           bx: b[0],
           bz: b[2],
+          ay: a[1], // baked centreline elevation (monotonic downstream)
+          by: b[1],
           r: riverCarveRadius(w),
           depth: riverCarveDepth(w),
         });

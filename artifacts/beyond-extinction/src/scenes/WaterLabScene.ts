@@ -126,8 +126,11 @@ class WaterLabScene implements IScene {
     try {
       const res = await fetch(assetUrl("assets/terrain/kauai/manifest.json"));
       const manifest = (await res.json()) as KauaiManifest;
-      // radius 1 = a 3×3 ring; pinned to G5 every frame so it never streams away.
-      this.streamer = new KauaiTileStreamer(this.scene, manifest, { radius: 1 });
+      // radius 2 = a 5×5 ring pinned to G5. We only care about the inner 3×3, but
+      // KauaiHydro builds a tile's water only once its 4 orthogonal neighbours are
+      // resident (the seam gate), so the 3×3 needs its surrounding ring loaded too
+      // — otherwise the edge tiles stay dry (the "corner not filled").
+      this.streamer = new KauaiTileStreamer(this.scene, manifest, { radius: 2 });
       this.streamer.update(0, G5_CENTER.x, G5_CENTER.y);
       this.hydro = new KauaiHydro(this.scene);
     } catch (e) {
