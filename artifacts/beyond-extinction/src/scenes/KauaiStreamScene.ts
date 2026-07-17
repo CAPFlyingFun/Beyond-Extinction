@@ -435,6 +435,10 @@ class KauaiStreamScene implements IScene {
         teleport: (x: number, z: number, facing = this.spawnFacing) => {
           this.player?.placeAt(x, z, facing);
           this.grounded = false;
+          // Reset the water-drag anchor to here, or a teleport straight into a
+          // deep channel would yank the swimmer back toward the old spot.
+          this.prevX = x;
+          this.prevZ = z;
         },
         step: (dt = 0.016, n = 1) => {
           for (let i = 0; i < n; i++) this.update(dt);
@@ -752,11 +756,19 @@ class KauaiStreamScene implements IScene {
       const z = this.camera.position.z;
       if (s.tileReadyAt(x, z)) {
         const ground = s.surfaceHeightAt(x, z);
+        // Effective water surface here: the higher of the ocean plane (tide-lifted,
+        // applies near/below sea level) and any inland river/lake filling its
+        // carved trench at this spot — so the waterways are REAL water you wade
+        // and swim in, not just a visual. Inland, the ocean term is far below
+        // ground (huge negative depth) so the river level wins; at the coast with
+        // no waterway the river term is absent and the ocean owns the surface.
+        const riverLvl = this.hydro?.waterLevelAt(x, z);
+        const surfY = Math.max(waterY, riverLvl ?? -Infinity);
         if (!this.grounded) {
-          this.feetY = Math.max(ground, waterY);
+          this.feetY = Math.max(ground, surfY);
           this.grounded = true;
         }
-        const depth = waterY - ground; // > 0 → a water column stands here
+        const depth = surfY - ground; // > 0 → a water column stands here
 
         // Water drags the horizontal step: pull the just-moved camera (and the
         // controller's authoritative position, so it doesn't snap back) part-way
@@ -783,7 +795,7 @@ class KauaiStreamScene implements IScene {
           // neither held the diver HOLDS depth when submerged (no buoy bob-up)
           // and only drifts back up once at/near the surface. Clamp so the eye
           // can't rise above the float line nor sink through the bed.
-          const subMax = Math.max(0, waterY - ground - this.eye);
+          const subMax = Math.max(0, surfY - ground - this.eye);
           if (this.diveHeld) this.sub += DIVE_SPEED * dt;
           else if (this.riseHeld) this.sub -= DIVE_SPEED * dt;
           else if (this.sub < 0)
@@ -792,7 +804,7 @@ class KauaiStreamScene implements IScene {
 
           const diving = this.sub > 0.02; // head under the surface → hold-depth bob
           const bob = (diving ? DIVE_BOB : FLOAT_BOB) * Math.sin(this.waterT * 2.2);
-          const target = waterY - this.sub + bob - this.eye;
+          const target = surfY - this.sub + bob - this.eye;
           this.feetY += (target - this.feetY) * Math.min(1, dt * 6);
           this.vy = 0;
           this.airborne = false;

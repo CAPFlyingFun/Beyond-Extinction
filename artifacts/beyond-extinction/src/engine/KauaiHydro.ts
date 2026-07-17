@@ -31,9 +31,10 @@ import { riverCarveRadius } from "./kauaiCarveCore";
 // lakes sit flat at their baked waterline. Water is never coupled to the ocean
 // tide (that only moves the separate ocean plane).
 const LIFT_M = 0.18; // min water depth above the channel centreline (m)
-const BANK_FREEBOARD = 0.05; // keep a flat pool this far below the lower bank (m)
+const FILL_DEPTH = 2.4; // target water depth above the carved bed (m) — swimmable
+const BANK_FREEBOARD = 0.05; // keep the surface this far below the trench rim (m)
 const EDGE_SMOOTH = 4; // ± samples averaged to smooth the canal width (curved banks)
-const LEVEL_SMOOTH = 3; // ± samples averaged to round the weir steps in the surface
+const LEVEL_SMOOTH = 3; // ± samples averaged to smooth the surface along the run
 const UV_M = 8; // metres per ripple-normal repeat (same wavelength as the ocean)
 const RIVER_SCROLL = 0.05; // u/s ≈ 0.4 m/s downstream drift
 const LAKE_DRIFT = { x: 0.014, y: 0.01 }; // ocean's ripple drift (u/s)
@@ -151,22 +152,18 @@ function smoothRun(pts: Pt4[]): Pt4[] {
 type GroundY = (x: number, z: number) => number;
 
 /**
- * Flat-canal river ribbon (RCT / Planet-Coaster "autofill" water).
+ * River ribbon that fills a real carved trench.
  *
- * Earlier passes fought a losing battle against mesh resolution: a thin
- * channel carve is muted to nothing by the 36 m render facets, so the water
- * had no rendered banks to pool behind. It could only drape the terrain (a
- * sloping "carpet") or, if held flat, bury itself in the facets and surface as
- * disconnected shards. The fix is upstream: {@link riverCarveRadius}/
- * {@link riverCarveDepth} now press a genuinely WIDE, DEEP trench (≥48 m,
- * ≥1.8 m) that the mesh can actually show, and the water is widened to fill it.
- *
- * With a real trench the surface can be what the reference asks for: DEAD FLAT
- * along a reach, stepping down at weirs. Each cross-section is flat across the
- * canal; the level is a downhill staircase held flat between the trench floor
- * and its brim (see below), so reaches read as long still pools rather than a
- * draped ribbon — and because the level never drops below the local floor it
- * can never bury into shards.
+ * Earlier passes fought mesh resolution and lost: a thin channel carve is muted
+ * to nothing by the 36 m render facets, so the water had no rendered banks and
+ * sat ON the ground as "floating plates". The fix is upstream — {@link
+ * riverCarveRadius}/{@link riverCarveDepth} now press a genuinely WIDE, DEEP,
+ * flat-bottomed trench (≥96 m, ≥3 m) the mesh actually shows. Here the water
+ * just fills that trench: the surface sits FILL_DEPTH above the carved bed
+ * (swimmable — see KauaiStreamScene's river physics) and flows downhill inside
+ * it, and each bank's water edge is found by marching out to where the RENDERED
+ * ground rises to the surface level, so the water tucks into the true banks
+ * instead of floating over or flooding past them.
  */
 function buildRibbon(
   run: HydroRiver,
@@ -174,6 +171,7 @@ function buildRibbon(
   uvs: number[],
   indices: number[],
   groundY: GroundY,
+  samples: RiverSample[],
 ): void {
   const pts = smoothRun(run.pts);
   const n = pts.length;
@@ -185,7 +183,6 @@ function buildRibbon(
     z: number;
     px: number;
     pz: number;
-    half: number;
     u: number;
     w: number;
   }
@@ -205,76 +202,97 @@ function buildRibbon(
     cum += Math.hypot(x - prevX, z - prevZ);
     prevX = x;
     prevZ = z;
-    // Canal water width: fill most of the carved trench (radius R) but keep the
-    // edge inside the rim so the banks contain the flat surface. 0.72·R sits
-    // where the cos² carve is still ~½ its depth below the original ground.
-    const half = 0.72 * riverCarveRadius(w);
-    cs.push({ x, z, px: -dz / len, pz: dx / len, half, u: cum / UV_M, w });
+    cs.push({ x, z, px: -dz / len, pz: dx / len, u: cum / UV_M, w });
   }
   const m = cs.length;
   if (m < 2) return;
-  // Smooth the half-WIDTH along the run so the banks read as flowing curves, not
-  // a zig-zag of abruptly wider/narrower quads (the baked per-point widths jump
-  // step-wise). A moving average over ~±EDGE_SMOOTH samples irons the edge.
-  const halfS = new Float64Array(m);
-  for (let i = 0; i < m; i++) {
-    const k0 = Math.max(0, i - EDGE_SMOOTH);
-    const k1 = Math.min(m - 1, i + EDGE_SMOOTH);
-    let s = 0;
-    for (let k = k0; k <= k1; k++) s += cs[k].half;
-    halfS[i] = s / (k1 - k0 + 1);
-  }
-  for (let i = 0; i < m; i++) cs[i].half = halfS[i];
-  // Per cross-section: the channel-floor sample (gC, the carved centreline — the
-  // trench's low point) and the lower of the two banks at the water edge, a
-  // hair below which the flat pool must stay so it fills the trench without
-  // sheeting out over open ground.
+  // The carve now presses a REAL trench (see riverCarveRadius/Depth), so the
+  // water simply FILLS it to a swimmable depth above the carved bed and flows
+  // downhill inside it — no faked flat pools, no floating. gC is the rendered
+  // channel-floor (the trench's low point); the surface sits FILL_DEPTH above
+  // it, but never above the trench rim (sampled at ±R) so it can't sheet out.
   const gC = new Float64Array(m);
-  const bankCap = new Float64Array(m);
+  const rimCap = new Float64Array(m);
   for (let i = 0; i < m; i++) {
     const c = cs[i];
+    const R = riverCarveRadius(c.w);
     gC[i] = groundY(c.x, c.z);
-    const bankL = groundY(c.x + c.px * c.half, c.z + c.pz * c.half);
-    const bankR = groundY(c.x - c.px * c.half, c.z - c.pz * c.half);
-    bankCap[i] = Math.min(bankL, bankR) - BANK_FREEBOARD;
+    const rimL = groundY(c.x + c.px * R, c.z + c.pz * R);
+    const rimR = groundY(c.x - c.px * R, c.z - c.pz * R);
+    rimCap[i] = Math.min(rimL, rimR) - BANK_FREEBOARD;
   }
-  // RCT / Planet-Coaster "autofill": the surface is DEAD FLAT along a reach and
-  // steps down at weirs. Walk DOWNHILL (higher-ground end → ocean end) holding
-  // one pool level: keep it flat while it still fits the trench (floor ≤ level ≤
-  // brim), drop it to the brim where the banks fall away (a weir — a new lower
-  // pool), lift it to the floor where the bed humps up (so water never buries).
-  // With the widened/deepened carve the brim now sits well above the floor, so
-  // reaches read as long flat pools instead of a draped ribbon.
+  // Surface level: bed + FILL_DEPTH, capped under the rim, then smoothed along
+  // the run so it reads as a continuous sheet (and re-clamped so smoothing can
+  // never push it below the bed or above the rim).
+  const rawLevel = new Float64Array(m);
+  for (let i = 0; i < m; i++) {
+    rawLevel[i] = Math.min(Math.max(gC[i] + FILL_DEPTH, gC[i] + LIFT_M), rimCap[i]);
+  }
   const level = new Float64Array(m);
-  const downhillForward = gC[0] >= gC[m - 1];
-  const first = downhillForward ? 0 : m - 1;
-  const last = downhillForward ? m - 1 : 0;
-  const stepDir = downhillForward ? 1 : -1;
-  let held = gC[first] + LIFT_M;
-  for (let i = first; ; i += stepDir) {
-    const floor = gC[i] + LIFT_M;
-    const brim = Math.max(floor, bankCap[i]); // brim is never below the floor
-    held = Math.min(Math.max(held, floor), brim);
-    level[i] = held;
-    if (i === last) break;
-  }
-  // Round the hard weir steps into gentle transitions: a light moving average
-  // along the run, re-clamped above the local bed so the smoothing can never
-  // dip the surface below the ground (which would re-introduce shards).
-  const slevel = new Float64Array(m);
   for (let i = 0; i < m; i++) {
     const k0 = Math.max(0, i - LEVEL_SMOOTH);
     const k1 = Math.min(m - 1, i + LEVEL_SMOOTH);
     let s = 0;
-    for (let k = k0; k <= k1; k++) s += level[k];
-    slevel[i] = Math.max(s / (k1 - k0 + 1), gC[i] + LIFT_M);
+    for (let k = k0; k <= k1; k++) s += rawLevel[k];
+    const avg = s / (k1 - k0 + 1);
+    level[i] = Math.min(Math.max(avg, gC[i] + LIFT_M), Math.max(rimCap[i], gC[i] + LIFT_M));
   }
+  // Water edge per side: march outward from the centreline until the RENDERED
+  // bank rises to the water level — that's the true waterline, so the edge
+  // tucks into the actual bank (never floats over it, never floods past it).
+  const edgeToWaterline = (
+    cx: number,
+    cz: number,
+    ex: number,
+    ez: number,
+    lvl: number,
+    R: number,
+  ): number => {
+    let d = R;
+    for (let t = 4; t <= R; t += 3) {
+      if (groundY(cx + ex * t, cz + ez * t) >= lvl) {
+        d = t;
+        break;
+      }
+    }
+    return Math.max(6, d); // always show a little water even in a shallow spot
+  };
+  const halfL = new Float64Array(m);
+  const halfR = new Float64Array(m);
+  for (let i = 0; i < m; i++) {
+    const c = cs[i];
+    const R = riverCarveRadius(c.w);
+    halfL[i] = edgeToWaterline(c.x, c.z, c.px, c.pz, level[i], R);
+    halfR[i] = edgeToWaterline(c.x, c.z, -c.px, -c.pz, level[i], R);
+  }
+  // Smooth each bank's width along the run so the shoreline reads as a flowing
+  // curve rather than a per-sample zig-zag.
+  const smoothWidth = (src: Float64Array): Float64Array => {
+    const out = new Float64Array(m);
+    for (let i = 0; i < m; i++) {
+      const k0 = Math.max(0, i - EDGE_SMOOTH);
+      const k1 = Math.min(m - 1, i + EDGE_SMOOTH);
+      let s = 0;
+      for (let k = k0; k <= k1; k++) s += src[k];
+      out[i] = s / (k1 - k0 + 1);
+    }
+    return out;
+  };
+  const hL = smoothWidth(halfL);
+  const hR = smoothWidth(halfR);
   const base = positions.length / 3;
   for (let i = 0; i < m; i++) {
     const c = cs[i];
-    positions.push(c.x + c.px * c.half, slevel[i], c.z + c.pz * c.half);
-    positions.push(c.x - c.px * c.half, slevel[i], c.z - c.pz * c.half);
-    uvs.push(c.u, 0, c.u, (c.half * 2) / UV_M);
+    positions.push(c.x + c.px * hL[i], level[i], c.z + c.pz * hL[i]);
+    positions.push(c.x - c.px * hR[i], level[i], c.z - c.pz * hR[i]);
+    uvs.push(c.u, 0, c.u, (hL[i] + hR[i]) / UV_M);
+    // Water-level query sample (for swim physics), decimated every 3rd
+    // cross-section (~18 m apart) — the generous half reach overlaps the gaps,
+    // and the caller's depth = level − ground test discards any dry-bank
+    // overshoot. Keeps the per-frame waterLevelAt scan cheap on mobile.
+    if (i % 3 === 0) {
+      samples.push({ x: c.x, z: c.z, level: level[i], half: Math.max(hL[i], hR[i]) + 3 });
+    }
   }
   for (let i = 0; i < m - 1; i++) {
     const a = base + i * 2;
@@ -314,6 +332,42 @@ function buildLake(
   }
 }
 
+/** Even-odd point-in-polygon in world XZ. */
+function insideRing(x: number, z: number, ring: [number, number][]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, zi] = ring[i];
+    const [xj, zj] = ring[j];
+    if (zi > z !== zj > z && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/** True if (x, z) is inside a lake's shoreline ring and not in one of its holes. */
+function pointInLake(x: number, z: number, lake: HydroLake): boolean {
+  if (!insideRing(x, z, lake.ring)) return false;
+  for (const h of lake.holes) if (insideRing(x, z, h)) return false;
+  return true;
+}
+
+/** One centreline cross-section's water surface, for waterLevelAt() queries. */
+interface RiverSample {
+  x: number;
+  z: number;
+  level: number;
+  half: number; // generous lateral reach (the depth check filters dry banks)
+}
+/** A river run's samples plus a bbox for cheap rejection. */
+interface RiverRun {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  samples: RiverSample[];
+}
+
 interface Chunk {
   tile: string;
   cx: number;
@@ -322,6 +376,8 @@ interface Chunk {
   lakes: HydroLake[];
   built: boolean;
   meshes: THREE.Mesh[];
+  /** Built lazily with the geometry — used by waterLevelAt() for swim physics. */
+  riverRuns: RiverRun[];
 }
 
 export class KauaiHydro {
@@ -393,6 +449,7 @@ export class KauaiHydro {
           lakes: [],
           built: false,
           meshes: [],
+          riverRuns: [],
         };
         this.chunks.set(tile, c);
       }
@@ -473,6 +530,38 @@ export class KauaiHydro {
     return { segs, lakes };
   }
 
+  /**
+   * Water surface Y at world (x, z) if it lies over a BUILT river or lake, else
+   * null. Used by the swim/wade physics so the inland waterways are real water,
+   * not just a visual. Lateral river reach is generous — the caller's
+   * depth = level − ground test discards any dry-bank overshoot. Cheap: a
+   * tile-bounds reject then per-run bbox rejects leave only the run(s) the point
+   * actually sits in.
+   */
+  waterLevelAt(x: number, z: number): number | null {
+    let best: number | null = null;
+    for (const c of this.chunks.values()) {
+      if (!c.built) continue;
+      if (x < c.cx - 3600 || x > c.cx + 3600 || z < c.cz - 3600 || z > c.cz + 3600) {
+        continue;
+      }
+      for (const run of c.riverRuns) {
+        if (x < run.minX || x > run.maxX || z < run.minZ || z > run.maxZ) continue;
+        for (const s of run.samples) {
+          const dx = x - s.x;
+          const dz = z - s.z;
+          if (dx * dx + dz * dz <= s.half * s.half && (best === null || s.level > best)) {
+            best = s.level;
+          }
+        }
+      }
+      for (const l of c.lakes) {
+        if (pointInLake(x, z, l) && (best === null || l.y > best)) best = l.y;
+      }
+    }
+    return best;
+  }
+
   private buildChunk(c: Chunk, streamer: KauaiTileStreamer): void {
     c.built = true;
     // Raw rendered-surface height; pool levels add their own depth/lift.
@@ -501,7 +590,22 @@ export class KauaiHydro {
     };
     make(
       (p, u, i) => {
-        for (const r of c.rivers) buildRibbon(r, p, u, i, groundY);
+        for (const r of c.rivers) {
+          const samples: RiverSample[] = [];
+          buildRibbon(r, p, u, i, groundY, samples);
+          if (samples.length < 2) continue;
+          let minX = Infinity;
+          let maxX = -Infinity;
+          let minZ = Infinity;
+          let maxZ = -Infinity;
+          for (const s of samples) {
+            if (s.x - s.half < minX) minX = s.x - s.half;
+            if (s.x + s.half > maxX) maxX = s.x + s.half;
+            if (s.z - s.half < minZ) minZ = s.z - s.half;
+            if (s.z + s.half > maxZ) maxZ = s.z + s.half;
+          }
+          c.riverRuns.push({ minX, maxX, minZ, maxZ, samples });
+        }
       },
       this.riverMat,
       `hydro-${c.tile}-rivers`,

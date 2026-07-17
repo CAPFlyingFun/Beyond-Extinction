@@ -41,19 +41,23 @@ export interface CarveLakeSpec {
 /** Half the world extent (8 tiles × 7 km): world x/z ∈ [−28 000, 28 000]. */
 export const HALF_WORLD = 28000;
 
-// Channel shaping — sized for the RCT/Planet-Coaster "flat canal" look. A thin
-// swale vanishes at 36 m mesh-facet resolution, so the water had no rendered
-// banks to pool flat behind (it draped the terrain instead). R now floors at
-// 24 m (≈ a 48 m trench, ≥1 mesh facet each side) and depth floors at 1.8 m, so
-// every channel presses a REAL trench the mesh can show — deep and wide enough
-// to hold a dead-flat water surface with visible banks. The big Wailua-class
-// channels (~36 m) widen to match and hit the 4 m depth cap.
+// Channel shaping — sized to press a REAL, swimmable trench the 36 m mesh can
+// render. The mesh samples heights every 36.5 m (SEG 192 over 7 km), so a carve
+// narrower than that falls between vertices and mutes to nothing (the v80
+// radius-24 channels did this → the flat water sat ON the ground as "floating
+// plates"). R now floors at 48 m (≈ a 96 m channel, ~1.3 facets each side) with
+// a FLAT bottom across the inner half (see FLAT_FRAC in carveTileHeights), so a
+// vertex always lands in the flat bed at full depth. Depth floors at 3 m — below
+// SWIM_DEPTH (1.3 m) plus margin — so the filled channel is deep enough to swim.
+// Bigger baked widths widen and deepen proportionally.
 export function riverCarveRadius(w: number): number {
-  return Math.max(w, 24);
+  return Math.max(w * 1.3, 48);
 }
 export function riverCarveDepth(w: number): number {
-  return Math.min(Math.max(w * 0.45, 1.8), 4.0);
+  return Math.min(Math.max(w * 0.6, 3.0), 6.0);
 }
+/** Fraction of the carve radius that is a FLAT bed (rest is the cos² wall). */
+export const FLAT_FRAC = 0.5;
 /** Lakes floor to (waterline − LAKE_DEPTH), feathered over LAKE_FEATHER m. */
 export const LAKE_DEPTH = 2;
 export const LAKE_FEATHER = 15;
@@ -143,8 +147,21 @@ export function carveTileHeights(
         const x = gx * step - HALF_WORLD;
         const dSq = distSqToSeg(x, z, s.ax, s.az, s.bx, s.bz);
         if (dSq >= rSq) continue;
-        const c = Math.cos((Math.PI / 2) * (Math.sqrt(dSq) / r));
-        const depth = s.depth * c * c;
+        // Flat-bottomed U-channel: full depth across the inner FLAT_FRAC of the
+        // radius (a real flat bed the 36 m mesh can land a vertex in → a trench
+        // that actually renders and holds swimmable water), then a cos² wall out
+        // to r. A pure cos² "V" put full depth only at the exact centreline, so
+        // between mesh vertices it muted to nothing and the water floated.
+        const dist = Math.sqrt(dSq);
+        const rFlat = r * FLAT_FRAC;
+        let prof: number;
+        if (dist <= rFlat) {
+          prof = 1;
+        } else {
+          const c = Math.cos((Math.PI / 2) * ((dist - rFlat) / (r - rFlat)));
+          prof = c * c;
+        }
+        const depth = s.depth * prof;
         const idx = jBase + gx;
         if (depth > carve[idx]) carve[idx] = depth;
       }
