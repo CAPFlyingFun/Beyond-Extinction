@@ -100,12 +100,6 @@ export class KauaiTileStreamer {
   private curRow = -99;
   /** Number of tiles fully or partially resident (for a debug HUD). */
   resident = 0;
-  /** Shared "deepen underwater" toggle (0..1) referenced by EVERY tile material,
-   *  so one write recolours all resident seabed at once. Raised during the
-   *  arrival flyover so the light coral shelf on the gradual east slope reads as
-   *  dark deep water — that hides the ocean/seabed z-fight the flat shelf caused
-   *  in the high wide shots — then dropped to 0 for gameplay (coral returns). */
-  private readonly deepen = { value: 0 };
   /** Shared biome textures, loaded once and reused by every tile mesh. */
   private texReady: Promise<BiomeTextures>;
 
@@ -235,13 +229,6 @@ export class KauaiTileStreamer {
   }
   tileReadyAt(x: number, z: number): boolean {
     return !!this.tiles.get(`${this.colOf(x)},${this.rowOf(z)}`)?.heights;
-  }
-
-  /** Recolour the underwater seabed: 0 = coral shallows (gameplay), 1 = dark deep
-   *  water everywhere below the waterline (arrival flyover — hides the shelf
-   *  z-fight). Affects every resident tile at once via the shared uniform. */
-  setDeepen(v: number): void {
-    this.deepen.value = v;
   }
 
   /**
@@ -457,7 +444,7 @@ export class KauaiTileStreamer {
     const elev = new Float32Array(pos.count);
     for (let i = 0; i < pos.count; i++) elev[i] = pos.getY(i);
     geo.setAttribute("aElev", new THREE.BufferAttribute(elev, 1));
-    const mat = makeBiomeMaterial(tex, this.deepen);
+    const mat = makeBiomeMaterial(tex);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(tile.cx, 0, tile.cz);
     mesh.name = `kauai-${tile.id}`;
@@ -552,10 +539,7 @@ function buildSkirtGeometry(
  * the blend is injected via onBeforeCompile. All tiles share one compiled
  * program (customProgramCacheKey) and the same texture set.
  */
-function makeBiomeMaterial(
-  tex: BiomeTextures,
-  deepen: { value: number },
-): THREE.MeshStandardMaterial {
+function makeBiomeMaterial(tex: BiomeTextures): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     roughness: 0.96,
@@ -565,7 +549,6 @@ function makeBiomeMaterial(
     side: THREE.DoubleSide, // skirt walls stay visible regardless of winding
   });
   mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uDeepen = deepen;
     shader.uniforms.tSand = { value: tex.sand };
     shader.uniforms.tGrass = { value: tex.grass };
     shader.uniforms.tJungle = { value: tex.jungle };
@@ -594,7 +577,6 @@ varying float vElev;
 varying vec3 vBiomeW;
 varying vec3 vBiomeN;
 uniform sampler2D tSand, tGrass, tJungle, tRock, tMtn, tSnow, tReef;
-uniform float uDeepen;
 float gWet = 0.0; // shoreline wetness (set in map_fragment, used for roughness)
 // three uploads sRGB textures with an sRGB internal format on WebGL2, so
 // texture2D already returns LINEAR — no manual decode needed.
@@ -676,11 +658,6 @@ vec3 triplanar(sampler2D tex, vec3 wp, vec3 n, float scale) {
   c = mix(c, c * 0.66, smoothstep(1.3, 0.0, e)); // wet-sand band
   {
     float d = clamp(-e / 55.0, 0.0, 1.0);
-    // uDeepen (raised during the arrival flyover) drives the depth factor to ~1
-    // the moment we go underwater, so the light coral shelf reads as dark deep
-    // water and the ocean/seabed z-fight on the gradual east slope is invisible.
-    // Zero for gameplay, so the coral shallows return once you have control.
-    d = max(d, uDeepen * smoothstep(0.2, -1.5, e));
     vec3 reef = s2l(texture2D(tReef, uv / 10.0).rgb);
     vec3 underwater = mix(reef, vec3(0.015, 0.06, 0.10), d * d);
     c = mix(c, underwater, smoothstep(0.3, -3.5, e)); // fade in over ~3.5 m
