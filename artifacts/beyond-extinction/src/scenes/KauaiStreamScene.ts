@@ -9,6 +9,10 @@ import { KauaiTrees } from "../engine/KauaiTrees";
 import { IslandCharacter } from "../engine/IslandCharacter";
 import { SpawnStore } from "../engine/SpawnStore";
 import { SpawnTools } from "../engine/SpawnTools";
+import { SurvivalStats } from "../engine/SurvivalStats";
+import { InventoryOverlay } from "../engine/InventoryOverlay";
+import { IslandHud } from "../engine/IslandHud";
+import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 import { assetUrl, loadTexture } from "../engine/assets";
 import { VOICE_CLIPS } from "../data/voiceClips";
 import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
@@ -377,6 +381,10 @@ class KauaiStreamScene implements IScene {
   private bgMap?: THREE.Texture;
   private hud?: HTMLDivElement;
   private swapBtn?: HTMLButtonElement;
+  private stats?: SurvivalStats;
+  private islandHud?: IslandHud;
+  private inventory?: InventoryOverlay;
+  private objectiveText = "Explore the island";
   private grounded = false;
   // Hero characters: Jack (player) and Sarah (standing NPC). Both feet-planted
   // on the rendered mesh surface each frame so they never sink into terrain.
@@ -838,15 +846,14 @@ class KauaiStreamScene implements IScene {
       this.uwTint = uw;
     }
 
-    // Character-swap button (top-left): bind the FP camera to Jack or Sarah.
+    // Character-swap button: bind the FP camera to Jack or Sarah. Sits at the
+    // leftmost slot of the top-right round-button row (Swap · Menu · Map · Pack).
     const swap = document.createElement("button");
     swap.type = "button";
-    swap.textContent = "⇄ SWAP";
-    swap.style.cssText =
-      "position:absolute;top:10px;left:10px;z-index:61;padding:8px 12px;" +
-      "border:0;border-radius:10px;background:rgba(6,14,22,0.72);color:#dff;" +
-      "font:700 12px/1 ui-monospace,Menlo,monospace;letter-spacing:.04em;" +
-      "backdrop-filter:blur(6px);touch-action:manipulation;cursor:pointer;";
+    swap.textContent = "⇄";
+    swap.className = "be-ihud-btn";
+    swap.setAttribute("aria-label", "Swap character");
+    swap.style.right = "162px";
     swap.addEventListener("click", (e) => {
       e.preventDefault();
       this.switchCharacter();
@@ -894,6 +901,54 @@ class KauaiStreamScene implements IScene {
     bind(dive, (v) => (this.diveHeld = v));
     this.riseBtn = rise;
     this.diveBtn = dive;
+
+    this.buildSurvivalHud();
+  }
+
+  /**
+   * Compact island survival HUD (see {@link IslandHud}) + the ARK-style
+   * inventory overlay. The inventory's 🎒 button + its DEV tab are how the
+   * player reaches the "set Jack/Sarah start here" spawn tools (the control that
+   * was previously unreachable on the streaming map). Survival drain is gentle
+   * and non-lethal for now — the arc is story-first until the map's chapters are
+   * complete — so death just revives instead of ending the run.
+   */
+  private buildSurvivalHud(): void {
+    if (this.islandHud || this.disposed) return; // built once per scene
+    const stats = new SurvivalStats();
+    stats.onDeath = () => stats.revive();
+    this.stats = stats;
+
+    this.inventory = new InventoryOverlay(this.ctx.uiLayer, {
+      getObjective: () => this.objectiveText,
+      setFrozen: (frozen) => this.ctx.input.setEnabled(!frozen),
+      canOpen: () => this.phase === "play" && !this.disposed,
+      getRole: () => (this.active === "Jack" ? "JACK · Survivor" : "SARAH · Lead Scientist"),
+      playSfx: (n) => this.ctx.audio.playSfx(n),
+    });
+
+    this.islandHud = new IslandHud({
+      parent: this.ctx.uiLayer,
+      stats,
+      objective: this.objectiveText,
+      onMenu: () => {
+        this.ctx.audio.playSfx("ui-select");
+        const wasEnabled = this.ctx.input.inputEnabled;
+        this.ctx.input.setEnabled(false);
+        openSettingsPanel({
+          parent: this.ctx.uiLayer,
+          audio: this.ctx.audio,
+          onClose: () => {
+            if (!this.disposed) this.ctx.input.setEnabled(wasEnabled);
+          },
+        });
+      },
+      onMap: () => {
+        this.ctx.audio.playSfx("ui-select");
+        this.ctx.overlays.showToast("No map yet — you'll need to find one on the island.");
+      },
+    });
+    this.islandHud.setActive(this.phase === "play");
   }
 
   update(dt: number): void {
@@ -942,6 +997,7 @@ class KauaiStreamScene implements IScene {
         }
         if (this.phase === "flyover") this.updateFlyover(dt);
         this.followWater(WATER_Y);
+        this.islandHud?.setActive(false); // survival HUD hidden during the cinematic
         return;
       }
 
@@ -1107,6 +1163,22 @@ class KauaiStreamScene implements IScene {
       }
 
       this.followWater(WATER_Y);
+
+      // Survival stats + compact HUD (free roam only; frozen while a menu/inventory
+      // has taken input). Flags drive stamina drain and hunger/thirst exertion.
+      if (this.stats) {
+        this.stats.setPaused(!this.ctx.input.inputEnabled);
+        this.stats.update(dt, {
+          moving: !!moved?.moving,
+          running: this.ctx.input.isRunning(),
+          crouching: this.ctx.input.isCrouching(),
+          crawling: false,
+          jumped: false,
+        });
+      }
+      this.islandHud?.setActive(true);
+      this.islandHud?.update(dt);
+
       if (this.hud) {
         const col = String.fromCharCode(65 + Math.min(7, Math.max(0, Math.round(x / 7000 + 3.5))));
         const row = Math.min(8, Math.max(1, Math.round(z / 7000 + 3.5) + 1));
@@ -1516,6 +1588,9 @@ class KauaiStreamScene implements IScene {
     this.riseBtn?.remove();
     this.journalRoot?.remove();
     this.uwTint?.remove();
+    this.islandHud?.dispose();
+    this.inventory?.dispose();
+    closeSettingsPanel();
     this.ctx.audio.stopMusic();
     this.scene.clear();
   }
