@@ -319,6 +319,25 @@ export function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
           float coast = t * t * (3.0 - 2.0 * t); // smoothstep
           diffuseColor.a *= coast;
           if (diffuseColor.a < 0.01) discard;
+
+          // Depth-tinted tropical water: turquoise in the shallows deepening to a
+          // rich blue offshore (Kauaʻi's reef water), replacing the flat single
+          // hue that read grey. Depth from the same decoded ground height.
+          float depth = clamp(-0.4 - ground, 0.0, 8.0);      // metres of water
+          float shallow = 1.0 - smoothstep(0.3, 4.5, depth); // 1 near shore → 0 deep
+          vec3 shallowCol = vec3(0.055, 0.52, 0.55);         // aqua/turquoise
+          vec3 deepCol    = vec3(0.020, 0.16, 0.34);         // rich navy-blue
+          diffuseColor.rgb = mix(deepCol, shallowCol, shallow * shallow);
+
+          // Whitecaps + shoreline surf. A scrolling sample of the ripple map is
+          // thresholded into sparse foam: broad surf right at the beach (very
+          // shallow) plus occasional open-water caps where the ripple tilts hard.
+          float surf = smoothstep(1.6, 0.15, depth);         // strongest at the waterline
+          float surfN = texture2D(uRipple, vOceanWpos.xz / 6.0 + uTime * vec2(0.05, 0.03)).r;
+          float foam = surf * smoothstep(0.60, 0.86, surfN);
+          vec3 cn = texture2D(uRipple, vOceanWpos.xz / 14.0 - uTime * vec2(0.02, 0.028)).xyz * 2.0 - 1.0;
+          foam = clamp(foam + smoothstep(0.55, 0.95, length(cn.xy)) * 0.45, 0.0, 1.0);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.90, 0.95, 0.97), foam);
         }`,
       )
       .replace(
