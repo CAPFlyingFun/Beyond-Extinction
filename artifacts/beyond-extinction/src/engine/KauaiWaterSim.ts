@@ -45,6 +45,7 @@ const CORRIDOR_R = 12; // half-width (m) of the river-corridor confinement band 
 const SOURCE_PCTL = 0.8; // feed only the top 20% (by elevation) of corridor cells — the headwaters
 const TARGET_DEPTH = 2.6; // aim the channel at ~this deepest depth, then throttle inflow (bankfull-ish)
 const MIN_FILL = 0.5; // RENDER floor: draw corridor channels at least this deep so a shallow, fast reach still reads as a filled river (visual only — sim state stays honest)
+const FILL_LEVEL = -0.5; // below-sea channels fill to this flat surface (≈ reef-texture top, just under the ocean's -0.4) so no exposed reef wall pokes above the water. Sits 0.1 m below the ocean so the ocean wins the depth test where they overlap (no z-fight).
 const BED_UV_M = 22; // metres per water-normal ripple tile — large & gentle so the
 // surface reads as smooth flowing water, not a fine gravel/pebble texture (the
 // ocean uses no tiled normal map at all; a 6 m tile made the river look pebbly)
@@ -489,8 +490,14 @@ export class KauaiWaterSim {
       // main canal bone-dry — bare reef, no water. Fill the full corridor.)
       const raw = water[i];
       const fill = mask ? mask[i] === 1 : false;
-      const d = fill ? Math.max(raw, MIN_FILL) : raw;
-      pos[i * 3 + 1] = bed[i] + d + 0.03; // tiny visual offset above the bed
+      // A deep channel bed (say -3 m) filled only to bed+MIN_FILL leaves the reef
+      // wall exposed from there up to the waterline. Instead raise the surface to
+      // a flat FILL_LEVEL for any bed below it (like a pool), so the water covers
+      // the whole submerged reef band with no dry fringe. Shallow/above-sea beds
+      // still use bed+MIN_FILL; the sim's own depth (raw) wins when it pooled more.
+      const level = fill ? Math.max(bed[i] + MIN_FILL, bed[i] + raw, FILL_LEVEL) : bed[i] + raw;
+      const d = level - bed[i];
+      pos[i * 3 + 1] = level + 0.03; // tiny visual offset above the bed
       const a =
         d <= MIN_DEPTH
           ? 0
