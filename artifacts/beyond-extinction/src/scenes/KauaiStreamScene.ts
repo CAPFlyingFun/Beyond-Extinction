@@ -395,12 +395,22 @@ class KauaiStreamScene implements IScene {
   // Which character the first-person camera is bound to (the played body). The
   // other stands as an NPC. Toggle with switchCharacter().
   private active: "Jack" | "Sarah" = "Jack";
+  // The companion (the non-played hero) trails the player: true while closing a
+  // gap, cleared once she's back at conversation distance (hysteresis, so small
+  // player steps don't make her shuffle).
+  private companionChasing = false;
+  // Opt-in foot IK (adds ~2 ms; plants feet on slopes). Off unless the page is
+  // loaded with `?footik=1`, so the shipping default is unchanged while it's
+  // reviewed on-device.
+  private readonly footIkOn =
+    typeof location !== "undefined" && new URLSearchParams(location.search).get("footik") === "1";
   private disposed = false;
   // Vertical physics state (feet world Y + vertical velocity + airborne flag),
   // and last frame's XZ so water can drag the horizontal step.
   private feetY = EYE_JACK;
   private vy = 0;
   private airborne = false;
+  private playerInWater = false; // feet in a water column this frame (for foot-IK release)
   private prevX = SPAWN.x;
   private prevZ = SPAWN.z;
   // Swim / dive state. `sub` = how far the eye sits BELOW the water surface (m):
@@ -606,6 +616,7 @@ class KauaiStreamScene implements IScene {
       c.setFacing(Math.PI / 2); // face east, toward the ocean/camera
       this.scene.add(c.group);
       this.groundCharacter(c, this.jackPos);
+      this.maybeEnableFootIk(c);
       this.applyRoles();
     });
     void IslandCharacter.load("Sarah", 1.7).then((c) => {
@@ -614,6 +625,7 @@ class KauaiStreamScene implements IScene {
       c.setFacing(this.sarahFacing);
       this.scene.add(c.group);
       this.groundCharacter(c, this.sarahPos);
+      this.maybeEnableFootIk(c);
       this.applyRoles();
     });
 
@@ -629,6 +641,13 @@ class KauaiStreamScene implements IScene {
         input: this.ctx.input,
         switchCharacter: () => this.switchCharacter(),
         getActive: () => this.active,
+        // Companion/foot-IK diagnostics (headless verification).
+        footIkOn: this.footIkOn,
+        companion: () => ({
+          chasing: this.companionChasing,
+          sarah: { x: this.sarahPos.x, z: this.sarahPos.y, yaw: this.sarah?.group.rotation.y ?? 0 },
+          jack: { x: this.jackPos.x, z: this.jackPos.y, yaw: this.jack?.group.rotation.y ?? 0 },
+        }),
         phase: () => this.phase,
         cinematic: this.cinematic,
         skipArrival: () => {
@@ -779,6 +798,64 @@ class KauaiStreamScene implements IScene {
     const s = this.streamer;
     if (!s || !s.tileReadyAt(at.x, at.y)) return;
     c.place(at.x, Math.max(s.surfaceHeightAt(at.x, at.y), 0), at.y);
+  }
+
+  /** Wire foot IK onto a hero when `?footik=1` is set. The ground sampler reads
+   *  the rendered mesh surface where a tile has decoded, else null so the IK
+   *  releases over unloaded/water spots. */
+  private maybeEnableFootIk(c: IslandCharacter): void {
+    if (!this.footIkOn) return;
+    c.enableFootIk((x, z) => {
+      const s = this.streamer;
+      if (!s || !s.tileReadyAt(x, z)) return null;
+      return s.surfaceHeightAt(x, z);
+    });
+  }
+
+  /**
+   * The companion (whichever hero isn't the played body) trails the player: she
+   * closes the gap when they wander off, halts at a natural conversation
+   * distance, and turns to face them while idling. Her step is driven from the
+   * real distance moved this frame, so the stride-matched gait (walk vs run) and
+   * facing come straight out of her actual displacement — no foot-slide, same as
+   * the player. `pos` is her packed (x, z); `tx,tz` is the player's body.
+   */
+  private updateCompanion(
+    npc: IslandCharacter,
+    pos: THREE.Vector2,
+    tx: number,
+    tz: number,
+    dt: number,
+  ): void {
+    const dx = tx - pos.x;
+    const dz = tz - pos.y; // Vector2 packs z in .y
+    const dist = Math.hypot(dx, dz);
+    const STOP = 2.6; // hold at conversation distance
+    const GO = 3.4; // only start closing once the gap opens past this
+    const RUN_AT = 9; // break into a run when she's fallen well behind
+    const yaw = dist > 1e-3 ? Math.atan2(dx, dz) : npc.group.rotation.y; // model faces +Z
+
+    if (dist > GO || (this.companionChasing && dist > STOP)) {
+      this.companionChasing = true;
+      const run = dist > RUN_AT;
+      const maxSpeed = run ? 5.4 : 2.2;
+      const step = Math.min(dist - STOP, maxSpeed * dt);
+      if (step > 1e-4 && dt > 1e-4) {
+        const inv = 1 / dist;
+        pos.x += dx * inv * step;
+        pos.y += dz * inv * step;
+        npc.setFacing(yaw);
+        npc.setLocomotion(step / dt, run);
+      } else {
+        npc.setLocomotion(0, false);
+        npc.setFacing(yaw);
+      }
+    } else {
+      this.companionChasing = false;
+      npc.setLocomotion(0, false);
+      npc.setFacing(yaw); // face the player while waiting
+    }
+    this.groundCharacter(npc, pos);
   }
 
   /**
@@ -1053,6 +1130,7 @@ class KauaiStreamScene implements IScene {
           this.grounded = true;
         }
         const depth = surfY - ground; // > 0 → a water column stands here
+        this.playerInWater = depth > WATER_ENTER;
 
         // Water drags the horizontal step: pull the just-moved camera (and the
         // controller's authoritative position, so it doesn't snap back) part-way
@@ -1183,16 +1261,22 @@ class KauaiStreamScene implements IScene {
       const activeChar = this.active === "Jack" ? this.jack : this.sarah;
       const npcChar = this.active === "Jack" ? this.sarah : this.jack;
       const npcPos = this.active === "Jack" ? this.sarahPos : this.jackPos;
+      // The played body sits at the camera BEFORE the eye is pushed forward, so
+      // capture it here for the companion to home in on.
+      const bodyX = this.camera.position.x;
+      const bodyZ = this.camera.position.z;
       if (activeChar && p) {
-        activeChar.place(this.camera.position.x, this.feetY, this.camera.position.z);
+        activeChar.place(bodyX, this.feetY, bodyZ);
         activeChar.setBodyYaw(p.yaw);
         activeChar.setLocomotion(moved?.moving ? bodySpeed : 0, this.ctx.input.isRunning());
+        // Foot IK lets go while the player is off the floor (jumping) or in water.
+        activeChar.setStance({ airborne: this.airborne, inWater: this.playerInWater });
         this.camera.position.x -= Math.sin(p.yaw) * CAM_FWD;
         this.camera.position.z -= Math.cos(p.yaw) * CAM_FWD;
       }
       if (npcChar) {
-        npcChar.setMoving(false);
-        this.groundCharacter(npcChar, npcPos);
+        npcChar.setStance({ airborne: false, inWater: false }); // companion stays ashore
+        this.updateCompanion(npcChar, npcPos, bodyX, bodyZ, dt);
       }
 
       this.followWater(WATER_Y);
