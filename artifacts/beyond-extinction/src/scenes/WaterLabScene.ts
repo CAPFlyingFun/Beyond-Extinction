@@ -136,7 +136,14 @@ class WaterLabScene implements IScene {
       // KauaiHydro builds a tile's water only once its 4 orthogonal neighbours are
       // resident (the seam gate), so the 3×3 needs its surrounding ring loaded too
       // — otherwise the edge tiles stay dry (the "corner not filled").
-      this.streamer = new KauaiTileStreamer(this.scene, manifest, { radius: 2 });
+      // `?raw=1` streams UNMODIFIED terrain so the sim must find the waterways on
+      // its own (the diagnostic); default keeps the carve, which gives the coarse
+      // 36 m mesh the channels it otherwise lacks, so the sim reads as real rivers.
+      const raw = import.meta.env.DEV && new URLSearchParams(location.search).get("raw") === "1";
+      this.streamer = new KauaiTileStreamer(this.scene, manifest, {
+        radius: 2,
+        applyHydroCarve: !raw,
+      });
       this.streamer.update(0, G5_CENTER.x, G5_CENTER.y);
       this.hydro = new KauaiHydro(this.scene);
       // Virtual-pipes shallow-water pilot over a window spanning the Wailua

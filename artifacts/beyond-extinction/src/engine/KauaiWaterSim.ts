@@ -30,11 +30,14 @@ export interface WaterSimOpts {
 const G = 9.8; // gravity (only ever used as g·dt/cell in the accel step)
 const DT = 0.003; // sim timestep (s) — small for CFL stability
 const FRICTION = 0.3; // 0 = max friction (kills flow), 1 = none
-const RAIN = 0.03; // m/s added everywhere — the headwater feed (pilot: fast fill)
+// Feed only the UPPER CATCHMENT (highland runoff), NOT every cell — global rain
+// on beaches, valleys and ridges alike floods the whole window into a bathtub.
+const RAIN = 0.02; // m/s added on highland cells only
+const FEED_PCTL = 0.4; // feed land cells above this elevation percentile
 const SEA = -0.4; // bed below this = ocean → drains to sea level
-const EDGE_DRAIN = 0.5; // domain-edge ring keeps this fraction each step (outflow BC)
-const MIN_DEPTH = 0.04; // below this a cell renders dry (transparent)
-const FULL_DEPTH = 0.6; // at/above this the surface is fully opaque
+const EDGE_DRAIN = 0.97; // domain-edge ring keeps this per substep — a gentle outflow, not an instant empty
+const MIN_DEPTH = 0.1; // below this a cell renders dry (hides thin sheet-flow films)
+const FULL_DEPTH = 1.2; // at/above this the surface is fully opaque (real channels/pools)
 
 export class KauaiWaterSim {
   readonly group = new THREE.Group();
@@ -50,6 +53,7 @@ export class KauaiWaterSim {
   private terrainReady = false;
   private disposed = false;
   private rainOn = true;
+  private feedThresh = 0; // elevation above which highland cells receive runoff
   private mesh?: THREE.Mesh;
   private geo?: THREE.BufferGeometry;
   private posArr?: Float32Array;
@@ -73,6 +77,7 @@ export class KauaiWaterSim {
       metalness: 0.05,
       transparent: true,
       opacity: 0.86,
+      alphaTest: 0.05, // discard near-dry fringe fragments (no broad translucent films)
       vertexColors: true, // alpha carries per-cell wetness
       side: THREE.DoubleSide,
       depthWrite: false,
@@ -115,6 +120,12 @@ export class KauaiWaterSim {
         this.bed[this.wi(x, y)] = streamer.surfaceHeightAt(this.worldX(x), this.worldZ(y));
       }
     }
+    // Highland feed threshold = the FEED_PCTL percentile of LAND elevations, so
+    // runoff enters only in the upper catchment (hills/mountains), not on beaches.
+    const land: number[] = [];
+    for (let i = 0; i < N * N; i++) if (this.bed[i] > 1) land.push(this.bed[i]);
+    land.sort((a, b) => a - b);
+    this.feedThresh = land.length ? land[Math.floor(land.length * FEED_PCTL)] : 0;
     this.terrainReady = true;
     return true;
   }
@@ -139,10 +150,11 @@ export class KauaiWaterSim {
     const fx = this.flowX;
     const fy = this.flowY;
     const cell = this.cell;
-    // Feed + drains.
+    // Feed + drains. Runoff enters only in the upper catchment (highland cells).
     if (this.rainOn) {
       const add = RAIN * DT;
-      for (let i = 0; i < N * N; i++) water[i] += add;
+      const thresh = this.feedThresh;
+      for (let i = 0; i < N * N; i++) if (bed[i] > thresh) water[i] += add;
     }
     for (let i = 0; i < N * N; i++) if (bed[i] < SEA) water[i] = 0; // ocean sink
     // Accelerate X flows on interior edges (surface = bed + water).

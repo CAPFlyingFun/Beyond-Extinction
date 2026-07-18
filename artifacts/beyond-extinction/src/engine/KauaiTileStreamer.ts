@@ -85,6 +85,10 @@ export interface KauaiStreamerOptions {
   radius?: number;
   /** Root under public/ for the tiles, no trailing slash. */
   base?: string;
+  /** Press the river/lake carve into the height data (default true). Set false
+   *  to stream RAW terrain — used by the water-sim pilot so it must discover the
+   *  waterways from unmodified elevation, not from a pre-carved treasure map. */
+  applyHydroCarve?: boolean;
 }
 
 export class KauaiTileStreamer {
@@ -94,6 +98,7 @@ export class KauaiTileStreamer {
   private readonly P: number;
   private readonly radius: number;
   private readonly base: string;
+  private readonly applyHydroCarve: boolean;
   private readonly byId = new Map<string, KauaiManifestTile>();
   private readonly tiles = new Map<string, Tile>();
   private curCol = -99;
@@ -113,6 +118,7 @@ export class KauaiTileStreamer {
     this.P = manifest.tilePixels;
     this.radius = opts.radius ?? 1;
     this.base = opts.base ?? "assets/terrain/kauai";
+    this.applyHydroCarve = opts.applyHydroCarve ?? true;
     for (const t of manifest.tiles) this.byId.set(t.id, t);
     this.group.name = "kauai-terrain";
     scene.add(this.group);
@@ -375,8 +381,10 @@ export class KauaiTileStreamer {
     // sees it (mesh build, physics, planting, hydro all read tile.heights) so
     // every consumer agrees on the carved ground. ready() resolves even if
     // hydro.json failed — the tile then builds uncarved rather than never.
-    await KauaiCarve.ready();
-    KauaiCarve.applyToTile(heights, this.P, this.S, col, row);
+    if (this.applyHydroCarve) {
+      await KauaiCarve.ready();
+      KauaiCarve.applyToTile(heights, this.P, this.S, col, row);
+    }
     const tex = await this.texReady;
     // player may have moved away while decoding
     if (this.tiles.get(key) !== tile) return;
