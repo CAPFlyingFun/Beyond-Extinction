@@ -569,8 +569,12 @@ class KauaiStreamScene implements IScene {
     // physics (gravity/jump/wade/swim) is layered on in update().
     this.player = new PlayerController(this.camera, this.ctx.input, {
       eyeHeight: EYE_JACK, // scene physics overrides camera Y per active character
-      moveSpeed: 2.8, // ~2.8 m/s walk
-      runMultiplier: 3.4, // ~9.5 m/s sprint
+      // Speeds chosen so the animation's measured stride (Jack ~1.4 m/s walk /
+      // ~3.6 m/s run) time-warps to them WITHOUT exceeding IslandCharacter's warp
+      // clamp — i.e. the feet stay planted instead of moonwalking. See the
+      // speed-synced locomotion in IslandCharacter.update().
+      moveSpeed: 2.4, // brisk walk
+      runMultiplier: 2.5, // ~6.0 m/s run
       crouchMultiplier: 0.5,
       crawlMultiplier: 0.3,
       lookSensitivity: 0.0032,
@@ -1161,20 +1165,28 @@ class KauaiStreamScene implements IScene {
       } else if (!this.grounded) {
         this.camera.position.y = this.eye; // sit at sea level until the first tile lands
       }
+      // Real horizontal speed this frame (m/s) from the actual displacement —
+      // includes wade/swim slowdown — so the walk/run animation is time-warped to
+      // the true distance travelled and the feet don't slide. Measured BEFORE
+      // prevX/prevZ are advanced below.
+      const bodySpeed =
+        dt > 1e-4
+          ? Math.hypot(this.camera.position.x - this.prevX, this.camera.position.z - this.prevZ) / dt
+          : 0;
       this.prevX = this.camera.position.x;
       this.prevZ = this.camera.position.z;
 
       // ── First-person body: the active character IS the player. Plant it at the
-      // player's feet, face it the look direction, blend idle↔walk, and push the
-      // eye ahead of the (hidden) head so the body renders behind it. The other
-      // character stands where it was placed as an NPC.
+      // player's feet, face it the look direction, drive the speed-synced gait,
+      // and push the eye ahead of the (hidden) head so the body renders behind it.
+      // The other character stands where it was placed as an NPC.
       const activeChar = this.active === "Jack" ? this.jack : this.sarah;
       const npcChar = this.active === "Jack" ? this.sarah : this.jack;
       const npcPos = this.active === "Jack" ? this.sarahPos : this.jackPos;
       if (activeChar && p) {
         activeChar.place(this.camera.position.x, this.feetY, this.camera.position.z);
         activeChar.setBodyYaw(p.yaw);
-        activeChar.setMoving(!!moved?.moving);
+        activeChar.setLocomotion(moved?.moving ? bodySpeed : 0, this.ctx.input.isRunning());
         this.camera.position.x -= Math.sin(p.yaw) * CAM_FWD;
         this.camera.position.z -= Math.cos(p.yaw) * CAM_FWD;
       }
