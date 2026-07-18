@@ -443,6 +443,8 @@ class KauaiStreamScene implements IScene {
   private loadWrap?: HTMLDivElement;
   private loadFill?: HTMLDivElement;
   private loadLabel?: HTMLDivElement;
+  private skyProgress = 0; // 0..1 HDRI download fraction (real bytes via onProgress)
+  private loadFracMax = 0; // monotonic clamp so the bar never slides backward
   private uwTint?: HTMLDivElement;
   private typeRaf: number | null = null;
   private flyoverState: { wps: FlyWp[]; total: number; elapsed: number; resolve: () => void } | null = null;
@@ -680,13 +682,25 @@ class KauaiStreamScene implements IScene {
     const renderer = this.ctx.renderer.renderer;
     const pmrem = new THREE.PMREMGenerator(renderer);
     pmrem.compileEquirectangularShader();
-    void new EXRLoader()
-      .loadAsync(assetUrl("assets/hdri/daysky.exr"))
+    // Callback form (not loadAsync) so onProgress can feed the loading bar with
+    // REAL downloaded bytes — the HDRI is the biggest single file, so on a slow
+    // connection this is what the bar's early climb actually reflects.
+    void new Promise<THREE.DataTexture>((resolve, reject) => {
+      new EXRLoader().load(
+        assetUrl("assets/hdri/daysky.exr"),
+        (exr) => resolve(exr),
+        (ev) => {
+          if (ev.total > 0) this.skyProgress = Math.min(1, ev.loaded / ev.total);
+        },
+        (err) => reject(err),
+      );
+    })
       .then((exr) => {
         exr.mapping = THREE.EquirectangularReflectionMapping;
         const env = pmrem.fromEquirectangular(exr).texture;
         this.scene.environment = env;
         this.envMap = env;
+        this.skyProgress = 1;
         exr.dispose();
         pmrem.dispose();
       })
@@ -824,15 +838,19 @@ class KauaiStreamScene implements IScene {
   }
 
   private buildHud(): void {
-    const hud = document.createElement("div");
-    hud.style.cssText =
-      "position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:60;" +
-      "padding:6px 12px;border-radius:9px;background:rgba(6,14,22,0.72);color:#dff;" +
-      "font:600 12px/1.3 ui-monospace,Menlo,monospace;letter-spacing:.04em;" +
-      "pointer-events:none;text-align:center;backdrop-filter:blur(6px);";
-    hud.textContent = "loading terrain…";
-    this.ctx.uiLayer.appendChild(hud);
-    this.hud = hud;
+    // Debug tile readout (tile id · elevation · resident count) — DEV builds only;
+    // it's clutter in the shipped game, so players never see it.
+    if (import.meta.env.DEV) {
+      const hud = document.createElement("div");
+      hud.style.cssText =
+        "position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:60;" +
+        "padding:6px 12px;border-radius:9px;background:rgba(6,14,22,0.72);color:#dff;" +
+        "font:600 12px/1.3 ui-monospace,Menlo,monospace;letter-spacing:.04em;" +
+        "pointer-events:none;text-align:center;backdrop-filter:blur(6px);";
+      hud.textContent = "loading terrain…";
+      this.ctx.uiLayer.appendChild(hud);
+      this.hud = hud;
+    }
 
     // Underwater blue-green wash for GAMEPLAY diving: without it the translucent
     // ocean plane read as clear glass from below, so diving looked like standing
@@ -846,20 +864,23 @@ class KauaiStreamScene implements IScene {
       this.uwTint = uw;
     }
 
-    // Character-swap button: bind the FP camera to Jack or Sarah. Sits at the
-    // leftmost slot of the top-right round-button row (Swap · Menu · Map · Pack).
-    const swap = document.createElement("button");
-    swap.type = "button";
-    swap.textContent = "⇄";
-    swap.className = "be-ihud-btn";
-    swap.setAttribute("aria-label", "Swap character");
-    swap.style.right = "162px";
-    swap.addEventListener("click", (e) => {
-      e.preventDefault();
-      this.switchCharacter();
-    });
-    this.ctx.uiLayer.appendChild(swap);
-    this.swapBtn = swap;
+    // Character-swap button: bind the FP camera to Jack or Sarah. A testing aid
+    // (you play a scripted hero in the real game), so it's DEV-only — kept out of
+    // the shipped UI. Sits at the leftmost slot of the top-right round-button row.
+    if (import.meta.env.DEV) {
+      const swap = document.createElement("button");
+      swap.type = "button";
+      swap.textContent = "⇄";
+      swap.className = "be-ihud-btn";
+      swap.setAttribute("aria-label", "Swap character");
+      swap.style.right = "162px";
+      swap.addEventListener("click", (e) => {
+        e.preventDefault();
+        this.switchCharacter();
+      });
+      this.ctx.uiLayer.appendChild(swap);
+      this.swapBtn = swap;
+    }
 
     // DIVE / RISE buttons (bottom-right, stacked): held-down controls, shown only
     // while swimming. RISE ascends toward the surface; DIVE descends; releasing
@@ -1244,6 +1265,7 @@ class KauaiStreamScene implements IScene {
     this.ctx.input.setEnabled(false);
 
     this.buildArrivalUi();
+    void this.driveLoadBar(); // paint the bar from real progress for the whole arrival
     // The prologue cut to black with a fadeless handoff, so the SceneManager veil
     // may still be up. Our opaque journal now owns the black screen — clear the
     // leftover veil so the flyover is actually seen when it fades the world in.
@@ -1333,9 +1355,47 @@ class KauaiStreamScene implements IScene {
       this.loadLabel.textContent = pct >= 100 ? "READY" : `REACHING THE ISLAND…  ${pct}%`;
   }
 
-  /** Poll until the resident ring has decoded, the forest has planted, and both
-   *  heroes are loaded + grounded — driving the loading bar from real progress.
-   *  Capped so a slow connection eventually proceeds rather than hanging black. */
+  /** Weighted, monotonic loading fraction built from REAL milestones (not a
+   *  canned timer): manifest decoded → HDRI download bytes → spawn tile decoded →
+   *  resident-ring tiles (granular ready/total) → forest planted → heroes
+   *  grounded. Clamped so the bar never slides backward. */
+  private computeLoadFrac(): number {
+    const s = this.streamer;
+    const manifestReady = !!s; // the streamer only exists once the manifest decoded
+    const spawnReady = !!s && s.tileReadyAt(this.spawnX, this.spawnZ);
+    const ls = s ? s.loadState(this.spawnX, this.spawnZ) : { ready: 0, total: 1 };
+    const ringFrac = ls.total > 0 ? ls.ready / ls.total : 0;
+    const treesReady = !!this.trees?.isReady && (this.trees?.cellCount ?? 0) > 0;
+    const heroesReady =
+      !!this.jack &&
+      !!this.sarah &&
+      (s?.tileReadyAt(this.jackPos.x, this.jackPos.y) ?? false);
+    const f =
+      (manifestReady ? 0.08 : 0) +
+      this.skyProgress * 0.22 + // real bytes from the HDRI onProgress
+      (spawnReady ? 0.15 : 0) +
+      ringFrac * 0.35 +
+      (treesReady ? 0.12 : 0) +
+      (heroesReady ? 0.08 : 0);
+    this.loadFracMax = Math.max(this.loadFracMax, Math.min(1, f));
+    return this.loadFracMax;
+  }
+
+  /** Fire-and-forget: paint the arrival bar from computeLoadFrac() every ~100 ms
+   *  until the world is ready (or the scene leaves the loading phase). Started at
+   *  the top of the arrival so the bar climbs from the first byte in, never sits
+   *  at 0 waiting for the first tile batch. */
+  private async driveLoadBar(): Promise<void> {
+    while (!this.disposed && this.phase === "loading") {
+      this.setLoadProgress(this.computeLoadFrac());
+      await this.waitMs(100);
+    }
+  }
+
+  /** Gate: resolve once the resident ring has decoded, the forest has planted,
+   *  and both heroes are loaded + grounded. Capped so a slow connection
+   *  eventually proceeds rather than hanging black. The bar is painted by
+   *  {@link driveLoadBar}; here we only decide readiness. */
   private async waitForWorldReady(): Promise<void> {
     const s = this.streamer;
     const started = performance.now();
@@ -1349,15 +1409,8 @@ class KauaiStreamScene implements IScene {
         !!this.jack &&
         !!this.sarah &&
         (s?.tileReadyAt(this.jackPos.x, this.jackPos.y) ?? false);
-      const frac =
-        (ls.total ? ls.ready / ls.total : 1) * 0.8 +
-        (treesReady ? 0.1 : 0) +
-        (heroesReady ? 0.1 : 0);
-      this.setLoadProgress(frac);
-      if (
-        (tilesReady && treesReady && heroesReady) ||
-        performance.now() - started > MAX_MS
-      ) {
+      if ((tilesReady && treesReady && heroesReady) || performance.now() - started > MAX_MS) {
+        this.loadFracMax = 1;
         this.setLoadProgress(1);
         break;
       }
