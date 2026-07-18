@@ -574,8 +574,8 @@ export class KauaiHydro {
     // river water, while staying in the same material family. Rivers lift
     // toward the camera (sink = false) so the thin channel sheet beats its
     // bed; lakes sink like the ocean so their rim hides in the bank.
-    this.riverMat = makeWaterMaterial(0x175b66, false);
-    this.riverMat.opacity = 0.68; // see-through enough that the pebble streambed reads under it
+    this.riverMat = makeWaterMaterial(0x1a6389, false); // match the open-ocean blue so all water reads as one family
+    this.riverMat.opacity = 0.8; // was 0.68: too see-through, so thin/coastal/mountain reaches read as a pale film over the bed instead of water. 0.8 keeps a hint of streambed on the deep reaches while the shallows now read as actual water.
     this.lakeMat = makeWaterMaterial(0x14526e, true);
     this.cascadeMat = makeCascadeMaterial();
     // Wet river-stone bed, drawn on the carved floor UNDER the translucent water
