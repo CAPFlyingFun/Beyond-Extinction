@@ -468,14 +468,21 @@ export class KauaiWaterSim {
     const water = this.water;
     const mask = this.mask;
     for (let i = 0; i < N * N; i++) {
-      // Render depth: draw the ENTIRE river corridor as filled water at MIN_FILL,
-      // with the sim's own depth added on top where it has pooled. Previously we
-      // only drew cells the sim had actually wetted (~100 of them), so the vast
+      // Render depth: draw the river corridor as filled water at MIN_FILL, with
+      // the sim's own depth added on top where it has pooled. Previously we only
+      // drew cells the sim had actually wetted (~100 of them), so the vast
       // majority of the carved channel showed bare turquoise reef TERRAIN and no
       // water surface at all — the "textures drawn but no water" the user saw.
       // The corridor mask IS the real NHD waterway, so filling it is correct.
+      //
+      // BUT only ABOVE the waterline: below SEA the ocean plane already floods
+      // the terrain (estuaries, river mouths, lagoons), so force-filling those
+      // corridor cells would double-draw sim water over the ocean (z-fight/seam).
+      // Gating at SEA hands off cleanly — inland freshwater is the sim's job,
+      // everything at/under sea level is the ocean's.
       const raw = water[i];
-      const d = mask && mask[i] ? Math.max(raw, MIN_FILL) : raw;
+      const fill = mask && mask[i] && bed[i] > SEA;
+      const d = fill ? Math.max(raw, MIN_FILL) : raw;
       pos[i * 3 + 1] = bed[i] + d + 0.03; // tiny visual offset above the bed
       const a =
         d <= MIN_DEPTH
