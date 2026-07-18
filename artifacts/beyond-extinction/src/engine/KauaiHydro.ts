@@ -287,33 +287,20 @@ function buildRibbon(
   for (let i = 1; i < m; i++) {
     if (level[i] > level[i - 1]) level[i] = level[i - 1]; // never rise downstream
   }
-  // Water edge per side: march outward from the centreline until the RENDERED
-  // bank rises to the water level — that's the true waterline, so the edge
-  // tucks into the actual bank (never floats over it, never floods past it).
-  const edgeToWaterline = (
-    cx: number,
-    cz: number,
-    ex: number,
-    ez: number,
-    lvl: number,
-    R: number,
-  ): number => {
-    let d = R;
-    for (let t = 4; t <= R; t += 3) {
-      if (groundY(cx + ex * t, cz + ez * t) >= lvl) {
-        d = t;
-        break;
-      }
-    }
-    return Math.max(6, d); // always show a little water even in a shallow spot
-  };
+  // Channel width: fill the carved FLAT bed (riverCarveRadius × FLAT_FRAC). The
+  // carve guarantees that inner band is flat and below the water level, so the
+  // edge follows the smooth CHANNEL. The old approach raycast outward until the
+  // RENDERED bank rose to the water level — but the rendered terrain carries
+  // biome/DEM noise on top of the carve, so it hit the bumpy bank at a different
+  // distance every cross-section, giving the jagged, stair-stepped shoreline.
+  // Width now varies only with the baked, spline-smoothed reach width → a clean
+  // curve even with the channel edge.
   const halfL = new Float64Array(m);
   const halfR = new Float64Array(m);
   for (let i = 0; i < m; i++) {
-    const c = cs[i];
-    const R = riverCarveRadius(c.w);
-    halfL[i] = edgeToWaterline(c.x, c.z, c.px, c.pz, level[i], R);
-    halfR[i] = edgeToWaterline(c.x, c.z, -c.px, -c.pz, level[i], R);
+    const w = Math.max(6, riverCarveRadius(cs[i].w) * FLAT_FRAC);
+    halfL[i] = w;
+    halfR[i] = w;
   }
   // Smooth each bank's width along the run so the shoreline reads as a flowing
   // curve rather than a per-sample zig-zag.
@@ -781,8 +768,10 @@ export class KauaiHydro {
           // ribbon fills the carved channel (riverCarveRadius × FLAT_FRAC ≈ the
           // flat bed the water covers), which is far wider than width·0.5. Using
           // the narrow raw width let trees plant inside the visible river.
+          // 1.18 buffer covers the ribbon's spline-smoothed width overshooting
+          // the raw point width at bends, so trees never land in the widened river.
           const half =
-            riverCarveRadius(Math.max(pts[i][3], pts[i + 1][3])) * FLAT_FRAC + margin;
+            riverCarveRadius(Math.max(pts[i][3], pts[i + 1][3])) * FLAT_FRAC * 1.18 + margin;
           if (
             Math.max(ax, bx) + half < minX ||
             Math.min(ax, bx) - half > maxX ||
@@ -859,6 +848,7 @@ export class KauaiHydro {
       build: (pos: number[], uv: number[], idx: number[]) => void,
       mat: THREE.Material,
       name: string,
+      flatNormals = false,
     ): void => {
       const pos: number[] = [];
       const uv: number[] = [];
@@ -869,7 +859,18 @@ export class KauaiHydro {
       geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
       geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
       geo.setIndex(idx);
-      geo.computeVertexNormals();
+      if (flatNormals) {
+        // Flat UP normals for the (near-flat) river/lake surfaces: the ripple
+        // normal map supplies the detail, and per-face normals from
+        // computeVertexNormals otherwise shade the quad facets as visible
+        // straight-edged patches through the transparent water. Cascades are
+        // angled sheets, so they keep their real normals.
+        const nrm = new Float32Array(pos.length);
+        for (let v = 1; v < nrm.length; v += 3) nrm[v] = 1;
+        geo.setAttribute("normal", new THREE.Float32BufferAttribute(nrm, 3));
+      } else {
+        geo.computeVertexNormals();
+      }
       geo.computeBoundingSphere();
       const mesh = new THREE.Mesh(geo, mat);
       mesh.name = name;
@@ -920,6 +921,7 @@ export class KauaiHydro {
       },
       this.riverMat,
       `hydro-${c.tile}-rivers`,
+      true, // flat normals — kill the facet patches showing through the water
     );
     // One streambed mesh per used variant (opaque, drawn BEFORE the water).
     for (let ti = 0; ti < beds.length; ti++) {
@@ -962,6 +964,7 @@ export class KauaiHydro {
       },
       this.lakeMat,
       `hydro-${c.tile}-lakes`,
+      true, // flat normals — lakes are flat sheets
     );
   }
 
