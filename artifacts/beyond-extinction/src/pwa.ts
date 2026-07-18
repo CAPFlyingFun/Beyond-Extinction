@@ -19,16 +19,32 @@ export function registerServiceWorker(): void {
     const swUrl = `${base}sw.js`;
 
     // Auto-refresh on a new deploy: when a newly-installed worker takes control,
-    // reload ONCE so the page runs the fresh code. Guarded to only fire when a
-    // controller already existed (an update, not the first-ever install), so we
-    // never reload on a first visit. This is what stops a home-screen PWA from
-    // getting stuck on a stale JS bundle across deploys.
+    // reload so the page runs the fresh code — but NOT mid-session. Reloading
+    // while the player is loading into / playing a scene bounces them to the main
+    // menu (looks like a first-load crash that "works the second time", because
+    // by then the worker is already current). So we DEFER the reload until the
+    // tab is backgrounded / hidden, and apply the fresh bundle next time they
+    // return. Guarded to only fire on an update (a controller already existed),
+    // never on the first-ever install.
     const hadController = !!navigator.serviceWorker.controller;
     let reloaded = false;
-    navigator.serviceWorker.addEventListener("controllerchange", () => {
-      if (!hadController || reloaded) return;
+    let pendingReload = false;
+    const doReload = (): void => {
+      if (reloaded) return;
       reloaded = true;
       window.location.reload();
+    };
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!hadController) return; // first install → never reload
+      pendingReload = true;
+      // If the tab is already hidden, it's safe to swap right now.
+      if (document.visibilityState === "hidden") doReload();
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (pendingReload && document.visibilityState === "hidden") doReload();
+    });
+    window.addEventListener("pagehide", () => {
+      if (pendingReload) doReload();
     });
 
     navigator.serviceWorker

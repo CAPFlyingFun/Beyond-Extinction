@@ -25,7 +25,8 @@ import type { KauaiHydro } from "./KauaiHydro";
  */
 
 const CHUNK = 300; // metres per streamed forest cell
-const STEP = 10.2; // metres between candidate planting sites (denser = fuller)
+const STEP = 8.2; // metres between candidate planting sites (denser = fuller)
+const DENSITY = 1.45; // global thickening of the canopy-probability (higher = more trees)
 const BUILD_M = 1050; // build cells within this radius of the player
 const KEEP_M = 2600; // dispose cells past this radius
 const DRAW_M = 900; // trees solid to 75% of this, dither out to it
@@ -422,8 +423,9 @@ export class KauaiTrees {
         const isShrub = lc === 20;
         if (!isTree && !isShrub) continue;
         const canopy = sampleBilinear(this.canopy, px, pz) / 255; // 0..1 cover
-        // Probability of a tree at this site: canopy cover, thinned for shrub.
-        const prob = canopy * (isTree ? 1 : 0.45);
+        // Probability of a tree at this site: canopy cover, thinned for shrub,
+        // scaled by the global DENSITY so vegetated areas read fuller.
+        const prob = Math.min(1, canopy * DENSITY * (isTree ? 1 : 0.45));
         if (prob < 0.04 || hash(i, j, 23) > prob) continue;
 
         // Ground on the RENDERED mesh surface (not the finer heightmap) so the
