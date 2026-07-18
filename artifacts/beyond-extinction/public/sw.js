@@ -18,7 +18,7 @@
  *
  * Bump VERSION whenever the caching logic changes to retire old caches.
  */
-const VERSION = "v107";
+const VERSION = "v108";
 const CACHE = `beyond-extinction-${VERSION}`;
 
 // Base path this SW is served from, e.g. "/Beyond-Extinction/" or "/".
@@ -56,6 +56,11 @@ const OPTIONAL = [
   BASE + "assets/textures/mountain.jpg",
   BASE + "assets/textures/cliff.jpg",
   BASE + "assets/textures/volcano.jpg",
+  // Riverbed variants drawn under the waterways (chosen per reach).
+  BASE + "assets/textures/riverbed_sand.jpg",
+  BASE + "assets/textures/riverbed_cobble.jpg",
+  BASE + "assets/textures/riverbed_silt.jpg",
+  BASE + "assets/textures/riverbed_algae.jpg",
   // Island tree species — cached best-effort so the jungle works offline.
   BASE + "assets/models/trees/palm.glb",
   BASE + "assets/models/trees/fern.glb",

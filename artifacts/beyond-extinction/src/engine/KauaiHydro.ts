@@ -37,6 +37,32 @@ const UV_M = 8; // metres per ripple-normal repeat (same wavelength as the ocean
 const BED_UV_M = 3.5; // metres per riverbed-texture tile (pebble scale under the water)
 const BED_LIFT = 0.1; // streambed sits this far above the carved terrain (kills z-fight)
 const BED_SINK = 0.06; // …but always at least this far below the water surface
+
+// Riverbed variants drawn UNDER the translucent water, chosen per reach by
+// elevation + slope so the streambed matches its setting (with a little
+// per-reach variety). Index order is referenced by bedIndexFor().
+const BED_TEXTURES = [
+  "assets/textures/riverbed_sand.jpg", // 0: lowland / coastal sand + fine pebbles
+  "assets/textures/riverbed_cobble.jpg", // 1: steep mountain / rapids — mossy cobbles
+  "assets/textures/riverbed_silt.jpg", // 2: slow muddy lowland / floodplain silt
+  "assets/textures/riverbed_algae.jpg", // 3: jungle / shaded slow water — algae bed
+];
+
+/** Deterministic 0..1 hash of a world point (no Math.random — a reach must keep
+ *  the SAME bed every time its tile reloads, or the streambed would flicker). */
+function bedHash01(x: number, z: number): number {
+  const s = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+/** Pick a riverbed variant for a reach from its mean elevation, slope, and a
+ *  stable hash: mountains/rapids → cobble; jungle band → algae/silt; the
+ *  lowlands and coast → mostly sand with occasional silt/algae. */
+function bedIndexFor(avgE: number, slopeDeg: number, h: number): number {
+  if (slopeDeg > 6 || avgE > 680) return 1; // mountain streams & rapids
+  if (avgE > 120) return h < 0.5 ? 3 : 2; // jungle lowlands
+  return h < 0.45 ? 0 : h < 0.8 ? 2 : 3; // coastal / valley floor
+}
 const RIVER_SCROLL = 0.05; // u/s ≈ 0.4 m/s downstream drift
 const LAKE_DRIFT = { x: 0.014, y: 0.01 }; // ocean's ripple drift (u/s)
 
@@ -552,11 +578,11 @@ export class KauaiHydro {
   private riverMat: THREE.MeshStandardMaterial;
   private lakeMat: THREE.MeshStandardMaterial;
   private cascadeMat: THREE.MeshStandardMaterial;
-  private bedMat: THREE.MeshStandardMaterial;
+  private bedMats: THREE.MeshStandardMaterial[] = [];
   private riverNormal?: THREE.Texture;
   private lakeNormal?: THREE.Texture;
   private cascadeNormal?: THREE.Texture;
-  private bedTex?: THREE.Texture;
+  private bedTexs: THREE.Texture[] = [];
   private t = 0;
   private disposed = false;
   private loaded = false;
@@ -581,32 +607,41 @@ export class KauaiHydro {
     // Wet river-stone bed, drawn on the carved floor UNDER the translucent water
     // so the shallows read as streambed, not beach. Opaque, sunk a touch so the
     // water always wins the depth test above it.
-    this.bedMat = new THREE.MeshStandardMaterial({
-      color: 0x9a9086,
-      roughness: 0.72,
-      metalness: 0.0,
-      side: THREE.DoubleSide,
-      polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 3,
-    });
+    // One streambed material per riverbed variant; each gets its texture in
+    // loadBedTextures(). Same params as before — only the albedo differs.
+    this.bedMats = BED_TEXTURES.map(
+      () =>
+        new THREE.MeshStandardMaterial({
+          color: 0x9a9086,
+          roughness: 0.72,
+          metalness: 0.0,
+          side: THREE.DoubleSide,
+          polygonOffset: true,
+          polygonOffsetFactor: 1,
+          polygonOffsetUnits: 3,
+        }),
+    );
     void this.loadNormals();
-    void this.loadBedTexture();
+    void this.loadBedTextures();
     void this.load();
   }
 
-  /** Load the wet river-stone albedo for the streambed sheets. */
-  private async loadBedTexture(): Promise<void> {
-    const tex = await loadTexture("assets/textures/riverbed.jpg");
-    if (!tex || this.disposed) return;
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 4;
-    tex.needsUpdate = true;
-    this.bedTex = tex;
-    this.bedMat.map = tex;
-    this.bedMat.color.setHex(0xffffff); // let the texture carry the colour
-    this.bedMat.needsUpdate = true;
+  /** Load the streambed albedo variants (sand / cobble / silt / algae). */
+  private async loadBedTextures(): Promise<void> {
+    await Promise.all(
+      BED_TEXTURES.map(async (url, i) => {
+        const tex = await loadTexture(url);
+        if (!tex || this.disposed) return;
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = 4;
+        tex.needsUpdate = true;
+        this.bedTexs[i] = tex;
+        this.bedMats[i].map = tex;
+        this.bedMats[i].color.setHex(0xffffff); // let the texture carry the colour
+        this.bedMats[i].needsUpdate = true;
+      }),
+    );
   }
 
   private async loadNormals(): Promise<void> {
@@ -837,15 +872,33 @@ export class KauaiHydro {
       c.meshes.push(mesh);
       this.group.add(mesh);
     };
-    // The streambed sheets (drawn under the water) accumulate across all this
-    // tile's rivers into one mesh, built alongside the ribbons.
-    const bed = { pos: [] as number[], uv: [] as number[], idx: [] as number[] };
+    // Streambed sheets (drawn under the water). Bucketed by riverbed variant —
+    // each reach picks a variant from its elevation/slope, so a tile emits one
+    // bed mesh per variant its rivers actually use (usually 1–2).
+    const beds = BED_TEXTURES.map(() => ({
+      pos: [] as number[],
+      uv: [] as number[],
+      idx: [] as number[],
+    }));
     make(
       (p, u, i) => {
         for (const r of c.rivers) {
           const samples: RiverSample[] = [];
           const lead = this.riverLeads.get(r);
-          buildRibbon(r, p, u, i, groundY, samples, lead?.in ?? [], lead?.out ?? [], bed);
+          // Choose this reach's streambed variant from its mean elevation + slope.
+          const pts = r.pts;
+          const a = pts[0];
+          const b = pts[pts.length - 1];
+          const m = pts[pts.length >> 1];
+          const avgE = groundY(m[0], m[2]);
+          const run = Math.hypot(b[0] - a[0], b[2] - a[2]);
+          const slopeDeg =
+            run > 20
+              ? (Math.atan2(Math.abs(groundY(a[0], a[2]) - groundY(b[0], b[2])), run) * 180) /
+                Math.PI
+              : 0;
+          const ti = bedIndexFor(avgE, slopeDeg, bedHash01(m[0], m[2]));
+          buildRibbon(r, p, u, i, groundY, samples, lead?.in ?? [], lead?.out ?? [], beds[ti]);
           if (samples.length < 2) continue;
           let minX = Infinity;
           let maxX = -Infinity;
@@ -863,16 +916,18 @@ export class KauaiHydro {
       this.riverMat,
       `hydro-${c.tile}-rivers`,
     );
-    // Streambed mesh (opaque, drawn BEFORE the translucent water via renderOrder).
-    if (bed.idx.length > 0) {
+    // One streambed mesh per used variant (opaque, drawn BEFORE the water).
+    for (let ti = 0; ti < beds.length; ti++) {
+      const bed = beds[ti];
+      if (bed.idx.length === 0) continue;
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.Float32BufferAttribute(bed.pos, 3));
       geo.setAttribute("uv", new THREE.Float32BufferAttribute(bed.uv, 2));
       geo.setIndex(bed.idx);
       geo.computeVertexNormals();
       geo.computeBoundingSphere();
-      const mesh = new THREE.Mesh(geo, this.bedMat);
-      mesh.name = `hydro-${c.tile}-bed`;
+      const mesh = new THREE.Mesh(geo, this.bedMats[ti]);
+      mesh.name = `hydro-${c.tile}-bed${ti}`;
       mesh.visible = false;
       mesh.renderOrder = -1;
       c.meshes.push(mesh);
@@ -952,11 +1007,11 @@ export class KauaiHydro {
     this.riverMat.dispose();
     this.lakeMat.dispose();
     this.cascadeMat.dispose();
-    this.bedMat.dispose();
+    for (const m of this.bedMats) m.dispose();
     this.riverNormal?.dispose();
     this.lakeNormal?.dispose();
     this.cascadeNormal?.dispose();
-    this.bedTex?.dispose();
+    for (const t of this.bedTexs) t.dispose();
     this.scene.remove(this.group);
   }
 }
