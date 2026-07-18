@@ -60,7 +60,7 @@ export class IslandHud {
     col.innerHTML = `
       <div class="be-ihud__obj"><span class="be-ihud__objicon">◈</span><span class="be-ihud__objtext"></span></div>
       <div class="be-ihud__vitals">
-        <div class="be-ihud__row"><span class="be-ihud__ic">💗</span><span class="be-ihud__lbl">HP</span><span class="be-ihud__val" data-k="hp">100%</span></div>
+        <div class="be-ihud__row"><span class="be-ihud__ic">❤️</span><span class="be-ihud__lbl">HP</span><span class="be-ihud__val" data-k="hp">100%</span></div>
         <div class="be-ihud__row"><span class="be-ihud__ic">⚡</span><span class="be-ihud__lbl">STAM</span><span class="be-ihud__val" data-k="stam">—</span></div>
         <div class="be-ihud__row"><span class="be-ihud__ic">💧</span><span class="be-ihud__lbl">WATER</span><span class="be-ihud__val" data-k="water">—</span></div>
         <div class="be-ihud__row"><span class="be-ihud__ic">🍃</span><span class="be-ihud__lbl">FOOD</span><span class="be-ihud__val" data-k="food">—</span></div>
