@@ -671,7 +671,12 @@ vec3 triplanar(sampler2D tex, vec3 wp, vec3 n, float scale) {
     float d = clamp(-e / 55.0, 0.0, 1.0);
     vec3 reef = s2l(texture2D(tReef, uv / 10.0).rgb);
     vec3 underwater = mix(reef, vec3(0.015, 0.06, 0.10), d * d);
-    c = mix(c, underwater, smoothstep(0.3, -3.5, e)); // fade in over ~3.5 m
+    // Fade the reef/underwater texture in only BELOW the waterline (ocean plane
+    // sits at WATER_Y = -0.4 m). It used to start at +0.3 m — ~0.7 m ABOVE the
+    // flat sea, where the ocean can never reach — so that band showed exposed
+    // turquoise reef with no water over it ("dry waterbed"). Starting at -0.5 m
+    // keeps reef strictly submerged: sand/wet-sand above the line, reef under it.
+    c = mix(c, underwater, smoothstep(-0.5, -3.6, e)); // fade in below the waterline
   }
   diffuseColor.rgb *= c;
 }`,
