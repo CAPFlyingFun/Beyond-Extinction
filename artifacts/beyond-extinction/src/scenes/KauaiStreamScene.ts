@@ -212,12 +212,27 @@ export function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
   deep.needsUpdate = true;
   const uCoast = { value: deep as THREE.Texture };
   const uTime = { value: 0 };
+  // Scrolling ripple normal so the surface always has micro-detail — the sum-of-
+  // sines swell fades to flat far away and in the shallows, and without this the
+  // bare plane reads as glassy "ice". World-planar (sampled by world XZ) so it
+  // doesn't swim with the camera-centred grid.
+  const flatN = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1);
+  flatN.needsUpdate = true;
+  const uRipple = { value: flatN as THREE.Texture }; // flat until the ripple loads
+  void loadTexture("assets/textures/water_normal.png").then((tex) => {
+    if (!tex) return;
+    tex.colorSpace = THREE.NoColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.needsUpdate = true;
+    uRipple.value = tex;
+  });
   mat.userData.uCoast = uCoast;
   mat.userData.uTime = uTime;
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uSky = { value: sky };
     sh.uniforms.uCoast = uCoast;
     sh.uniforms.uTime = uTime;
+    sh.uniforms.uRipple = uRipple;
     if (waves) {
       // Sum-of-sines swell: displace Y and set an ANALYTIC normal so the surface
       // shades as real waves. Faded out beyond a near radius (so the coarse far
@@ -268,7 +283,19 @@ export function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
     sh.fragmentShader = sh.fragmentShader
       .replace(
         "#include <common>",
-        "#include <common>\nuniform vec3 uSky;\nuniform sampler2D uCoast;\nvarying vec3 vOceanWpos;",
+        "#include <common>\nuniform vec3 uSky;\nuniform sampler2D uCoast;\nuniform sampler2D uRipple;\nuniform float uTime;\nvarying vec3 vOceanWpos;",
+      )
+      .replace(
+        "#include <normal_fragment_maps>",
+        `#include <normal_fragment_maps>
+        {
+          // Two world-planar scrolling octaves of the ripple normal keep the
+          // surface textured everywhere the swell has faded flat (far + shallows).
+          vec2 r1 = vOceanWpos.xz / 9.0 + uTime * vec2(0.03, 0.021);
+          vec2 r2 = vOceanWpos.xz / 23.0 - uTime * vec2(0.017, 0.026);
+          vec3 rn = (texture2D(uRipple, r1).xyz + texture2D(uRipple, r2).xyz) - 1.0;
+          normal = normalize(normal + vec3(rn.x, 0.0, rn.y) * 0.30);
+        }`,
       )
       .replace(
         "#include <map_fragment>",

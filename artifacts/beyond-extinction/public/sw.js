@@ -18,7 +18,7 @@
  *
  * Bump VERSION whenever the caching logic changes to retire old caches.
  */
-const VERSION = "v113";
+const VERSION = "v114";
 const CACHE = `beyond-extinction-${VERSION}`;
 
 // Base path this SW is served from, e.g. "/Beyond-Extinction/" or "/".
@@ -61,6 +61,8 @@ const OPTIONAL = [
   BASE + "assets/textures/riverbed_cobble.jpg",
   BASE + "assets/textures/riverbed_silt.jpg",
   BASE + "assets/textures/riverbed_algae.jpg",
+  // Scrolling ripple normal map for the ocean/water surface.
+  BASE + "assets/textures/water_normal.png",
   // Island tree species — cached best-effort so the jungle works offline.
   BASE + "assets/models/trees/palm.glb",
   BASE + "assets/models/trees/fern.glb",
