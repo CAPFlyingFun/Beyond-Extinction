@@ -41,7 +41,7 @@ TILE_M = man["tileSizeM"]          # 7000
 P = man["tilePixels"]              # 513
 TOTAL_M = TILE_M * 8               # 56000
 HALF = TOTAL_M / 2
-SEG = 96                           # mesh verts per tile side (97x97 grid)
+SEG = 192                          # mesh verts per tile side (193x193 grid; MUST match runtime terrainSampling.SEG)
 
 def to_world(lon: float, lat: float):
     x = (lon - LON0) / (LON1 - LON0) * TOTAL_M - HALF

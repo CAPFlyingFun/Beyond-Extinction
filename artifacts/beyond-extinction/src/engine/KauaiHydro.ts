@@ -34,21 +34,9 @@ const FILL_DEPTH = 2.4; // target water depth above the carved bed (m) — swimm
 const BANK_FREEBOARD = 0.05; // keep the surface this far below the trench rim (m)
 const EDGE_SMOOTH = 4; // ± samples averaged to smooth the canal width (curved banks)
 const UV_M = 8; // metres per ripple-normal repeat (same wavelength as the ocean)
-const BED_UV_M = 3.5; // metres per riverbed-texture tile (pebble scale on the corridor)
-// Channel corridor (Phase 1): a real banked channel laid over the coarse terrain
-// at the TRUE baked river width, so a 12 m stream stays 12 m wide even though the
-// terrain facets are 36 m. Seven-point cross-section: outer bank / waterline /
-// shelf / thalweg / shelf / waterline / outer bank.
-const CH_HALF_MIN = 1.6; // min half-width (m) so even the smallest creeks read
-const CH_BANK_OUT_FRAC = 0.35; // outer bank extends this × half-width beyond the waterline…
-const CH_BANK_OUT_MIN = 2.5; // …clamped to [min, max] metres
-const CH_BANK_OUT_MAX = 10;
-const CH_SHELF_FRAC = 0.55; // shallow shelf at this × half-width from centre
-const CH_SHELF_DROP = 0.35; // shelf sits this far below the water surface (m)
-const CH_THALWEG_FRAC = 0.35; // deep channel centre drops this × width below the surface…
-const CH_THALWEG_MIN = 1.2; // …clamped to [min, max] metres
-const CH_THALWEG_MAX = 4;
-const CH_BANK_RISE = 0.4; // outer bank always at least this far above the water (m)
+const BED_UV_M = 3.5; // metres per riverbed-texture tile (pebble scale under the water)
+const BED_LIFT = 0.1; // streambed sits this far above the carved terrain (kills z-fight)
+const BED_SINK = 0.06; // …but always at least this far below the water surface
 const RIVER_SCROLL = 0.05; // u/s ≈ 0.4 m/s downstream drift
 const LAKE_DRIFT = { x: 0.014, y: 0.01 }; // ocean's ripple drift (u/s)
 
@@ -273,18 +261,49 @@ function buildRibbon(
   for (let i = 1; i < m; i++) {
     if (level[i] > level[i - 1]) level[i] = level[i - 1]; // never rise downstream
   }
-  // Channel half-width from the TRUE baked river width (cs[].w), NOT from
-  // marching the coarse mesh — that's what frees the channel from 36 m facets so
-  // a narrow stream stays narrow. Lightly smoothed along the run so the banks
-  // read as a flowing curve rather than a per-sample zig-zag.
-  const half = new Float64Array(m);
+  // Water edge per side: march outward from the centreline until the RENDERED
+  // bank rises to the water level — that's the true waterline, so the edge
+  // tucks into the actual bank (never floats over it, never floods past it).
+  const edgeToWaterline = (
+    cx: number,
+    cz: number,
+    ex: number,
+    ez: number,
+    lvl: number,
+    R: number,
+  ): number => {
+    let d = R;
+    for (let t = 4; t <= R; t += 3) {
+      if (groundY(cx + ex * t, cz + ez * t) >= lvl) {
+        d = t;
+        break;
+      }
+    }
+    return Math.max(6, d); // always show a little water even in a shallow spot
+  };
+  const halfL = new Float64Array(m);
+  const halfR = new Float64Array(m);
   for (let i = 0; i < m; i++) {
-    const k0 = Math.max(0, i - EDGE_SMOOTH);
-    const k1 = Math.min(m - 1, i + EDGE_SMOOTH);
-    let s = 0;
-    for (let k = k0; k <= k1; k++) s += Math.max(cs[k].w * 0.5, CH_HALF_MIN);
-    half[i] = s / (k1 - k0 + 1);
+    const c = cs[i];
+    const R = riverCarveRadius(c.w);
+    halfL[i] = edgeToWaterline(c.x, c.z, c.px, c.pz, level[i], R);
+    halfR[i] = edgeToWaterline(c.x, c.z, -c.px, -c.pz, level[i], R);
   }
+  // Smooth each bank's width along the run so the shoreline reads as a flowing
+  // curve rather than a per-sample zig-zag.
+  const smoothWidth = (src: Float64Array): Float64Array => {
+    const out = new Float64Array(m);
+    for (let i = 0; i < m; i++) {
+      const k0 = Math.max(0, i - EDGE_SMOOTH);
+      const k1 = Math.min(m - 1, i + EDGE_SMOOTH);
+      let s = 0;
+      for (let k = k0; k <= k1; k++) s += src[k];
+      out[i] = s / (k1 - k0 + 1);
+    }
+    return out;
+  };
+  const hL = smoothWidth(halfL);
+  const hR = smoothWidth(halfR);
   // Emit only this run's REAL span (the ghost lead-in/out was context only):
   // the cross-sections nearest the run's own first & last points.
   const first = run.pts[0];
@@ -311,57 +330,40 @@ function buildRibbon(
   let emitted = 0;
   for (let i = i0; i <= i1; i++) {
     const c = cs[i];
-    const lvl = level[i];
-    const hw = half[i];
-    const bankOut = Math.min(Math.max(hw * CH_BANK_OUT_FRAC, CH_BANK_OUT_MIN), CH_BANK_OUT_MAX);
-    const shelf = hw * CH_SHELF_FRAC;
-    const thalweg = lvl - Math.min(Math.max(hw * 2 * CH_THALWEG_FRAC, CH_THALWEG_MIN), CH_THALWEG_MAX);
-    // Point at signed cross-offset o (o>0 = left of flow) and height y.
-    const px = c.px;
-    const pz = c.pz;
-    // Outer bank meets the sampled terrain EXACTLY (no cracks). A small lift
-    // keeps it a touch proud of the water so a valley bank still reads as a bank;
-    // where terrain sits below the surface the channel just blends out flat.
-    const bankY = (o: number): number =>
-      Math.max(groundY(c.x + px * o, c.z + pz * o), lvl + CH_BANK_RISE * 0.25);
-    const oL = hw + bankOut;
-    const oR = -(hw + bankOut);
-    // Seven-point corridor (opaque bank + bed), left → right across the flow.
-    const push7 = (o: number, y: number): void => {
-      const x = c.x + px * o;
-      const z = c.z + pz * o;
-      bed.pos.push(x, y, z);
-      bed.uv.push(x / BED_UV_M, z / BED_UV_M);
-    };
-    push7(oL, bankY(oL)); //  bedBase + 7i + 0  outer bank L
-    push7(hw, lvl); //                   + 1  waterline L
-    push7(shelf, lvl - CH_SHELF_DROP); // + 2  shelf L
-    push7(0, thalweg); //                + 3  thalweg (deep centre)
-    push7(-shelf, lvl - CH_SHELF_DROP); //+ 4  shelf R
-    push7(-hw, lvl); //                  + 5  waterline R
-    push7(oR, bankY(oR)); //             + 6  outer bank R
-    // Water surface (translucent): flat between the two waterlines.
-    positions.push(c.x + px * hw, lvl, c.z + pz * hw);
-    positions.push(c.x - px * hw, lvl, c.z - pz * hw);
-    uvs.push(c.u, 0, c.u, (hw * 2) / UV_M);
-    // Swim-physics sample (decimated). Reach covers the full channel + banks.
+    const lx = c.x + c.px * hL[i];
+    const lz = c.z + c.pz * hL[i];
+    const rx = c.x - c.px * hR[i];
+    const rz = c.z - c.pz * hR[i];
+    positions.push(lx, level[i], lz);
+    positions.push(rx, level[i], rz);
+    uvs.push(c.u, 0, c.u, (hL[i] + hR[i]) / UV_M);
+    // Streambed: a textured sheet on the CARVED bed under the (translucent)
+    // water — left edge, centre, right edge, each dropped to the real ground but
+    // always kept just under the surface so it never pokes through. World-planar
+    // UVs so the pebble scale is constant and doesn't stretch on wide reaches.
+    const cap = level[i] - BED_SINK;
+    const by = (x: number, z: number): number => Math.min(groundY(x, z) + BED_LIFT, cap);
+    bed.pos.push(lx, by(lx, lz), lz);
+    bed.pos.push(c.x, by(c.x, c.z), c.z);
+    bed.pos.push(rx, by(rx, rz), rz);
+    bed.uv.push(lx / BED_UV_M, lz / BED_UV_M, c.x / BED_UV_M, c.z / BED_UV_M, rx / BED_UV_M, rz / BED_UV_M);
+    // Water-level query sample (for swim physics), decimated every 3rd
+    // cross-section (~18 m apart) — the generous half reach overlaps the gaps,
+    // and the caller's depth = level − ground test discards any dry-bank
+    // overshoot. Keeps the per-frame waterLevelAt scan cheap on mobile.
     if (emitted % 3 === 0) {
-      samples.push({ x: c.x, z: c.z, level: lvl, half: hw + bankOut + 3 });
+      samples.push({ x: c.x, z: c.z, level: level[i], half: Math.max(hL[i], hR[i]) + 3 });
     }
     emitted++;
   }
   for (let k = 0; k < emitted - 1; k++) {
-    // Water surface: one quad per span, wound for +Y.
     const a = base + k * 2;
+    // two triangles per quad, wound for +Y normals
     indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
-    // Corridor: six quad strips between the seven points of consecutive stations.
-    const b0 = bedBase + k * 7;
-    const b1 = b0 + 7;
-    for (let v = 0; v < 6; v++) {
-      const p = b0 + v;
-      const q = b1 + v;
-      bed.idx.push(p, q, p + 1, p + 1, q, q + 1);
-    }
+    // Streambed: two quad strips (left→centre, centre→right) per span.
+    const b = bedBase + k * 3;
+    bed.idx.push(b, b + 3, b + 1, b + 1, b + 3, b + 4); // left strip
+    bed.idx.push(b + 1, b + 4, b + 2, b + 2, b + 4, b + 5); // right strip
   }
 }
 
