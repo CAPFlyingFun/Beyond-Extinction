@@ -3,6 +3,7 @@ import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { PlayerController } from "../engine/PlayerController";
 import { KauaiTileStreamer, type KauaiManifest } from "../engine/KauaiTileStreamer";
 import { KauaiHydro } from "../engine/KauaiHydro";
+import { KauaiWaterSim } from "../engine/KauaiWaterSim";
 import { KauaiCarve } from "../engine/KauaiCarve";
 import { KauaiTrees } from "../engine/KauaiTrees";
 import { IslandCharacter } from "../engine/IslandCharacter";
@@ -317,6 +318,10 @@ class KauaiStreamScene implements IScene {
   private readonly ctx: SceneContext;
   private streamer?: KauaiTileStreamer;
   private hydro?: KauaiHydro;
+  private sim?: KauaiWaterSim; // virtual-pipes water, window follows the player
+  private simReady = false;
+  private simSpunUp = false;
+  private readonly simCenter = new THREE.Vector2(); // where the sim window is centred
   private trees?: KauaiTrees;
   private player?: PlayerController;
   private water?: THREE.Mesh;
@@ -484,6 +489,19 @@ class KauaiStreamScene implements IScene {
       // Billboard forest placed from the baked veg rasters, streamed + grounded
       // on the tiles, with the same distance alpha-fade as the beach map.
       this.trees = new KauaiTrees(this.scene);
+      // Virtual-pipes water: a 2.56 km window that FOLLOWS the player, giving the
+      // real waterways the same look/behaviour as the WaterLab testbed. It renders
+      // + drives swim near the player; the hydro ribbon stays as the fallback until
+      // the sim is ready and takes over (so there's never a dry gap).
+      this.sim = new KauaiWaterSim(this.scene, {
+        centerX: this.spawnX,
+        centerZ: this.spawnZ,
+        N: 256,
+        cell: 10,
+      });
+      void KauaiCarve.prefetch().then((doc) => {
+        if (doc && this.sim) this.sim.setCorridor(doc.rivers);
+      });
     } catch (e) {
       console.error("[kauai] manifest load failed", e);
     }
@@ -844,6 +862,7 @@ class KauaiStreamScene implements IScene {
       s.update(dt, focus.x, focus.z);
       this.hydro?.update(dt, s);
       this.trees?.update(dt, focus, s, this.hydro);
+      this.updateSim(focus.x, focus.z, s);
       // Advance both characters' animation mixers (idle/walk blend).
       this.jack?.update(dt);
       this.sarah?.update(dt);
@@ -888,7 +907,11 @@ class KauaiStreamScene implements IScene {
         // and swim in, not just a visual. Inland, the ocean term is far below
         // ground (huge negative depth) so the river level wins; at the coast with
         // no waterway the river term is absent and the ocean owns the surface.
-        const riverLvl = this.hydro?.waterLevelAt(x, z);
+        // Prefer the sim's surface where its window covers the player (so swim
+        // matches the visible sim water); fall back to the hydro ribbon elsewhere.
+        const riverLvl =
+          (this.simReady ? this.sim?.waterLevelAt(x, z) : null) ??
+          this.hydro?.waterLevelAt(x, z);
         // Ocean surface here = base/tide + the swell (faded out in the shallows,
         // exactly matching the shader's wShore), so a swimmer BOBS on the waves
         // while the shoreline stays put. Rivers/lakes are flat pools.
@@ -1042,6 +1065,37 @@ class KauaiStreamScene implements IScene {
           : "streaming…";
       }
     }
+  }
+
+  /** Drive the virtual-pipes water: keep its window on the player, sample the bed
+   *  when it lands on fresh terrain, step the physics, and hand the render/swim
+   *  over from the hydro ribbon once it's actually filling. */
+  private updateSim(fx: number, fz: number, s: KauaiTileStreamer): void {
+    const sim = this.sim;
+    if (!sim) return;
+    // Slide the window toward the player once they've drifted a few hundred metres
+    // (each shift re-samples the bed, so we don't do it every step). The 2.56 km
+    // window keeps the player well inside it between shifts.
+    if (this.simReady && (fx - this.simCenter.x) ** 2 + (fz - this.simCenter.y) ** 2 > 400 * 400) {
+      sim.recenter(fx, fz, s);
+      this.simCenter.set(fx, fz);
+    }
+    // (Re)sample the bed until the window is fully resident.
+    if (!sim.ready) sim.sampleTerrain(s);
+    this.simReady = sim.ready;
+    if (this.simReady) {
+      if (this.simCenter.x === 0 && this.simCenter.y === 0) this.simCenter.set(fx, fz);
+      if (!this.simSpunUp) {
+        sim.update(600); // one-time burst so the valleys are wet on arrival
+        this.simSpunUp = true;
+      } else {
+        sim.update(40);
+      }
+    }
+    // The ribbon is the fallback: hide it only once the sim is rendering, so a
+    // slow first load never shows a dry gap.
+    sim.group.visible = this.simReady;
+    if (this.hydro) this.hydro.group.visible = !this.simReady;
   }
 
   /** The camera-centred ocean grid follows the viewer in XZ; the swell itself is
@@ -1400,6 +1454,7 @@ class KauaiStreamScene implements IScene {
     this.jack?.dispose();
     this.sarah?.dispose();
     this.hydro?.dispose();
+    this.sim?.dispose();
     this.trees?.dispose();
     this.streamer?.dispose();
     this.envMap?.dispose();

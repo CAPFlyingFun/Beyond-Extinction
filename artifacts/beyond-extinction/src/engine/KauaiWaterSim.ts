@@ -55,8 +55,9 @@ export class KauaiWaterSim {
   readonly group = new THREE.Group();
   private readonly N: number;
   private readonly cell: number;
-  private readonly ox: number; // world X of the grid's min corner
-  private readonly oz: number;
+  private ox: number; // world X of the grid's min corner (mutable: the window re-centers on the player)
+  private oz: number;
+  private rivers?: HydroRiver[]; // kept so recenter() can re-mask the new window
   private readonly bed: Float32Array;
   private readonly water: Float32Array;
   private readonly flowX: Float32Array;
@@ -176,11 +177,79 @@ export class KauaiWaterSim {
     return true;
   }
 
+  /** Slide the sim window so it stays centred on the player. Only acts once the
+   *  player has moved a whole cell or more; PRESERVES the water it has pooled by
+   *  shifting the depth field, so a river stays put in the world as the window
+   *  slides (no disappear/refill). Re-samples the bed + re-masks the corridor for
+   *  the newly-exposed edge. Returns true if it actually shifted. */
+  recenter(centerX: number, centerZ: number, streamer: KauaiTileStreamer): boolean {
+    const N = this.N;
+    const cell = this.cell;
+    const half = (N * cell) / 2;
+    const sdx = Math.round((centerX - half - this.ox) / cell);
+    const sdz = Math.round((centerZ - half - this.oz) / cell);
+    if (sdx === 0 && sdz === 0) return false;
+    // Shift the pooled water so it stays world-locked as the window slides.
+    const old = this.water.slice();
+    const w = this.water;
+    for (let y = 0; y < N; y++) {
+      const sy = y + sdz;
+      for (let x = 0; x < N; x++) {
+        const sx = x + sdx;
+        w[y * N + x] = sx >= 0 && sx < N && sy >= 0 && sy < N ? old[sy * N + sx] : 0;
+      }
+    }
+    // Flow is transient — let it re-establish from the shifted depths.
+    this.flowX.fill(0);
+    this.flowY.fill(0);
+    this.ox += sdx * cell;
+    this.oz += sdz * cell;
+    // Rewrite the mesh's world XZ + planar UV for the new window position.
+    const pos = this.posArr!;
+    const uv = this.geo!.attributes.uv.array as Float32Array;
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const i = y * N + x;
+        pos[i * 3] = this.worldX(x);
+        pos[i * 3 + 2] = this.worldZ(y);
+        uv[i * 2] = this.worldX(x) / BED_UV_M;
+        uv[i * 2 + 1] = this.worldZ(y) / BED_UV_M;
+      }
+    }
+    this.geo!.attributes.position.needsUpdate = true;
+    this.geo!.attributes.uv.needsUpdate = true;
+    // Re-sample the bed + re-mask the corridor for the shifted window.
+    this.terrainReady = false;
+    this.sampleTerrain(streamer);
+    if (this.rivers) this.setCorridor(this.rivers);
+    return true;
+  }
+
+  /** Water SURFACE elevation at a world point, matching what refreshMesh draws
+   *  (corridor cells fill to at least MIN_FILL / FILL_LEVEL) — or null if there's
+   *  no renderable water there. The scene's wade/swim physics reads this so the
+   *  sim's rivers are REAL water you can stand in and swim, not just a visual. */
+  waterLevelAt(x: number, z: number): number | null {
+    if (!this.terrainReady) return null;
+    const N = this.N;
+    const gx = Math.round((x - this.ox) / this.cell - 0.5);
+    const gz = Math.round((z - this.oz) / this.cell - 0.5);
+    if (gx < 0 || gx >= N || gz < 0 || gz >= N) return null;
+    const i = gz * N + gx;
+    const bed = this.bed[i];
+    const raw = this.water[i];
+    if (this.mask && this.mask[i] === 1) {
+      return Math.max(bed + MIN_FILL, bed + raw, FILL_LEVEL);
+    }
+    return raw > MIN_DEPTH ? bed + raw : null;
+  }
+
   /** Confine the sim to the REAL waterways: mark every cell within CORRIDOR_R of
    *  an NHD river line, and thereafter water only exists inside that band. This
    *  is what stops the sim flooding the whole island — water physically cannot
    *  leave the channels, so it can only pool/flow along the actual 2–5 rivers. */
   setCorridor(rivers: HydroRiver[]): void {
+    this.rivers = rivers; // stash so recenter() can re-mask the shifted window
     const N = this.N;
     const cell = this.cell;
     const mask = new Uint8Array(N * N);
