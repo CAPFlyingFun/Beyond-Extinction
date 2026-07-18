@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { KauaiTileStreamer, type KauaiManifest } from "../engine/KauaiTileStreamer";
 import { KauaiHydro } from "../engine/KauaiHydro";
+import { KauaiWaterSim } from "../engine/KauaiWaterSim";
 import { KauaiCarve } from "../engine/KauaiCarve";
 import { assetUrl, loadTexture } from "../engine/assets";
 import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
@@ -55,6 +56,11 @@ class WaterLabScene implements IScene {
   private readonly ctx: SceneContext;
   private streamer?: KauaiTileStreamer;
   private hydro?: KauaiHydro;
+  private sim?: KauaiWaterSim;
+  private simReady = false;
+  private simSpunUp = false;
+  private simOn = true; // pilot: show the shallow-water sim (hides the ribbon rivers)
+  private simSubsteps = 40;
   private water?: THREE.Mesh;
   private waterT = 0;
   private envMap?: THREE.Texture;
@@ -133,6 +139,14 @@ class WaterLabScene implements IScene {
       this.streamer = new KauaiTileStreamer(this.scene, manifest, { radius: 2 });
       this.streamer.update(0, G5_CENTER.x, G5_CENTER.y);
       this.hydro = new KauaiHydro(this.scene);
+      // Virtual-pipes shallow-water pilot over a window spanning the Wailua
+      // valley down to the coast (inland high → ocean drain in the east).
+      this.sim = new KauaiWaterSim(this.scene, {
+        centerX: 19800,
+        centerZ: 1288,
+        N: 256,
+        cell: 10,
+      });
     } catch (e) {
       console.error("[waterlab] manifest load failed", e);
     }
@@ -190,6 +204,23 @@ class WaterLabScene implements IScene {
     if (this.streamer) {
       this.streamer.update(dt, G5_CENTER.x, G5_CENTER.y);
       this.hydro?.update(dt, this.streamer);
+      // Shallow-water pilot: sample the bed once resident, then step it. While
+      // the sim is on, hide the ribbon rivers so we judge the sim alone.
+      if (this.sim && !this.simReady) {
+        this.simReady = this.sim.sampleTerrain(this.streamer);
+      }
+      if (this.sim && this.simReady && this.simOn) {
+        if (!this.simSpunUp) {
+          // One-time spin-up burst so the valleys visibly fill within a second
+          // or two of the sim coming online, independent of frame rate.
+          this.sim.update(600);
+          this.simSpunUp = true;
+        } else {
+          this.sim.update(this.simSubsteps);
+        }
+      }
+      if (this.hydro) this.hydro.group.visible = !this.simOn;
+      if (this.sim) this.sim.group.visible = this.simOn && this.simReady;
     }
     // Ocean follows the camera; drive the swell clock.
     this.waterT += dt;
@@ -394,6 +425,20 @@ class WaterLabScene implements IScene {
         !!this.streamer &&
         this.streamer.loadState(G5_CENTER.x, G5_CENTER.y).ready ===
           this.streamer.loadState(G5_CENTER.x, G5_CENTER.y).total,
+      // Shallow-water sim controls/diagnostics for the pilot.
+      sim: () => this.sim,
+      simReady: () => this.simReady,
+      simStats: () => this.sim?.stats() ?? null,
+      simRain: (on: boolean) => this.sim?.setRain(on),
+      simReset: () => this.sim?.reset(),
+      simToggle: (on?: boolean) => {
+        this.simOn = on ?? !this.simOn;
+        return this.simOn;
+      },
+      simSubsteps: (n: number) => {
+        this.simSubsteps = Math.max(1, Math.min(200, n | 0));
+        return this.simSubsteps;
+      },
     };
   }
 
@@ -409,6 +454,7 @@ class WaterLabScene implements IScene {
     this.ui?.remove();
     this.streamer?.dispose();
     this.hydro?.dispose();
+    this.sim?.dispose();
     if (this.water) {
       this.water.geometry.dispose();
       (this.water.material as THREE.Material).dispose();
