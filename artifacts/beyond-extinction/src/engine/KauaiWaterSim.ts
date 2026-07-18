@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { loadTexture } from "./assets";
 import type { KauaiTileStreamer } from "./KauaiTileStreamer";
 import type { HydroRiver } from "./KauaiCarve";
 
@@ -37,10 +38,16 @@ const RAIN = 0.08; // m/s injected at the headwaters — safe to feed hard once 
 const FEED_PCTL = 0.4; // feed land cells above this elevation percentile
 const SEA = -0.4; // bed below this = ocean → drains to sea level
 const EDGE_DRAIN = 0.97; // domain-edge ring keeps this per substep — a gentle outflow, not an instant empty
-const MIN_DEPTH = 0.06; // below this a cell renders dry (hides thin sheet-flow films)
-const FULL_DEPTH = 0.8; // at/above this the surface is fully opaque (real channels/pools)
+const MIN_DEPTH = 0.05; // below this a cell renders dry (hides thin sheet-flow films)
+const FULL_DEPTH = 0.35; // reach full opacity at a shallow depth so the channel reads as solid blue water, not a pale film over sand
 const CORRIDOR_R = 12; // half-width (m) of the river-corridor confinement band (~24 m wide)
 const SOURCE_PCTL = 0.8; // feed only the top 20% (by elevation) of corridor cells — the headwaters
+const TARGET_DEPTH = 2.6; // aim the channel at ~this deepest depth, then throttle inflow (bankfull-ish)
+const MIN_FILL = 0.5; // RENDER floor: draw corridor channels at least this deep so a shallow, fast reach still reads as a filled river (visual only — sim state stays honest)
+const BED_UV_M = 22; // metres per water-normal ripple tile — large & gentle so the
+// surface reads as smooth flowing water, not a fine gravel/pebble texture (the
+// ocean uses no tiled normal map at all; a 6 m tile made the river look pebbly)
+const FLOW_SCROLL = 0.05; // normal-map scroll speed (downstream drift look)
 
 export class KauaiWaterSim {
   readonly group = new THREE.Group();
@@ -58,12 +65,16 @@ export class KauaiWaterSim {
   private rainOn = true;
   private feedThresh = 0; // elevation above which highland cells receive runoff
   private mask?: Uint8Array; // 1 = inside a river corridor; water is confined here
+  private edgeSoft?: Float32Array; // 0..1 bank feather: 1 in the channel core, 0 at the rim
   private source?: Uint8Array; // 1 = headwater cell where runoff enters the corridor
   private mesh?: THREE.Mesh;
   private geo?: THREE.BufferGeometry;
   private posArr?: Float32Array;
   private colArr?: Float32Array;
   private readonly mat: THREE.MeshStandardMaterial;
+  private normalTex?: THREE.Texture;
+  private clock = 0;
+  private maxD = 0; // running deepest cell (previous substep) — drives the inflow throttle
 
   constructor(scene: THREE.Scene, opts: WaterSimOpts) {
     this.N = opts.N ?? 256;
@@ -76,23 +87,50 @@ export class KauaiWaterSim {
     this.water = new Float32Array(N * N);
     this.flowX = new Float32Array((N + 1) * N);
     this.flowY = new Float32Array(N * (N + 1));
+    // River-water material: low roughness + envMap (three auto-applies
+    // scene.environment) gives real sky reflection; a scrolling normal map makes
+    // it move; a fresnel term adds the bright grazing sheen. Per-vertex colour
+    // carries depth tint (RGB) + wetness (alpha), so shallow edges read clear and
+    // the bed shows through while deep water goes blue.
+    // Match the ocean water look (KauaiStreamScene.makeOceanMaterial) so all the
+    // water reads as one family — same blue, roughness, envMap reflection and
+    // fresnel sheen — but keep per-vertex alpha so dry cells vanish (the ocean
+    // uses a coast mask instead; we use the sim's wetness).
     this.mat = new THREE.MeshStandardMaterial({
-      color: 0x1d6f8c,
+      color: 0x1a6389,
       roughness: 0.18,
-      metalness: 0.05,
+      metalness: 0.1,
+      envMapIntensity: 0.9,
+      normalScale: new THREE.Vector2(0.32, 0.32),
       transparent: true,
-      opacity: 0.86,
-      alphaTest: 0.05, // discard near-dry fringe fragments (no broad translucent films)
-      vertexColors: true, // alpha carries per-cell wetness
+      opacity: 0.9,
+      alphaTest: 0.02,
+      vertexColors: true,
       side: THREE.DoubleSide,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -4,
     });
+    const sky = new THREE.Color(0x9fc6df).convertSRGBToLinear();
+    this.mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uSky = { value: sky };
+      sh.fragmentShader = sh.fragmentShader
+        .replace("#include <common>", "#include <common>\nuniform vec3 uSky;")
+        .replace(
+          "#include <lights_fragment_end>",
+          `#include <lights_fragment_end>
+          {
+            // Match the ocean's fresnel sky sheen exactly (makeOceanMaterial):
+            float fres = pow(1.0 - clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0), 3.0);
+            totalEmissiveRadiance += uSky * min(fres, 0.85) * 0.5;
+          }`,
+        );
+    };
     this.group.name = "kauai-watersim";
     scene.add(this.group);
     this.buildMesh();
+    void this.loadNormal();
   }
 
   private wi(x: number, y: number): number {
@@ -146,6 +184,10 @@ export class KauaiWaterSim {
     const R = CORRIDOR_R;
     const rSq = R * R;
     const mask = new Uint8Array(N * N);
+    // Per-cell nearest distance to the centerline, so banks can be FEATHERED at
+    // render time instead of stepping hard at the 10 m cell boundary (that hard
+    // 0/1 alpha edge is what reads as a blocky staircase / aqueduct wall).
+    const dist = new Float32Array(N * N).fill(R + 1);
     const minX = this.ox;
     const maxX = this.ox + N * cell;
     const minZ = this.oz;
@@ -180,12 +222,28 @@ export class KauaiWaterSim {
             t = t < 0 ? 0 : t > 1 ? 1 : t;
             const ex = wx - (ax + dx * t);
             const ez = wz - (az + dz * t);
-            if (ex * ex + ez * ez < rSq) mask[y * N + x] = 1;
+            const d2 = ex * ex + ez * ez;
+            if (d2 < rSq) {
+              const idx = y * N + x;
+              mask[idx] = 1;
+              const d = Math.sqrt(d2);
+              if (d < dist[idx]) dist[idx] = d;
+            }
           }
         }
       }
     }
     this.mask = mask;
+    // Feather factor: 1.0 across the channel core, easing to 0 at the outer rim
+    // so bank pixels go translucent and blend into the sand (no hard staircase).
+    const soft = new Float32Array(N * N);
+    const rin = R * 0.7; // inner radius that stays fully opaque
+    for (let i = 0; i < N * N; i++) {
+      if (!mask[i]) continue;
+      const e = Math.min(1, Math.max(0, (R - dist[i]) / (R - rin)));
+      soft[i] = e * e * (3 - 2 * e); // smoothstep
+    }
+    this.edgeSoft = soft;
     this.computeSource();
   }
 
@@ -231,7 +289,13 @@ export class KauaiWaterSim {
     const mask = this.mask;
     const src = this.source;
     if (this.rainOn) {
-      const add = RAIN * DT;
+      // Throttle inflow as the deepest cell approaches TARGET_DEPTH (bankfull-ish):
+      // full feed below 70%, ramping to zero at target. Excess is NOT erased — we
+      // just stop adding, so volume is conserved and the level settles naturally.
+      const lo = TARGET_DEPTH * 0.7;
+      const throttle =
+        this.maxD >= TARGET_DEPTH ? 0 : this.maxD <= lo ? 1 : (TARGET_DEPTH - this.maxD) / (TARGET_DEPTH - lo);
+      const add = RAIN * DT * throttle;
       if (src) {
         for (let i = 0; i < N * N; i++) if (src[i]) water[i] += add; // headwaters only
       } else if (mask) {
@@ -306,6 +370,10 @@ export class KauaiWaterSim {
         if (water[i] < 0) water[i] = 0;
       }
     }
+    // Deepest cell → next substep's inflow throttle (cheap: reuse this pass).
+    let mx = 0;
+    for (let i = 0; i < N * N; i++) if (water[i] > mx) mx = water[i];
+    this.maxD = mx;
     // Corridor confinement: water cannot exist off the real waterways, so any
     // that spread onto a non-corridor cell is removed. This is the hard cap that
     // makes island-flooding impossible — only the channels ever hold water.
@@ -323,11 +391,25 @@ export class KauaiWaterSim {
     }
   }
 
-  /** Advance the sim by `steps` substeps and refresh the surface mesh. */
-  update(steps: number): void {
+  /** Advance the sim by `steps` substeps, scroll the ripples, refresh the mesh. */
+  update(steps: number, dt = 0.016): void {
     if (!this.terrainReady || this.disposed) return;
     for (let s = 0; s < steps; s++) this.substep();
+    this.clock += dt;
+    if (this.normalTex) this.normalTex.offset.set(-this.clock * FLOW_SCROLL, this.clock * FLOW_SCROLL * 0.6);
     this.refreshMesh();
+  }
+
+  /** Load the scrolling ripple normal for the water surface. */
+  private async loadNormal(): Promise<void> {
+    const tex = await loadTexture("assets/textures/water_normal.png");
+    if (!tex || this.disposed) return;
+    tex.colorSpace = THREE.NoColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.needsUpdate = true;
+    this.normalTex = tex;
+    this.mat.normalMap = tex;
+    this.mat.needsUpdate = true;
   }
 
   private buildMesh(): void {
@@ -335,12 +417,16 @@ export class KauaiWaterSim {
     const geo = new THREE.BufferGeometry();
     const pos = new Float32Array(N * N * 3);
     const col = new Float32Array(N * N * 4);
+    const uv = new Float32Array(N * N * 2);
     for (let y = 0; y < N; y++) {
       for (let x = 0; x < N; x++) {
         const o = this.wi(x, y) * 3;
         pos[o] = this.worldX(x);
         pos[o + 1] = 0;
         pos[o + 2] = this.worldZ(y);
+        const u = this.wi(x, y) * 2;
+        uv[u] = this.worldX(x) / BED_UV_M;
+        uv[u + 1] = this.worldZ(y) / BED_UV_M;
       }
     }
     const idx: number[] = [];
@@ -353,8 +439,16 @@ export class KauaiWaterSim {
         idx.push(a, c, b, b, c, d);
       }
     }
+    // Straight-up normals: water is a near-flat plane, so let the tangent-space
+    // ripple normal map do the surface detail instead of per-cell face normals
+    // (computeVertexNormals on the bumpy heightfield gives faceted, blocky
+    // shading that reads as jagged rather than smooth water).
+    const nrm = new Float32Array(N * N * 3);
+    for (let i = 0; i < N * N; i++) nrm[i * 3 + 1] = 1;
     geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute("normal", new THREE.BufferAttribute(nrm, 3));
     geo.setAttribute("color", new THREE.BufferAttribute(col, 4));
+    geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
     geo.setIndex(idx);
     this.posArr = pos;
     this.colArr = col;
@@ -372,25 +466,38 @@ export class KauaiWaterSim {
     const col = this.colArr!;
     const bed = this.bed;
     const water = this.water;
+    const mask = this.mask;
     for (let i = 0; i < N * N; i++) {
-      const d = water[i];
-      pos[i * 3 + 1] = bed[i] + d;
-      // alpha ramps in over [MIN_DEPTH, FULL_DEPTH] so dry cells vanish.
+      // Render depth: draw the ENTIRE river corridor as filled water at MIN_FILL,
+      // with the sim's own depth added on top where it has pooled. Previously we
+      // only drew cells the sim had actually wetted (~100 of them), so the vast
+      // majority of the carved channel showed bare turquoise reef TERRAIN and no
+      // water surface at all — the "textures drawn but no water" the user saw.
+      // The corridor mask IS the real NHD waterway, so filling it is correct.
+      const raw = water[i];
+      const d = mask && mask[i] ? Math.max(raw, MIN_FILL) : raw;
+      pos[i * 3 + 1] = bed[i] + d + 0.03; // tiny visual offset above the bed
       const a =
         d <= MIN_DEPTH
           ? 0
           : d >= FULL_DEPTH
             ? 1
             : (d - MIN_DEPTH) / (FULL_DEPTH - MIN_DEPTH);
+      // Depth tint (RGB multiplies the material colour): shallow ~neutral, deep
+      // darker — never brighter, so shallow water isn't a glowing cyan stripe.
+      const k = d >= FULL_DEPTH ? 1 : d <= MIN_DEPTH ? 0 : (d - MIN_DEPTH) / (FULL_DEPTH - MIN_DEPTH);
+      const shade = 1.0 - 0.42 * k;
+      const soft = this.edgeSoft ? this.edgeSoft[i] : 1;
       const c = i * 4;
-      col[c] = 1;
-      col[c + 1] = 1;
-      col[c + 2] = 1;
-      col[c + 3] = a;
+      col[c] = shade;
+      col[c + 1] = shade;
+      col[c + 2] = shade * 1.04;
+      col[c + 3] = a * soft; // feather bank pixels translucent → no hard staircase
     }
     this.geo!.attributes.position.needsUpdate = true;
     this.geo!.attributes.color.needsUpdate = true;
-    this.geo!.computeVertexNormals();
+    // Normals stay straight-up (set in buildMesh); the ripple normal map supplies
+    // the surface detail, keeping the water smooth instead of faceted.
   }
 
   /** Diagnostics: total water volume + wet-cell count (for headless checks). */
@@ -412,6 +519,7 @@ export class KauaiWaterSim {
     this.disposed = true;
     this.geo?.dispose();
     this.mat.dispose();
+    this.normalTex?.dispose();
     if (this.mesh) this.group.remove(this.mesh);
     this.group.parent?.remove(this.group);
   }
