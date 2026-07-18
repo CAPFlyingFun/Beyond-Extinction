@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { loadTexture } from "./assets";
 import type { KauaiTileStreamer } from "./KauaiTileStreamer";
 import type { HydroRiver } from "./KauaiCarve";
+import { riverCarveRadius, FLAT_FRAC } from "./kauaiCarveCore";
 
 /**
  * Virtual-pipes shallow-water simulation over a real terrain window — the
@@ -181,13 +182,12 @@ export class KauaiWaterSim {
   setCorridor(rivers: HydroRiver[]): void {
     const N = this.N;
     const cell = this.cell;
-    const R = CORRIDOR_R;
-    const rSq = R * R;
     const mask = new Uint8Array(N * N);
-    // Per-cell nearest distance to the centerline, so banks can be FEATHERED at
-    // render time instead of stepping hard at the 10 m cell boundary (that hard
-    // 0/1 alpha edge is what reads as a blocky staircase / aqueduct wall).
-    const dist = new Float32Array(N * N).fill(R + 1);
+    // Per-cell nearest distance to the centerline + the local channel half-width,
+    // so banks can be FEATHERED at render time (soft alpha, no hard staircase)
+    // and each reach fills to ITS OWN width instead of a single fixed corridor.
+    const dist = new Float32Array(N * N).fill(1e9);
+    const cellR = new Float32Array(N * N); // local half-width at the nearest reach
     const minX = this.ox;
     const maxX = this.ox + N * cell;
     const minZ = this.oz;
@@ -199,6 +199,13 @@ export class KauaiWaterSim {
         const az = pts[i - 1][2];
         const bx = pts[i][0];
         const bz = pts[i][2];
+        // Fill to the FLAT channel bed the carve actually cut (riverCarveRadius ×
+        // FLAT_FRAC) using this reach's real width, so the water is as wide as the
+        // reef-textured channel instead of a thin 24 m ribbon down a wide canal.
+        // Fixed floor CORRIDOR_R keeps a hairline reach visible.
+        const w = (pts[i - 1][3] + pts[i][3]) * 0.5;
+        const R = Math.max(CORRIDOR_R, riverCarveRadius(w) * FLAT_FRAC);
+        const rSq = R * R;
         if (
           Math.max(ax, bx) + R < minX ||
           Math.min(ax, bx) - R > maxX ||
@@ -227,7 +234,10 @@ export class KauaiWaterSim {
               const idx = y * N + x;
               mask[idx] = 1;
               const d = Math.sqrt(d2);
-              if (d < dist[idx]) dist[idx] = d;
+              if (d < dist[idx]) {
+                dist[idx] = d;
+                cellR[idx] = R;
+              }
             }
           }
         }
@@ -235,11 +245,12 @@ export class KauaiWaterSim {
     }
     this.mask = mask;
     // Feather factor: 1.0 across the channel core, easing to 0 at the outer rim
-    // so bank pixels go translucent and blend into the sand (no hard staircase).
+    // (per-cell width) so bank pixels go translucent and blend into the sand.
     const soft = new Float32Array(N * N);
-    const rin = R * 0.7; // inner radius that stays fully opaque
     for (let i = 0; i < N * N; i++) {
       if (!mask[i]) continue;
+      const R = cellR[i] || CORRIDOR_R;
+      const rin = R * 0.8; // inner 80% fully opaque, outer 20% feathers to the bank
       const e = Math.min(1, Math.max(0, (R - dist[i]) / (R - rin)));
       soft[i] = e * e * (3 - 2 * e); // smoothstep
     }
