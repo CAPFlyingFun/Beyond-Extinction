@@ -429,7 +429,10 @@ class KauaiStreamScene implements IScene {
     // Underwater the fog swaps to dense teal (see the swim physics) so dipping
     // below the surface reads as being IN the water, not a black void.
     this.airFog = new THREE.Fog(0xbcc6cc, 6500, 17000);
-    this.uwFog = new THREE.Fog(0x0a3f52, 0.5, 24);
+    // Brighter turquoise + a much longer clear range so a shallow 3–8 m waterway
+    // reads as CLEAR sunlit water, not dark murk. Depth-darkening is handled by the
+    // dive tint below (deeper = darker), not by this ambient fog.
+    this.uwFog = new THREE.Fog(0x2f93a8, 6, 70);
     this.scene.fog = this.airFog;
 
     // Sky HDRI (ambientCG, CC0): EXR → PMREM environment for real sky
@@ -1007,7 +1010,9 @@ class KauaiStreamScene implements IScene {
         // Underwater wash: ramp opacity with how far the head is under, so
         // diving reads as submerged (clear at the surface, deep blue-green down).
         if (this.uwTint) {
-          const tgt = submerged ? Math.min(0.62, 0.3 + Math.max(0, this.sub) * 0.14) : 0;
+          // Depth-driven darkening: barely-there just under the surface (clear,
+          // sunlit shallows), ramping up the deeper you dive — like real water.
+          const tgt = submerged ? Math.min(0.5, 0.05 + Math.max(0, this.sub) * 0.075) : 0;
           const cur = parseFloat(this.uwTint.style.opacity || "0");
           this.uwTint.style.opacity = (cur + (tgt - cur) * Math.min(1, dt * 6)).toFixed(3);
         }
