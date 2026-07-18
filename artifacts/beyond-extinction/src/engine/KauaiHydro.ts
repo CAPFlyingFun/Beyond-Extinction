@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { loadTexture } from "./assets";
 import type { KauaiTileStreamer } from "./KauaiTileStreamer";
 import { KauaiCarve, type HydroRiver, type HydroLake } from "./KauaiCarve";
-import { riverCarveRadius } from "./kauaiCarveCore";
+import { riverCarveRadius, FLAT_FRAC } from "./kauaiCarveCore";
 
 /**
  * Real Kauaʻi hydrography (USGS NHDPlus HR), baked offline by
@@ -777,7 +777,12 @@ export class KauaiHydro {
           const az = pts[i][2];
           const bx = pts[i + 1][0];
           const bz = pts[i + 1][2];
-          const half = Math.max(pts[i][3], pts[i + 1][3]) * 0.5 + margin;
+          // Match the RENDERED ribbon width, not the raw baked point width: the
+          // ribbon fills the carved channel (riverCarveRadius × FLAT_FRAC ≈ the
+          // flat bed the water covers), which is far wider than width·0.5. Using
+          // the narrow raw width let trees plant inside the visible river.
+          const half =
+            riverCarveRadius(Math.max(pts[i][3], pts[i + 1][3])) * FLAT_FRAC + margin;
           if (
             Math.max(ax, bx) + half < minX ||
             Math.min(ax, bx) - half > maxX ||
@@ -923,8 +928,16 @@ export class KauaiHydro {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.Float32BufferAttribute(bed.pos, 3));
       geo.setAttribute("uv", new THREE.Float32BufferAttribute(bed.uv, 2));
+      // Flat UP normals instead of computeVertexNormals: the streambed follows
+      // the carved V-channel, so per-face normals shade its centre crease and
+      // per-cross-section facets as hard lines that show THROUGH the water (the
+      // "thin line down the middle with joint sections"). The bed reads its depth
+      // from the water tint above it, not its own shading, so a uniform up-normal
+      // sheet looks right and loses the seams.
+      const bn = new Float32Array(bed.pos.length);
+      for (let v = 1; v < bn.length; v += 3) bn[v] = 1;
+      geo.setAttribute("normal", new THREE.Float32BufferAttribute(bn, 3));
       geo.setIndex(bed.idx);
-      geo.computeVertexNormals();
       geo.computeBoundingSphere();
       const mesh = new THREE.Mesh(geo, this.bedMats[ti]);
       mesh.name = `hydro-${c.tile}-bed${ti}`;
