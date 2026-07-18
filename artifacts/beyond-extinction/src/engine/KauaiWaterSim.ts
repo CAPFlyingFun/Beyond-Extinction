@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { KauaiTileStreamer } from "./KauaiTileStreamer";
+import type { HydroRiver } from "./KauaiCarve";
 
 /**
  * Virtual-pipes shallow-water simulation over a real terrain window — the
@@ -32,12 +33,14 @@ const DT = 0.003; // sim timestep (s) — small for CFL stability
 const FRICTION = 0.3; // 0 = max friction (kills flow), 1 = none
 // Feed only the UPPER CATCHMENT (highland runoff), NOT every cell — global rain
 // on beaches, valleys and ridges alike floods the whole window into a bathtub.
-const RAIN = 0.02; // m/s added on highland cells only
+const RAIN = 0.08; // m/s injected at the headwaters — safe to feed hard once confined to the corridor
 const FEED_PCTL = 0.4; // feed land cells above this elevation percentile
 const SEA = -0.4; // bed below this = ocean → drains to sea level
 const EDGE_DRAIN = 0.97; // domain-edge ring keeps this per substep — a gentle outflow, not an instant empty
-const MIN_DEPTH = 0.1; // below this a cell renders dry (hides thin sheet-flow films)
-const FULL_DEPTH = 1.2; // at/above this the surface is fully opaque (real channels/pools)
+const MIN_DEPTH = 0.06; // below this a cell renders dry (hides thin sheet-flow films)
+const FULL_DEPTH = 0.8; // at/above this the surface is fully opaque (real channels/pools)
+const CORRIDOR_R = 12; // half-width (m) of the river-corridor confinement band (~24 m wide)
+const SOURCE_PCTL = 0.8; // feed only the top 20% (by elevation) of corridor cells — the headwaters
 
 export class KauaiWaterSim {
   readonly group = new THREE.Group();
@@ -54,6 +57,8 @@ export class KauaiWaterSim {
   private disposed = false;
   private rainOn = true;
   private feedThresh = 0; // elevation above which highland cells receive runoff
+  private mask?: Uint8Array; // 1 = inside a river corridor; water is confined here
+  private source?: Uint8Array; // 1 = headwater cell where runoff enters the corridor
   private mesh?: THREE.Mesh;
   private geo?: THREE.BufferGeometry;
   private posArr?: Float32Array;
@@ -127,7 +132,78 @@ export class KauaiWaterSim {
     land.sort((a, b) => a - b);
     this.feedThresh = land.length ? land[Math.floor(land.length * FEED_PCTL)] : 0;
     this.terrainReady = true;
+    this.computeSource(); // if the corridor mask already arrived, seed headwaters now
     return true;
+  }
+
+  /** Confine the sim to the REAL waterways: mark every cell within CORRIDOR_R of
+   *  an NHD river line, and thereafter water only exists inside that band. This
+   *  is what stops the sim flooding the whole island — water physically cannot
+   *  leave the channels, so it can only pool/flow along the actual 2–5 rivers. */
+  setCorridor(rivers: HydroRiver[]): void {
+    const N = this.N;
+    const cell = this.cell;
+    const R = CORRIDOR_R;
+    const rSq = R * R;
+    const mask = new Uint8Array(N * N);
+    const minX = this.ox;
+    const maxX = this.ox + N * cell;
+    const minZ = this.oz;
+    const maxZ = this.oz + N * cell;
+    for (const r of rivers) {
+      const pts = r.pts;
+      for (let i = 1; i < pts.length; i++) {
+        const ax = pts[i - 1][0];
+        const az = pts[i - 1][2];
+        const bx = pts[i][0];
+        const bz = pts[i][2];
+        if (
+          Math.max(ax, bx) + R < minX ||
+          Math.min(ax, bx) - R > maxX ||
+          Math.max(az, bz) + R < minZ ||
+          Math.min(az, bz) - R > maxZ
+        ) {
+          continue; // segment doesn't touch the window
+        }
+        const cx0 = Math.max(0, Math.floor((Math.min(ax, bx) - R - this.ox) / cell));
+        const cx1 = Math.min(N - 1, Math.ceil((Math.max(ax, bx) + R - this.ox) / cell));
+        const cz0 = Math.max(0, Math.floor((Math.min(az, bz) - R - this.oz) / cell));
+        const cz1 = Math.min(N - 1, Math.ceil((Math.max(az, bz) + R - this.oz) / cell));
+        const dx = bx - ax;
+        const dz = bz - az;
+        const ll = dx * dx + dz * dz || 1;
+        for (let y = cz0; y <= cz1; y++) {
+          for (let x = cx0; x <= cx1; x++) {
+            const wx = this.worldX(x);
+            const wz = this.worldZ(y);
+            let t = ((wx - ax) * dx + (wz - az) * dz) / ll;
+            t = t < 0 ? 0 : t > 1 ? 1 : t;
+            const ex = wx - (ax + dx * t);
+            const ez = wz - (az + dz * t);
+            if (ex * ex + ez * ez < rSq) mask[y * N + x] = 1;
+          }
+        }
+      }
+    }
+    this.mask = mask;
+    this.computeSource();
+  }
+
+  /** Headwater cells = the highest corridor cells; runoff enters only there so
+   *  water flows DOWN the channel instead of filling it uniformly. Needs both the
+   *  corridor mask and the sampled bed, so it runs when the second of the two lands. */
+  private computeSource(): void {
+    if (!this.mask || !this.terrainReady) return;
+    const N = this.N;
+    const elevs: number[] = [];
+    for (let i = 0; i < N * N; i++) if (this.mask[i] && this.bed[i] > SEA) elevs.push(this.bed[i]);
+    const src = new Uint8Array(N * N);
+    if (elevs.length) {
+      elevs.sort((a, b) => a - b);
+      const thresh = elevs[Math.floor(elevs.length * SOURCE_PCTL)];
+      for (let i = 0; i < N * N; i++) if (this.mask[i] && this.bed[i] >= thresh) src[i] = 1;
+    }
+    this.source = src;
   }
 
   get ready(): boolean {
@@ -150,11 +226,20 @@ export class KauaiWaterSim {
     const fx = this.flowX;
     const fy = this.flowY;
     const cell = this.cell;
-    // Feed + drains. Runoff enters only in the upper catchment (highland cells).
+    // Feed + drains. With a corridor mask, runoff enters ONLY along the real
+    // waterways; otherwise it falls on the upper catchment (highland cells).
+    const mask = this.mask;
+    const src = this.source;
     if (this.rainOn) {
       const add = RAIN * DT;
-      const thresh = this.feedThresh;
-      for (let i = 0; i < N * N; i++) if (bed[i] > thresh) water[i] += add;
+      if (src) {
+        for (let i = 0; i < N * N; i++) if (src[i]) water[i] += add; // headwaters only
+      } else if (mask) {
+        for (let i = 0; i < N * N; i++) if (mask[i] && bed[i] > SEA) water[i] += add;
+      } else {
+        const thresh = this.feedThresh;
+        for (let i = 0; i < N * N; i++) if (bed[i] > thresh) water[i] += add;
+      }
     }
     for (let i = 0; i < N * N; i++) if (bed[i] < SEA) water[i] = 0; // ocean sink
     // Accelerate X flows on interior edges (surface = bed + water).
@@ -220,6 +305,12 @@ export class KauaiWaterSim {
         water[i] += dv * kd;
         if (water[i] < 0) water[i] = 0;
       }
+    }
+    // Corridor confinement: water cannot exist off the real waterways, so any
+    // that spread onto a non-corridor cell is removed. This is the hard cap that
+    // makes island-flooding impossible — only the channels ever hold water.
+    if (mask) {
+      for (let i = 0; i < N * N; i++) if (!mask[i]) water[i] = 0;
     }
     // Edge-drain ring = outflow boundary (water leaving the window heads to sea).
     for (let x = 0; x < N; x++) {

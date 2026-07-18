@@ -154,6 +154,11 @@ class WaterLabScene implements IScene {
         N: 256,
         cell: 10,
       });
+      // Confine the sim to the REAL waterways so it can only fill the actual
+      // rivers, never flood the island.
+      void KauaiCarve.prefetch().then((doc) => {
+        if (doc && this.sim) this.sim.setCorridor(doc.rivers);
+      });
     } catch (e) {
       console.error("[waterlab] manifest load failed", e);
     }
