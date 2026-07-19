@@ -14,7 +14,6 @@ import { InventoryOverlay } from "../engine/InventoryOverlay";
 import { IslandHud } from "../engine/IslandHud";
 import { openSettingsPanel, closeSettingsPanel } from "../engine/SettingsPanel";
 import { assetUrl, loadTexture } from "../engine/assets";
-import { VOICE_CLIPS } from "../data/voiceClips";
 import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
 
 /**
@@ -1424,13 +1423,11 @@ class KauaiStreamScene implements IScene {
 
   /** The opening cinematic: one PRE-MIXED track (Jack's journal, the nightmare
    *  relived, its foley, and the score all bounced into a single ~1:07 file)
-   *  plays over the black journal screen. The calm journal line is typed as the
-   *  on-screen anchor; the remembered nightmare is heard, not subtitled. Resolves
-   *  when the whole mix ends (or when a skip/teardown stops the voice channel). */
+   *  plays over the black journal screen with the live loading bar. No on-screen
+   *  text — the typewriter can't stay in sync with an offline-baked mix, and the
+   *  synced captions will live in the baked opening itself (audio now, video
+   *  next). Resolves when the mix ends (or a skip/teardown stops the channel). */
   private async runOpeningCinematic(): Promise<void> {
-    // On-screen anchor: the calm journal entry. Everything else — the nightmare,
-    // the foley, the score — is baked into the one track and heard over black.
-    this.typewrite(VOICE_CLIPS["ch2_jack_journal"]?.text ?? "", "ch2_jack_journal");
     await this.ctx.audio.playCinematic("assets/audio/ch2_opening.mp3");
   }
 
