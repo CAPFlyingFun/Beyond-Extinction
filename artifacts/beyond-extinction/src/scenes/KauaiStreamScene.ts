@@ -460,6 +460,11 @@ class KauaiStreamScene implements IScene {
   private loadWrap?: HTMLDivElement;
   private loadFill?: HTMLDivElement;
   private loadLabel?: HTMLDivElement;
+  // "Skip" during the opening: revealed once the map is READY but the baked
+  // cinematic is still playing, so a ready player can cut it and go straight in.
+  private skipBtn?: HTMLButtonElement;
+  private openingAudioActive = false; // the baked opening track is still playing
+  private arrivalSkip = false; // player asked to skip the rest of the arrival
   private skyProgress = 0; // 0..1 HDRI download fraction (real bytes via onProgress)
   private loadFracMax = 0; // monotonic clamp so the bar never slides backward
   // Rolling progress samples for the live ETA (measure the RATE over a window,
@@ -1416,8 +1421,12 @@ class KauaiStreamScene implements IScene {
     await this.waitForWorldReady();
     if (this.disposed) return;
 
-    await this.runFlyover();
-    if (this.disposed) return;
+    // Straight to first person if the player pressed Skip once the map was
+    // ready; otherwise the establishing drone flies in first.
+    if (!this.arrivalSkip) {
+      await this.runFlyover();
+      if (this.disposed) return;
+    }
     this.finishArrival();
   }
 
@@ -1428,7 +1437,14 @@ class KauaiStreamScene implements IScene {
    *  synced captions will live in the baked opening itself (audio now, video
    *  next). Resolves when the mix ends (or a skip/teardown stops the channel). */
   private async runOpeningCinematic(): Promise<void> {
-    await this.ctx.audio.playCinematic("assets/audio/ch2_opening.mp3");
+    this.openingAudioActive = true;
+    try {
+      await this.ctx.audio.playCinematic("assets/audio/ch2_opening.mp3");
+    } finally {
+      // Track ended (or was skipped) — retire the Skip button either way.
+      this.openingAudioActive = false;
+      if (this.skipBtn) this.skipBtn.style.display = "none";
+    }
   }
 
   /** The opaque journal page + a dynamic loading bar (real tile-stream progress). */
@@ -1459,12 +1475,40 @@ class KauaiStreamScene implements IScene {
     wrap.append(track, label);
     root.appendChild(wrap);
 
+    // "Skip ⏭" — hidden until the world is READY (revealed in setLoadProgress);
+    // pressing it cuts the remaining opening and drops straight into first person.
+    const skip = document.createElement("button");
+    skip.type = "button";
+    skip.textContent = "Skip ⏭";
+    skip.style.cssText =
+      "position:absolute;right:16px;bottom:calc(8% + env(safe-area-inset-bottom,0px));" +
+      "z-index:3;display:none;padding:9px 18px;border-radius:22px;cursor:pointer;" +
+      "background:rgba(10,20,28,0.72);border:1px solid rgba(120,200,220,0.42);" +
+      "color:#dff2f8;font:600 12px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;" +
+      "pointer-events:auto;-webkit-tap-highlight-color:transparent;backdrop-filter:blur(4px);";
+    skip.addEventListener("click", (e) => {
+      e.preventDefault();
+      this.requestArrivalSkip();
+    });
+    root.appendChild(skip);
+
     this.ctx.uiLayer.appendChild(root);
     this.journalRoot = root;
     this.journalTextEl = text;
     this.loadWrap = wrap;
     this.loadFill = fill;
     this.loadLabel = label;
+    this.skipBtn = skip;
+  }
+
+  /** Player pressed "Skip": the map is loaded, so cut the rest of the opening —
+   *  the baked track and the establishing flyover — and go straight to play. */
+  private requestArrivalSkip(): void {
+    if (this.phase === "play" || this.arrivalSkip) return;
+    this.arrivalSkip = true;
+    this.flyoverSkip = true; // fast-forward the flyover if it's already running
+    this.ctx.audio.stopVoice(); // cut the cinematic track (resolves its await)
+    if (this.skipBtn) this.skipBtn.style.display = "none";
   }
 
   private setLoadProgress(frac: number): void {
@@ -1474,6 +1518,8 @@ class KauaiStreamScene implements IScene {
     if (!this.loadLabel) return;
     if (pct >= 100) {
       this.loadLabel.textContent = "READY";
+      // Map's in but the baked opening is still playing → offer to skip it.
+      if (this.skipBtn && this.openingAudioActive) this.skipBtn.style.display = "";
       return;
     }
     const eta = this.estimateEtaMs(clamped);
@@ -1732,10 +1778,10 @@ class KauaiStreamScene implements IScene {
       setTimeout(() => tint.remove(), 400);
       this.uwTint = undefined;
     }
-    this.journalRoot?.remove();
+    this.journalRoot?.remove(); // the Skip button is a child, removed with it
     this.journalRoot = undefined;
     this.journalTextEl = undefined;
-    this.loadWrap = this.loadFill = this.loadLabel = undefined;
+    this.loadWrap = this.loadFill = this.loadLabel = this.skipBtn = undefined;
 
     this.camera.fov = 62;
     this.camera.updateProjectionMatrix();
