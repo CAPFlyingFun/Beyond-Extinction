@@ -1360,6 +1360,13 @@ class KauaiStreamScene implements IScene {
     const audio = this.ctx.audio;
     this.ctx.input.setEnabled(false);
 
+    // Hand the soundstage to the radio play: fade out whatever bed carried in
+    // from the menu / prologue so it doesn't bleed under the opening journal
+    // line. The nightmare lays down its own chase bed (playMusic below), and the
+    // island ambience takes over once we cut to first person. (Voice already
+    // ducks music, but only the CURRENT bed — this stops the wrong one lingering.)
+    audio.stopMusic();
+
     this.buildArrivalUi();
     void this.driveLoadBar(); // paint the bar from real progress for the whole arrival
     // The prologue cut to black with a fadeless handoff, so the SceneManager veil
