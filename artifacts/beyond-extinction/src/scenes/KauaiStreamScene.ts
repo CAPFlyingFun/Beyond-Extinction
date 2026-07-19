@@ -107,6 +107,14 @@ const OCEAN_WAVES: readonly [number, number, number, number, number][] = [
   [-0.7593, 0.6508, 39, 0.04, 1.2],
 ];
 
+/** Human-readable ETA: "1m 13s" over a minute, else "13s". */
+function fmtEta(ms: number): string {
+  const s = Math.max(1, Math.round(ms / 1000));
+  const m = Math.floor(s / 60);
+  const ss = s % 60;
+  return m > 0 ? `${m}m ${String(ss).padStart(2, "0")}s` : `${ss}s`;
+}
+
 /** Exact swell height (m, relative to the base plane) at world (x,z) & time t. */
 export function oceanWaveHeight(x: number, z: number, t: number): number {
   let h = 0;
@@ -455,6 +463,11 @@ class KauaiStreamScene implements IScene {
   private loadLabel?: HTMLDivElement;
   private skyProgress = 0; // 0..1 HDRI download fraction (real bytes via onProgress)
   private loadFracMax = 0; // monotonic clamp so the bar never slides backward
+  // Rolling progress samples for the live ETA (measure the RATE over a window,
+  // like counting a pulse, then extrapolate the time left). loadEtaMs is the
+  // smoothed estimate so the readout doesn't twitch every tick.
+  private loadSamples: { t: number; f: number }[] = [];
+  private loadEtaMs = 0;
   private uwTint?: HTMLDivElement;
   private typeRaf: number | null = null;
   private flyoverState: { wps: FlyWp[]; total: number; elapsed: number; resolve: () => void } | null = null;
@@ -1505,10 +1518,42 @@ class KauaiStreamScene implements IScene {
   }
 
   private setLoadProgress(frac: number): void {
-    const pct = Math.round(Math.min(1, Math.max(0, frac)) * 100);
+    const clamped = Math.min(1, Math.max(0, frac));
+    const pct = Math.round(clamped * 100);
     if (this.loadFill) this.loadFill.style.width = `${pct}%`;
-    if (this.loadLabel)
-      this.loadLabel.textContent = pct >= 100 ? "READY" : `REACHING THE ISLAND…  ${pct}%`;
+    if (!this.loadLabel) return;
+    if (pct >= 100) {
+      this.loadLabel.textContent = "READY";
+      return;
+    }
+    const eta = this.estimateEtaMs(clamped);
+    const etaStr = eta != null ? `  ·  ~${fmtEta(eta)}` : "";
+    this.loadLabel.textContent = `REACHING THE ISLAND…  ${pct}%${etaStr}`;
+  }
+
+  /**
+   * Live ETA (ms) for the load — the "take a pulse" method the readout wants:
+   * keep ~7 s of {time, fraction} samples, measure the fraction gained across
+   * that window to get a real rate, then extrapolate the remaining fraction.
+   * Returns null until there's enough recent movement for a stable estimate, and
+   * a light low-pass keeps the number from jittering each 100 ms tick.
+   */
+  private estimateEtaMs(frac: number): number | null {
+    const now = performance.now();
+    const WINDOW_MS = 7000;
+    const buf = this.loadSamples;
+    buf.push({ t: now, f: frac });
+    while (buf.length > 2 && now - buf[0].t > WINDOW_MS) buf.shift();
+    const oldest = buf[0];
+    const dt = now - oldest.t;
+    const df = frac - oldest.f;
+    if (dt < 2500 || df <= 1e-4) return null; // need ~2.5 s of real progress first
+    const rate = df / dt; // fraction per ms
+    const remaining = (1 - frac) / rate;
+    if (!Number.isFinite(remaining) || remaining <= 0) return null;
+    const capped = Math.min(remaining, 9 * 60_000); // never show an absurd ETA
+    this.loadEtaMs = this.loadEtaMs > 0 ? this.loadEtaMs * 0.7 + capped * 0.3 : capped;
+    return this.loadEtaMs;
   }
 
   /** Weighted, monotonic loading fraction built from REAL milestones (not a

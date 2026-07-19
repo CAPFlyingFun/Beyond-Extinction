@@ -249,16 +249,32 @@ body {
 }
 .be-menu__footer {
   position: absolute;
-  bottom: 1.6rem;
+  bottom: 1.5rem;
   left: 8vw;
   right: 8vw;
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
+  gap: 1rem;
   font-size: 0.72rem;
   letter-spacing: 0.15em;
   color: rgba(220, 230, 245, 0.45);
   text-transform: uppercase;
   pointer-events: none;
+}
+/* Left: a branded signature (game + act) rather than build jargon. */
+.be-menu__sig {
+  color: rgba(243, 200, 127, 0.66);
+  font-weight: 600;
+  letter-spacing: 0.2em;
+}
+.be-menu__act {
+  color: rgba(220, 230, 245, 0.4);
+  font-weight: 500;
+}
+/* Right: the build stamp, kept deliberately faint. */
+.be-menu__build {
+  color: rgba(220, 230, 245, 0.4);
 }
 /* Discreet dev entry point in the footer — clickable despite the footer's
    pointer-events:none, opens the PIN gate (Skip to Island + editors). */

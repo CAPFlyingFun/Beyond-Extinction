@@ -148,8 +148,8 @@ class MainMenuScene implements IScene {
         <button class="be-btn" data-action="credits">Credits</button>
       </div>
       <div class="be-menu__footer">
-        <span>PWA Engine · Prologue</span>
-        <span>Three.js · v${__APP_VERSION__} · <button class="be-menu__dev" data-action="dev">dev</button></span>
+        <span class="be-menu__sig">Beyond Extinction<span class="be-menu__act"> · Prologue</span></span>
+        <span class="be-menu__build">Three.js · v${__APP_VERSION__} · <button class="be-menu__dev" data-action="dev">dev</button></span>
       </div>`;
     this.ctx.uiLayer.appendChild(el);
     this.menuEl = el;
