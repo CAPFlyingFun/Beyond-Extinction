@@ -525,6 +525,64 @@ export class AudioManager {
   }
 
   /**
+   * Play a single PRE-MIXED cinematic track — voice, SFX, and score already
+   * bounced into one file — to completion at full level. Used when a scene hands
+   * over one master file instead of sequencing individual cues, so nothing here
+   * ducks or layers a second bed. Resolves on 'ended' (with a stall backstop for
+   * mobile Safari), or after a fallback delay if playback is blocked/missing so
+   * the cutscene still advances. Shares the voice channel, so stopVoice()/dispose
+   * cleans it up like any other clip.
+   */
+  playCinematic(src: string, approxMs = 68000): Promise<void> {
+    this.stopVoice();
+    if (this.muted) return this.voiceWait(approxMs);
+    const el = this.voiceEl;
+    el.src = assetUrl(src);
+    el.currentTime = 0;
+    el.volume = VOICE_VOLUME;
+    el.muted = this.muted;
+    this.voiceActive = true;
+
+    return new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const finish = () => {
+        if (this.voiceDone !== finish) return;
+        this.voiceDone = null;
+        this.voiceActive = false;
+        if (timer) clearTimeout(timer);
+        el.removeEventListener("ended", finish);
+        el.removeEventListener("error", onError);
+        el.pause();
+        resolve();
+      };
+      const onError = () => {
+        console.warn(`[Audio] cinematic ${src} unavailable — advancing on a timer`);
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(finish, approxMs);
+      };
+      this.voiceDone = finish;
+      el.addEventListener("ended", finish);
+      el.addEventListener("error", onError);
+      el.play()
+        .then(() => {
+          console.info(`[Audio] cinematic ▶ ${src}`);
+          if (this.voiceDone === finish) {
+            const durMs =
+              Number.isFinite(el.duration) && el.duration > 0 ? el.duration * 1000 : approxMs;
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(finish, durMs + 3000);
+          }
+        })
+        .catch((err) => {
+          console.warn(`[Audio] cinematic blocked: ${src} (${(err as DOMException)?.name ?? err})`);
+          this.armRetry();
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(finish, approxMs);
+        });
+    });
+  }
+
+  /**
    * Duck the music bed far down while a voice line is speaking, then gently
    * swell it back once the line finishes — so narration always sits clearly on
    * top of the score. No-op when no music is playing.

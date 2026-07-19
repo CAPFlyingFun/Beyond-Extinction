@@ -18,7 +18,7 @@
  *
  * Bump VERSION whenever the caching logic changes to retire old caches.
  */
-const VERSION = "v125";
+const VERSION = "v126";
 const CACHE = `beyond-extinction-${VERSION}`;
 
 // Base path this SW is served from, e.g. "/Beyond-Extinction/" or "/".
@@ -44,6 +44,8 @@ const OPTIONAL = [
   BASE + "assets/models/Jack.glb",
   BASE + "assets/models/Sarah.glb",
   BASE + "opengraph.jpg",
+  // Pre-mixed Chapter-2 opening cinematic (journal + nightmare + score, ~1:07).
+  BASE + "assets/audio/ch2_opening.mp3",
   // Island ground textures — cached best-effort so Chapter 2 works offline.
   BASE + "assets/textures/island_height.png",
   BASE + "assets/textures/island_color.jpg",
