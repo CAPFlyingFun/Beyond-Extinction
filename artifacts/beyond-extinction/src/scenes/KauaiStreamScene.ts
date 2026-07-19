@@ -954,7 +954,7 @@ class KauaiStreamScene implements IScene {
       swap.textContent = "⇄";
       swap.className = "be-ihud-btn";
       swap.setAttribute("aria-label", "Swap character");
-      swap.style.right = "162px";
+      swap.style.right = "calc(162px + env(safe-area-inset-right, 0px))"; // slot 3, inset-aware
       swap.addEventListener("click", (e) => {
         e.preventDefault();
         this.switchCharacter();

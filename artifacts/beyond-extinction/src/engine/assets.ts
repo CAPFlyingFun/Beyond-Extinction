@@ -34,35 +34,58 @@ const textureLoader = new THREE.TextureLoader();
 export async function loadModel(
   relativePath: string,
   placeholderFactory: () => THREE.Object3D,
+  opts: { retries?: number } = {},
 ): Promise<THREE.Object3D> {
   const url = assetUrl(relativePath);
-  try {
-    const gltf = await gltfLoader.loadAsync(url);
-    const root = gltf.scene;
-    root.traverse((obj) => {
-      const mesh = obj as THREE.Mesh;
-      if (mesh.isMesh) {
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
+  const fileName = relativePath.split("/").pop() ?? relativePath;
+  // The model files exist on the deployed site, so a failed fetch is almost
+  // always a transient network drop (spotty mobile / storm). Retry with backoff
+  // BEFORE falling back to the placeholder, so a hiccup doesn't strand a hero as
+  // a grey capsule for the whole session — it just appears a moment later.
+  const retries = opts.retries ?? 3;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const gltf = await gltfLoader.loadAsync(url);
+      const root = gltf.scene;
+      root.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (mesh.isMesh) {
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+        }
+      });
+      root.animations = gltf.animations ?? [];
+      console.info(
+        `[Beyond Extinction] Loaded model: ${url} (${root.animations.length} clip(s))`,
+      );
+      return root;
+    } catch (err) {
+      if (attempt < retries) {
+        const delay = 500 * 2 ** attempt; // 0.5s → 1s → 2s
+        console.warn(
+          `[Beyond Extinction] ${fileName} load failed (attempt ${attempt + 1}/${retries + 1}); retrying in ${delay}ms.`,
+          err,
+        );
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
       }
-    });
-    root.animations = gltf.animations ?? [];
-    console.info(
-      `[Beyond Extinction] Loaded model: ${url} (${root.animations.length} clip(s))`,
-    );
-    return root;
-  } catch (err) {
-    const fileName = relativePath.split("/").pop() ?? relativePath;
-    console.error(
-      `[Beyond Extinction] ${fileName} failed to load — using placeholder. ` +
-        `Drop the real model at "public/${relativePath}" to replace it.`,
-      err,
-    );
-    const placeholder = placeholderFactory();
-    placeholder.userData.isPlaceholder = true;
-    placeholder.animations = [];
-    return placeholder;
+      console.error(
+        `[Beyond Extinction] ${fileName} failed to load after ${retries + 1} attempts — using placeholder. ` +
+          `Drop the real model at "public/${relativePath}" to replace it.`,
+        err,
+      );
+      const placeholder = placeholderFactory();
+      placeholder.userData.isPlaceholder = true;
+      placeholder.animations = [];
+      return placeholder;
+    }
   }
+  // Unreachable (the loop either returns a model or the placeholder), but keeps
+  // the type checker happy without an assertion.
+  const placeholder = placeholderFactory();
+  placeholder.userData.isPlaceholder = true;
+  placeholder.animations = [];
+  return placeholder;
 }
 
 /**

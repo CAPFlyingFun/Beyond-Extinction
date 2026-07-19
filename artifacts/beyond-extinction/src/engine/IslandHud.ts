@@ -82,8 +82,13 @@ export class IslandHud {
     // the injected CSS); Map and Menu fill the slots to its left.
     const map = this.mkBtn("🗺", "Map", opts.onMap);
     const menu = this.mkBtn("☰", "Menu", opts.onMenu);
-    map.style.right = "62px";
-    menu.style.right = "112px";
+    // Each slot is 50px left of the previous. Include the RIGHT safe-area inset
+    // in the offset so these line up with the inventory button (which already
+    // adds it) — otherwise, on a notched landscape phone the inset shifts only
+    // the inventory button inward and it lands underneath the map. (slot 0 =
+    // inventory @12; map = slot 1 @62; menu = slot 2 @112.)
+    map.style.right = "calc(62px + env(safe-area-inset-right, 0px))";
+    menu.style.right = "calc(112px + env(safe-area-inset-right, 0px))";
     this.buttons.push(map, menu);
   }
 

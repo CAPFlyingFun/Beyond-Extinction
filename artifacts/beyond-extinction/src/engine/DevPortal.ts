@@ -391,14 +391,16 @@ function injectStyles(): void {
 
 .be-dev__overlay {
   position: absolute; inset: 0; display: none;
-  align-items: center; justify-content: center;
+  align-items: center; justify-content: center; padding: 16px;
   background: rgba(4, 7, 10, 0.78); backdrop-filter: blur(10px);
   pointer-events: auto;
 }
 .be-dev__overlay.show { display: flex; }
 
 .be-dev__panel {
-  width: min(92vw, 320px); padding: 28px 24px 24px;
+  width: min(92vw, 320px); padding: 24px 24px 20px;
+  max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px);
+  display: flex; flex-direction: column;
   border-radius: 18px; text-align: center;
   background: rgba(14, 19, 26, 0.94); border: 1px solid rgba(120, 200, 255, 0.25);
   box-shadow: 0 24px 70px rgba(0,0,0,0.6);
@@ -430,7 +432,12 @@ function injectStyles(): void {
 .be-dev__key--cancel { color: #ff9a9a; font-size: 18px; }
 .be-dev__key--back { color: #cfe8ff; font-size: 18px; }
 
-.be-dev__tools { display: flex; flex-direction: column; gap: 12px; margin: 22px 0 18px; }
+.be-dev__tools {
+  display: flex; flex-direction: column; gap: 12px; margin: 18px 0 14px;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  /* room so the last button isn't flush against the fading scroll edge */
+  padding-right: 2px;
+}
 .be-dev__tool {
   padding: 14px 16px; border-radius: 12px; cursor: pointer;
   background: rgba(120, 200, 255, 0.1); border: 1px solid rgba(120, 200, 255, 0.3);
