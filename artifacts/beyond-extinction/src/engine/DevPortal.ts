@@ -401,6 +401,7 @@ function injectStyles(): void {
   width: min(92vw, 320px); padding: 24px 24px 20px;
   max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px);
   display: flex; flex-direction: column;
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
   border-radius: 18px; text-align: center;
   background: rgba(14, 19, 26, 0.94); border: 1px solid rgba(120, 200, 255, 0.25);
   box-shadow: 0 24px 70px rgba(0,0,0,0.6);
@@ -447,6 +448,21 @@ function injectStyles(): void {
 .be-dev__tool:hover:not(:disabled) { background: rgba(120, 200, 255, 0.22); }
 .be-dev__tool:disabled { opacity: 0.4; cursor: default; }
 .be-dev__menuclose { width: 100%; height: auto; padding: 10px; }
+
+/* Short viewports (landscape phones): compact the gate so the whole keypad —
+   including the ✕/0/⌫ row — fits without clipping or needing to scroll. */
+@media (max-height: 520px) {
+  .be-dev__panel { padding: 14px 20px 12px; }
+  .be-dev__title { font-size: 16px; }
+  .be-dev__sub { margin-top: 3px; font-size: 11px; }
+  .be-dev__dots { margin: 12px 0 12px; gap: 12px; }
+  .be-dev__dot { width: 11px; height: 11px; }
+  .be-dev__pad { gap: 8px; }
+  .be-dev__key { height: 44px; font-size: 18px; }
+  .be-dev__key--cancel, .be-dev__key--back { font-size: 16px; }
+  .be-dev__tools { margin: 12px 0 10px; gap: 8px; }
+  .be-dev__tool { padding: 11px 14px; }
+}
 `;
   const style = document.createElement("style");
   style.textContent = css;
