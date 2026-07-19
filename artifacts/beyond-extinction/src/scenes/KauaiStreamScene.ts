@@ -1375,18 +1375,11 @@ class KauaiStreamScene implements IScene {
       ? this.streamer.ensureTileAt(this.spawnX, this.spawnZ)
       : Promise.resolve(false);
 
-    // Journal VO + typed text; nightmare stingers ride over the black (non-blocking).
-    this.typewrite(VOICE_CLIPS["ch2_jack_journal"]?.text ?? "", "ch2_jack_journal");
-    const journalDone = audio.playVoice("ch2_jack_journal");
-    audio.playSfx("jungle-crash");
-    void (async () => {
-      await this.waitMs(1400);
-      if (this.disposed || this.phase !== "loading") return;
-      audio.playSfx("roar-distant");
-      await this.waitMs(1600);
-      if (this.disposed || this.phase !== "loading") return;
-      audio.playSfx("breath-gasp");
-    })();
+    // The Day-One journal + the nightmare relived in first person — a ~55 s
+    // radio play over the black screen, sized so even a slow connection has
+    // streamed the island in by the time it ends (non-blocking here; awaited
+    // below alongside world-ready).
+    const storyDone = this.runNightmareRadioPlay();
 
     await spawnReady;
     if (this.disposed) return;
@@ -1397,8 +1390,9 @@ class KauaiStreamScene implements IScene {
       WATER_Y,
     );
 
-    // Hold black until the journal has finished AND the world around Jack is ready.
-    await journalDone;
+    // Hold black until the radio play has finished AND the world around Jack
+    // is ready.
+    await storyDone;
     if (this.disposed) return;
     await this.waitForWorldReady();
     if (this.disposed) return;
@@ -1406,6 +1400,65 @@ class KauaiStreamScene implements IScene {
     await this.runFlyover();
     if (this.disposed) return;
     this.finishArrival();
+  }
+
+  /** The opening radio play: the journal entry over quiet black, then the
+   *  nightmare — Jack's first-person "I was running" narration beat by beat,
+   *  with dedicated foley (the sprint, the beast splintering trees, the close
+   *  roar, the lunge) over a pounding chase bed, ending on the waking gasp.
+   *  Each beat re-checks that the arrival is still on the black screen so a
+   *  skip (or scene teardown) stops the sequence cleanly. */
+  private async runNightmareRadioPlay(): Promise<void> {
+    const audio = this.ctx.audio;
+    const say = async (id: string): Promise<void> => {
+      this.typewrite(VOICE_CLIPS[id]?.text ?? "", id);
+      await audio.playVoice(id);
+    };
+    const live = () => !this.disposed && this.phase === "loading";
+
+    // Journal entry — quiet, just Jack's voice over black.
+    await say("ch2_jack_journal");
+    if (!live()) return;
+    await this.waitMs(900);
+    if (!live()) return;
+
+    // The roar in the dark that starts the nightmare; the bed kicks in under it.
+    audio.playSfx("roar-distant");
+    audio.playMusic("nightmare-chase");
+    await this.waitMs(1700);
+    if (!live()) return;
+
+    // Beat 1 — the sprint: panicked feet and ragged breath under the line.
+    audio.playSfx("nightmare-sprint");
+    await say("ch2_nightmare_01");
+    if (!live()) return;
+
+    // Beat 2 — the beast crashing through the jungle behind him.
+    audio.playSfx("nightmare-crash");
+    await say("ch2_nightmare_02");
+    if (!live()) return;
+
+    // Beat 3 — the glance back. The close roar lands ON "A roar shook the
+    // air…" (~62 % into the clip), not at the top of the line.
+    const d3 = VOICE_CLIPS["ch2_nightmare_03"]?.durationMs ?? 9600;
+    void (async () => {
+      await this.waitMs(Math.round(d3 * 0.62));
+      if (!live()) return;
+      audio.playSfx("nightmare-roar");
+    })();
+    await say("ch2_nightmare_03");
+    if (!live()) return;
+
+    // Beat 4 — the lunge; the waking gasp cuts the bed as the dream breaks.
+    audio.playSfx("nightmare-lunge");
+    const d4 = VOICE_CLIPS["ch2_nightmare_04"]?.durationMs ?? 12500;
+    void (async () => {
+      await this.waitMs(Math.round(d4 * 0.78));
+      if (!live()) return;
+      audio.playSfx("breath-gasp");
+      audio.stopMusic();
+    })();
+    await say("ch2_nightmare_04");
   }
 
   /** The opaque journal page + a dynamic loading bar (real tile-stream progress). */

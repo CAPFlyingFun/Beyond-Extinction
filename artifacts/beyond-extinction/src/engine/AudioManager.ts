@@ -29,6 +29,9 @@ const MUSIC_TRACKS: Record<string, string> = {
   "amb-underwater": "assets/audio/underwater-loop.mp3",
   // The Dilophosaurus first-encounter — drives the reveal/chase sting.
   "dilo-chase": "assets/audio/dilo-chase.mp3",
+  // Chapter-Two arrival nightmare — the radio-drama bed under Jack's
+  // first-person "I was running" narration over the black journal screen.
+  "nightmare-chase": "assets/audio/nightmare-chase.mp3",
 };
 
 const SFX_TRACKS: Record<string, string> = {
@@ -48,6 +51,13 @@ const SFX_TRACKS: Record<string, string> = {
   "jungle-crash": "assets/audio/footsteps-jungle.mp3",
   "roar-distant": "assets/audio/dino-roar-far.mp3",
   gasp: "assets/audio/breath-gasp.mp3",
+  // Chapter Two arrival nightmare — dedicated radio-drama foley (ElevenLabs),
+  // one clip per narration beat: the desperate sprint, the beast crashing
+  // through the trees, the close roar, and the lunge that wakes Jack.
+  "nightmare-sprint": "assets/audio/nightmare-sprint.mp3",
+  "nightmare-crash": "assets/audio/nightmare-crash.mp3",
+  "nightmare-roar": "assets/audio/nightmare-roar.mp3",
+  "nightmare-lunge": "assets/audio/nightmare-lunge.mp3",
   // Dilophosaurus first-encounter SFX (from the Godot audio pack). The treeline
   // "hiss" the story already cues now resolves to the real snarl.
   "dilo-snarl": "assets/audio/dilo-snarl.mp3",

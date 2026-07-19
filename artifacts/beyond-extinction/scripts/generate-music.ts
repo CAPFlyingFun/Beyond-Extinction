@@ -91,6 +91,20 @@ const TRACKS: Spec[] = [
     output_length: 120,
   },
   {
+    // Chapter-Two arrival: the nightmare radio-drama bed. Runs under Jack's
+    // first-person "I was running" narration over the black journal screen —
+    // pure dread and momentum, no melody, so the VO stays intelligible.
+    id: "nightmare-chase",
+    kind: "music",
+    prompt:
+      "Relentless dark cinematic chase underscore for a nightmare: pounding " +
+      "low tribal percussion, racing heartbeat pulse, dissonant string stabs " +
+      "and deep braams, primal terror building and building. No melody hook, " +
+      "no bright instruments — pure dread and forward momentum.",
+    music_style: "Dark cinematic chase, hybrid orchestral percussion, horror tension",
+    output_length: 90,
+  },
+  {
     id: "coffee-pour",
     kind: "sfx",
     prompt:

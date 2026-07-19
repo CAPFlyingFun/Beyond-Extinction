@@ -151,6 +151,26 @@ export const VOICE_CLIP_LIST: VoiceClip[] = [
     "ch2_jack_journal",
     "Day one. I don't know where we are. I don't know how we got here. I know we're alive. For now, that's enough.",
   ),
+  // The nightmare — Jack relives the chase in first person, radio-drama style
+  // over the black journal screen while the island streams in. Split into
+  // beats so each page of text fits the screen and the SFX can hit between
+  // lines (roar before it starts, crashes/roar/lunge on their own beats).
+  narrate(
+    "ch2_nightmare_01",
+    "I was running. Not jogging. Not sprinting. Full terror running. The kind where your lungs catch fire and your legs scream for mercy. The kind where stopping means dying.",
+  ),
+  narrate(
+    "ch2_nightmare_02",
+    "Behind me, something massive crashed through the jungle. Trees splintered like dry bones. The ground shook with each thundering footstep. Closer. Always closer.",
+  ),
+  narrate(
+    "ch2_nightmare_03",
+    "I risked a glance over my shoulder. Golden eyes burned through the green. Rows of teeth gleamed like wet daggers. A roar shook the air and rattled my ribs.",
+  ),
+  narrate(
+    "ch2_nightmare_04",
+    "The creature lunged. I stumbled on my knees hitting the dirt. The prehistoric beast filled my vision, jaws wide, breath hot and rank. I threw up my arms, waking up gasping for air.",
+  ),
   jack("ch2_jack_sarah_shout", "SARAH!"),
 ];
 
