@@ -693,9 +693,9 @@
   ],
   "spawn": {
     "tile": "G5",
-    "x": 20900.0,
+    "x": 21290.0,
     "z": 1288.0,
     "facing": "inland (-X west) \u2014 ocean at back (east), interior/summit ahead (west)",
-    "note": "Kauai east coast, Wailua river mouth (Ch.2 arrival beach). ~90 m in from the waterline (x~21000), elev ~7 m."
+    "note": "Kauai east coast, Wailua river mouth (Ch.2 arrival beach). ~65 m in from the ACTUAL waterline (elev crosses -0.4 at x=21355 \u2014 measured, not assumed), elev ~1.2 m. Matches Godot spawn."
   }
 }

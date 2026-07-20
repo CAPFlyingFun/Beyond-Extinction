@@ -79,7 +79,7 @@ interface FlyWp {
 
 // Wailua beach in metres (grid centre origin). Nudged ~1.4 km inland from the
 // waterline so the scout starts on land while G5 finishes decoding.
-const SPAWN = { x: 20900, z: 1288, facing: 270 };
+const SPAWN = { x: 21290, z: 1288, facing: 270 }; // v0.0.133: moved to the beach — ~65 m from the real waterline (x=21355, measured from tile data; the old 20900 was 455 m out). Matches the Godot build's spawn.
 const WATER_SIZE = 80000; // ocean plane extent (m)
 const WATER_REPEAT = 10000; // ripple normal repeats → ~8 m wavelength
 export const WATER_Y = -0.4; // surface just below the 0 m waterline (soft shoreline)
