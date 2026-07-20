@@ -354,8 +354,12 @@ export function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
           // hue that read grey. Depth from the same decoded ground height.
           float depth = clamp(-0.4 - ground, 0.0, 8.0);      // metres of water
           float shallow = 1.0 - smoothstep(0.3, 4.5, depth); // 1 near shore → 0 deep
-          vec3 shallowCol = vec3(0.055, 0.52, 0.55);         // aqua/turquoise
-          vec3 deepCol    = vec3(0.020, 0.16, 0.34);         // rich navy-blue
+          // v0.0.138: deeper tones. At 0.45 alpha the old bright aqua washed into
+          // the pale sand until the shallows read almost white; darker, more
+          // saturated water holds its colour through the transparency so the
+          // waterline reads clearly blue-green against the beach.
+          vec3 shallowCol = vec3(0.020, 0.34, 0.42);         // deep teal
+          vec3 deepCol    = vec3(0.008, 0.10, 0.26);         // deep navy-blue
           diffuseColor.rgb = mix(deepCol, shallowCol, shallow * shallow);
 
           // Whitecaps + shoreline surf. A scrolling sample of the ripple map is
