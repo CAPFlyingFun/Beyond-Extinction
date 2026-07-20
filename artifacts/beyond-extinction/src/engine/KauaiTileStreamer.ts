@@ -725,8 +725,11 @@ vec3 triplanar(sampler2D tex, vec3 wp, vec3 n, float scale) {
   // Lush Kauaʻi bands: dry grass is only a coastal fringe, jungle green owns
   // the lowlands, and bare rock/summit bands sit higher up the mountain.
   vec3 c = sand;
-  c = mix(c, grass, smoothstep(2.5, 12.0, ej));
-  c = mix(c, jung,  smoothstep(18.0, 90.0, ej));
+  // v0.0.134 (Godot-parity, straight from the data): sand < 3 m, grass 3-9 m,
+  // jungle above — the old wide blends (grass to 12 m, jungle only by 90 m)
+  // painted the arrival beach as scrub and pushed the jungle line far uphill.
+  c = mix(c, grass, smoothstep(3.0, 5.0, ej));
+  c = mix(c, jung,  smoothstep(9.0, 13.0, ej));
   c = mix(c, rock,  smoothstep(680.0, 980.0, ej));
   c = mix(c, mtn,   smoothstep(1020.0, 1220.0, ej));
   c = mix(c, snow,  smoothstep(1300.0, 1540.0, ej));
