@@ -15,7 +15,33 @@
 // and the resident set (~25 tiles) stays ~46 MB of geometry, mobile-safe.
 // (Bumping toward 256/512 smooths further but tips into 32-bit indices and
 // materially more memory — raise only if the target devices have the headroom.)
-export const SEG = 192;
+// v0.0.129 (Godot-parity tip #4): SEG is device-tiered — desktops get a denser
+// 256 grid (smoother hills, like the Godot PC build's SEG bump); phones keep
+// 192. A LIVE let-binding: mesh build and grounding math both read it at call
+// time and MUST agree, so it locks the moment the first streamer is built and
+// can never change mid-session (a mid-session change would desync collision
+// from the visible mesh — the exact "clipping hillsides" bug class).
+export let SEG = 192;
+let _segLocked = false;
+/** Pick the grid density for this device (call before any streamer exists). */
+export function segForDevice(): number {
+  try {
+    const touch =
+      "ontouchstart" in globalThis || ((navigator as Navigator).maxTouchPoints || 0) > 0;
+    const cores = navigator.hardwareConcurrency || 4;
+    return !touch && cores >= 8 ? 256 : 192;
+  } catch {
+    return 192;
+  }
+}
+export function setSegForDevice(seg: number): void {
+  if (_segLocked || !(seg >= 32 && seg <= 512)) return;
+  SEG = Math.round(seg);
+}
+/** Called by the streamer constructor — SEG is immutable from here on. */
+export function lockSeg(): void {
+  _segLocked = true;
+}
 
 /**
  * Height of mesh vertex (gi, gj) of a SEG-grid tile: the bilinear sample of

@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { KauaiTileStreamer, type KauaiManifest } from "../engine/KauaiTileStreamer";
+import { segForDevice, setSegForDevice } from "../engine/terrainSampling";
 import { KauaiHydro } from "../engine/KauaiHydro";
 import { KauaiWaterSim } from "../engine/KauaiWaterSim";
 import { KauaiCarve } from "../engine/KauaiCarve";
@@ -140,6 +141,7 @@ class WaterLabScene implements IScene {
       // its own (the diagnostic); default keeps the carve, which gives the coarse
       // 36 m mesh the channels it otherwise lacks, so the sim reads as real rivers.
       const raw = import.meta.env.DEV && new URLSearchParams(location.search).get("raw") === "1";
+      setSegForDevice(segForDevice()); // Godot-parity tip: denser grid on desktop
       this.streamer = new KauaiTileStreamer(this.scene, manifest, {
         radius: 2,
         applyHydroCarve: !raw,

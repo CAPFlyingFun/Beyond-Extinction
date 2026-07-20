@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { assetUrl, loadTexture } from "./assets";
-import { SEG, renderedSurfaceHeight } from "./terrainSampling";
+import { SEG, lockSeg, renderedSurfaceHeight } from "./terrainSampling";
 import { KauaiCarve } from "./KauaiCarve";
 
 /**
@@ -117,6 +117,7 @@ export class KauaiTileStreamer {
     this.S = manifest.tileSizeM;
     this.P = manifest.tilePixels;
     this.radius = opts.radius ?? 1;
+    lockSeg(); // SEG is frozen once any tile can exist (mesh/grounding must agree)
     this.base = opts.base ?? "assets/terrain/kauai";
     this.applyHydroCarve = opts.applyHydroCarve ?? true;
     for (const t of manifest.tiles) this.byId.set(t.id, t);
@@ -395,6 +396,80 @@ export class KauaiTileStreamer {
   }
 
   private async decodeHeights(file: string): Promise<Float32Array> {
+    // v0.0.129 (Godot-parity tip #1): decode in a Web Worker when the browser
+    // supports it — kills the tile-crossing hitch. Any worker failure falls
+    // back to the original main-thread path, so behavior can only degrade to
+    // exactly what shipped before.
+    const pool = KauaiTileStreamer.workerPool();
+    if (pool && pool.length) {
+      try {
+        return await this.decodeInWorker(pool, file);
+      } catch (e) {
+        console.warn("[kauai] worker decode failed, using main thread:", e);
+      }
+    }
+    return this.decodeOnMain(file);
+  }
+
+  // ── worker pool (shared across streamer instances) ──
+  private static _workers: Worker[] | null | undefined;
+  private static _reqId = 0;
+  private static _rr = 0;
+  private static readonly _pending = new Map<
+    number,
+    { resolve: (h: Float32Array) => void; reject: (e: Error) => void }
+  >();
+  private static workerPool(): Worker[] | null {
+    if (this._workers !== undefined) return this._workers;
+    try {
+      if (
+        typeof Worker === "undefined" ||
+        typeof OffscreenCanvas === "undefined" ||
+        typeof createImageBitmap === "undefined"
+      )
+        throw new Error("unsupported");
+      const n = Math.min(2, Math.max(1, (navigator.hardwareConcurrency || 2) - 1));
+      this._workers = Array.from({ length: n }, () => {
+        const w = new Worker(new URL("./kauaiTile.worker.ts", import.meta.url), {
+          type: "module",
+        });
+        w.onmessage = (e: MessageEvent) => {
+          const p = this._pending.get(e.data.id);
+          if (!p) return;
+          this._pending.delete(e.data.id);
+          if (e.data.error) p.reject(new Error(e.data.error));
+          else p.resolve(e.data.heights as Float32Array);
+        };
+        w.onerror = () => {
+          // a crashed worker fails everything in flight (tiles retry via the
+          // main-thread fallback) and retires the pool for this session
+          for (const [, p] of this._pending) p.reject(new Error("tile worker crashed"));
+          this._pending.clear();
+          this._workers = null;
+        };
+        return w;
+      });
+    } catch {
+      this._workers = null;
+    }
+    return this._workers;
+  }
+  private decodeInWorker(pool: Worker[], file: string): Promise<Float32Array> {
+    const id = ++KauaiTileStreamer._reqId;
+    const w = pool[KauaiTileStreamer._rr++ % pool.length];
+    // absolute URL — the worker's fetch resolves against the worker script, not the page
+    const url = new URL(assetUrl(`${this.base}/${file}`), location.href).toString();
+    return new Promise<Float32Array>((resolve, reject) => {
+      KauaiTileStreamer._pending.set(id, { resolve, reject });
+      w.postMessage({ id, url, P: this.P });
+      setTimeout(() => {
+        if (KauaiTileStreamer._pending.delete(id)) reject(new Error("tile worker timeout"));
+      }, 20000);
+    });
+  }
+
+  /** Original main-thread decode — kept verbatim as the universal fallback. */
+  private async decodeOnMain(file: string): Promise<Float32Array> {
     const P = this.P;
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
       const im = new Image();

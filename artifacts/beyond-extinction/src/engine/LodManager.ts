@@ -106,8 +106,17 @@ export class LodManager {
    *  to the forest shader. `fps` only matters for "auto". */
   update(dt: number, camPos: THREE.Vector3, fps = 60): number {
     const target = rangeForQuality(this.quality, fps);
-    const k = dt > 0 ? 1 - Math.exp(-dt / 1.0) : 1; // ~1 s ease, no pop
-    this.fadeEnd += (target - this.fadeEnd) * k;
+    // v0.0.129 (Godot-parity tip #2): asymmetric ease + dead-band. Drop FAST
+    // when over budget (~0.35 s) so a struggling phone recovers immediately,
+    // restore SLOWLY (~3 s) so headroom must persist before detail returns,
+    // and ignore deltas under 6% so the knob can't oscillate around a noisy
+    // fps signal.
+    const diff = target - this.fadeEnd;
+    if (Math.abs(diff) > this.fadeEnd * 0.06) {
+      const tau = diff < 0 ? 0.35 : 3.0;
+      const k = dt > 0 ? 1 - Math.exp(-dt / tau) : 1;
+      this.fadeEnd += diff * k;
+    }
 
     const rangeU = this.fadeEnd * M;
     for (const it of this.items) {

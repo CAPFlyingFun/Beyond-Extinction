@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { PlayerController } from "../engine/PlayerController";
 import { KauaiTileStreamer, type KauaiManifest } from "../engine/KauaiTileStreamer";
+import { segForDevice, setSegForDevice } from "../engine/terrainSampling";
 import { KauaiHydro } from "../engine/KauaiHydro";
 import { KauaiWaterSim } from "../engine/KauaiWaterSim";
 import { KauaiCarve } from "../engine/KauaiCarve";
@@ -566,6 +567,7 @@ class KauaiStreamScene implements IScene {
     try {
       const res = await fetch(assetUrl("assets/terrain/kauai/manifest.json"));
       const manifest = (await res.json()) as KauaiManifest;
+      setSegForDevice(segForDevice()); // Godot-parity tip: denser grid on desktop
       this.streamer = new KauaiTileStreamer(this.scene, manifest, { radius: 2 });
       // Fresh arrival forces the spawn tile in first (see runArrival); dev/continue
       // kicks the whole ring immediately for an instant drop into first person.
