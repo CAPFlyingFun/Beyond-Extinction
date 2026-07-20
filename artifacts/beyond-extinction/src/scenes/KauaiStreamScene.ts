@@ -196,7 +196,12 @@ export function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
     // the bright sky glint at grazing.
     metalness: 0.1,
     transparent: true,
-    opacity: 0.9,
+    // v0.0.137: clear tropical water. Dropped from 0.9 so you can see the
+    // sand/reef through the shallows (pre-collapse water read "very clean and
+    // clear"); the map_fragment grades this UP with depth so deep water still
+    // reads as a body of water, and keeps surf/foam near-opaque so the surface
+    // never looks like a flat film floating over land.
+    opacity: 0.45,
     envMapIntensity: 0.9,
     normalScale: new THREE.Vector2(0.55, 0.55),
     side: waves ? THREE.DoubleSide : THREE.FrontSide, // see the swell from below
@@ -362,6 +367,15 @@ export function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
           vec3 cn = texture2D(uRipple, vOceanWpos.xz / 14.0 - uTime * vec2(0.02, 0.028)).xyz * 2.0 - 1.0;
           foam = clamp(foam + smoothstep(0.55, 0.95, length(cn.xy)) * 0.45, 0.0, 1.0);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.90, 0.95, 0.97), foam);
+
+          // v0.0.137: clear-water alpha. Base opacity (0.45) is the SHALLOW value —
+          // you see straight through to the sand at the waterline. Grade it up
+          // with depth so open water offshore still reads as a real body, cap
+          // below opaque so it never fully hides the bottom, and force foam/surf
+          // near-opaque so the crests read as water rather than a see-through film.
+          diffuseColor.a *= mix(1.0, 1.55, smoothstep(0.4, 5.5, depth));
+          diffuseColor.a = min(diffuseColor.a, 0.82);
+          diffuseColor.a = mix(diffuseColor.a, 0.95, foam);
         }`,
       )
       .replace(
@@ -529,7 +543,7 @@ class KauaiStreamScene implements IScene {
     // Brighter turquoise + a much longer clear range so a shallow 3–8 m waterway
     // reads as CLEAR sunlit water, not dark murk. Depth-darkening is handled by the
     // dive tint below (deeper = darker), not by this ambient fog.
-    this.uwFog = new THREE.Fog(0x2f93a8, 6, 70);
+    this.uwFog = new THREE.Fog(0x3fa7ba, 10, 150); // v0.0.137: clearer water — see farther, lighter teal
     this.scene.fog = this.airFog;
 
     // Sky HDRI (ambientCG, CC0): EXR → PMREM environment for real sky
@@ -1265,7 +1279,7 @@ class KauaiStreamScene implements IScene {
         if (this.uwTint) {
           // Depth-driven darkening: barely-there just under the surface (clear,
           // sunlit shallows), ramping up the deeper you dive — like real water.
-          const tgt = submerged ? Math.min(0.5, 0.05 + Math.max(0, this.sub) * 0.075) : 0;
+          const tgt = submerged ? Math.min(0.34, 0.02 + Math.max(0, this.sub) * 0.05) : 0;
           const cur = parseFloat(this.uwTint.style.opacity || "0");
           this.uwTint.style.opacity = (cur + (tgt - cur) * Math.min(1, dt * 6)).toFixed(3);
         }

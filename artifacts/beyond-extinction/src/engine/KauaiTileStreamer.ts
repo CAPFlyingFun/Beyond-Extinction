@@ -770,6 +770,15 @@ vec3 triplanar(sampler2D tex, vec3 wp, vec3 n, float scale) {
       .replace(
         "#include <roughnessmap_fragment>",
         "#include <roughnessmap_fragment>\n  roughnessFactor = mix(roughnessFactor, 0.25, gWet); // wet sheen at the shore",
+      )
+      .replace(
+        "#include <lights_fragment_end>",
+        // v0.0.137: dry ground is matte — kill its specular so the sun stops
+        // laying a bright sheen band across the sand (roughness alone still left
+        // a broad dielectric hotspot under the +30% sun). The wet splash-zone
+        // band (gWet) keeps its specular so the waterline still glints wet, and
+        // that reflection reads clearly as WATER, not sand.
+        "#include <lights_fragment_end>\n  reflectedLight.directSpecular *= mix(0.06, 1.0, gWet);\n  reflectedLight.indirectSpecular *= mix(0.06, 1.0, gWet);",
       );
   };
   mat.customProgramCacheKey = () => "kauai-biome";
