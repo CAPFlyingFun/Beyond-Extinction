@@ -23,13 +23,30 @@
 // from the visible mesh — the exact "clipping hillsides" bug class).
 export let SEG = 192;
 let _segLocked = false;
-/** Pick the grid density for this device (call before any streamer exists). */
+/** Pick the grid density for this device (call before any streamer exists).
+ *
+ * v0.0.130 three-tier ladder. Tiles are 513² over 7 km (~13.7 m/px), so even
+ * 320 (~22 m verts, the Godot PC build's SEG) stays under the data's native
+ * resolution — every step up is REAL detail, not interpolation:
+ *   - weak phones   → 192 (~36 m) — old/low-RAM devices keep the safe grid
+ *   - capable phones→ 256 (~27 m) — recent iPhones / flagship Androids
+ *   - desktop       → 320 (~22 m) — full Godot-PC parity
+ * Vertex cost: 37k → 66k → 103k per tile (~1.65M / 2.6M resident at radius 2).
+ * Dev override: ?seg=192|256|320 for on-device A/B testing. */
 export function segForDevice(): number {
   try {
-    const touch =
-      "ontouchstart" in globalThis || ((navigator as Navigator).maxTouchPoints || 0) > 0;
-    const cores = navigator.hardwareConcurrency || 4;
-    return !touch && cores >= 8 ? 256 : 192;
+    const qs =
+      typeof location !== "undefined"
+        ? parseInt(new URLSearchParams(location.search).get("seg") || "", 10)
+        : NaN;
+    if (qs >= 32 && qs <= 512) return qs;
+    const nav = navigator as Navigator & { deviceMemory?: number };
+    const touch = "ontouchstart" in globalThis || (nav.maxTouchPoints || 0) > 0;
+    const cores = nav.hardwareConcurrency || 4;
+    const memGB = nav.deviceMemory ?? 4; // Android Chrome only; iOS reports undefined
+    if (!touch && cores >= 8) return 320;
+    if (touch && cores >= 6 && memGB >= 4) return 256;
+    return 192;
   } catch {
     return 192;
   }
