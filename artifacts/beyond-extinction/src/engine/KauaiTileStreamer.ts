@@ -711,13 +711,17 @@ vec3 triplanar(sampler2D tex, vec3 wp, vec3 n, float scale) {
   // waterline bands (wet sand / reef, which use the raw e) stay put.
   float jit = bnoise(uv * 0.011) * 0.65 + bnoise(uv * 0.047) * 0.35 - 0.5;
   float ej = e + jit * 90.0 * min(1.0, max(e, 0.0) / 60.0);
-  vec3 sand = s2l(tile2(tSand,   uv, 9.0 ));
-  vec3 grass= s2l(tile2(tGrass,  uv, 11.0));
-  vec3 jung = s2l(tile2(tJungle, uv, 13.0));
+  // v0.0.132: ground detail doubled ("4 images = 1") — each texture now tiles
+  // 2x2 inside the footprint one repeat used to cover (scale divisors halved),
+  // so the ground reads crisper underfoot. The dual-scale tile2 blend +
+  // brightness noise keep the extra repeats from reading as wallpaper.
+  vec3 sand = s2l(tile2(tSand,   uv, 4.5));
+  vec3 grass= s2l(tile2(tGrass,  uv, 5.5));
+  vec3 jung = s2l(tile2(tJungle, uv, 6.5));
   // rock + mountain are what shows on steep faces → triplanar so they tile
-  vec3 rock = s2l(triplanar(tRock, vBiomeW, nrm, 18.0));
-  vec3 mtn  = s2l(triplanar(tMtn,  vBiomeW, nrm, 22.0));
-  vec3 snow = s2l(tile2(tSnow,   uv, 6.0));
+  vec3 rock = s2l(triplanar(tRock, vBiomeW, nrm, 9.0));
+  vec3 mtn  = s2l(triplanar(tMtn,  vBiomeW, nrm, 11.0));
+  vec3 snow = s2l(tile2(tSnow,   uv, 3.0));
   // Lush Kauaʻi bands: dry grass is only a coastal fringe, jungle green owns
   // the lowlands, and bare rock/summit bands sit higher up the mountain.
   vec3 c = sand;
@@ -748,7 +752,7 @@ vec3 triplanar(sampler2D tex, vec3 wp, vec3 n, float scale) {
   c = mix(c, c * 0.66, smoothstep(0.25, -0.45, e)); // wet-sand band
   {
     float d = clamp(-e / 55.0, 0.0, 1.0);
-    vec3 reef = s2l(texture2D(tReef, uv / 10.0).rgb);
+    vec3 reef = s2l(texture2D(tReef, uv / 5.0).rgb);
     vec3 underwater = mix(reef, vec3(0.015, 0.06, 0.10), d * d);
     // Fade the reef/underwater texture in only BELOW the waterline (ocean plane
     // sits at WATER_Y = -0.4 m). It used to start at +0.3 m — ~0.7 m ABOVE the
