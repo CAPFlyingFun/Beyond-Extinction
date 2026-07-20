@@ -295,6 +295,33 @@ export function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
     }
     sh.fragmentShader = sh.fragmentShader
       .replace(
+        "#include <normal_fragment_begin>",
+        `#include <normal_fragment_begin>
+        {
+          // v0.0.135: procedural ripple normals. The "animated ripple normal
+          // map (set by the scene)" promised above was never actually wired, so
+          // wherever the long swell fades out — the nearshore especially — the
+          // surface shaded DEAD FLAT (playtest: "water just off land has no
+          // texture"). Three short directional wavelets (~2-6 m) perturb the
+          // normal analytically instead; faded with camera distance so the far
+          // rings can't alias into speckle.
+          float rDist = distance(vOceanWpos, cameraPosition);
+          float rAmp = exp(-rDist / 700.0);
+          if (rAmp > 0.02) {
+            vec2 rp = vOceanWpos.xz;
+            vec2 rg = vec2(0.0);
+            vec2 rd1 = normalize(vec2(1.0, 0.35));
+            vec2 rd2 = normalize(vec2(-0.42, 1.0));
+            vec2 rd3 = normalize(vec2(0.7, -0.74));
+            rg += rd1 * cos(dot(rp, rd1) * 2.86 - uTime * 2.2) * 0.129; // ~2.2 m wavelets
+            rg += rd2 * cos(dot(rp, rd2) * 1.71 - uTime * 1.6) * 0.103; // ~3.7 m
+            rg += rd3 * cos(dot(rp, rd3) * 1.12 + uTime * 1.1) * 0.095; // ~5.6 m
+            vec3 rDelta = vec3(-rg.x, 0.0, -rg.y) * rAmp;
+            normal = normalize(normal + (viewMatrix * vec4(rDelta, 0.0)).xyz);
+          }
+        }`,
+      )
+      .replace(
         "#include <common>",
         "#include <common>\nuniform vec3 uSky;\nuniform sampler2D uCoast;\nuniform sampler2D uRipple;\nuniform float uTime;\nvarying vec3 vOceanWpos;",
       )
@@ -525,8 +552,8 @@ class KauaiStreamScene implements IScene {
     // reflections + image-based light; the tonemapped JPG is the cheap visible
     // background. The env supplies most of the ambient, so keep the fill lights
     // low and let the sun handle direct light + shadows.
-    this.scene.add(new THREE.HemisphereLight(0xe6f2ff, 0x6b7550, 0.75));
-    const sun = new THREE.DirectionalLight(0xfff3e0, 1.35);
+    this.scene.add(new THREE.HemisphereLight(0xe6f2ff, 0x6b7550, 0.98)); // v0.0.135: +30% (playtest: map read dark)
+    const sun = new THREE.DirectionalLight(0xfff3e0, 1.76); // v0.0.135: +30%
     sun.position.copy(SUN).multiplyScalar(1000);
     this.scene.add(sun);
     this.loadSky();
