@@ -160,9 +160,26 @@ export class IslandCharacter {
 
     // Hero characters stay near camera; skip frustum culling so skinned limbs
     // (whose bind-pose bounds lag the animated pose) never pop out.
+    //
+    // v0.0.136: the +30% scene lighting (v0.0.135) brightened the sand but left
+    // the characters reading dark against it — GLB albedos (denim, hair) are low
+    // and only lit by the sun/hemi. Give each standard material a gentle
+    // self-lit floor keyed off its own albedo map so dark cloth lifts while
+    // already-bright skin barely moves; intensity is low enough not to flatten
+    // form or blow highlights.
     model.traverse((o) => {
       const m = o as THREE.Mesh;
-      if (m.isMesh) m.frustumCulled = false;
+      if (!m.isMesh) return;
+      m.frustumCulled = false;
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      for (const mat of mats) {
+        const std = mat as THREE.MeshStandardMaterial;
+        if (!std || !std.isMeshStandardMaterial) continue;
+        std.emissive = std.color.clone();
+        if (std.map) std.emissiveMap = std.map;
+        std.emissiveIntensity = 0.22;
+        std.needsUpdate = true;
+      }
     });
     return c;
   }

@@ -295,46 +295,30 @@ export function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
     }
     sh.fragmentShader = sh.fragmentShader
       .replace(
-        "#include <normal_fragment_begin>",
-        `#include <normal_fragment_begin>
-        {
-          // v0.0.135: procedural ripple normals. The "animated ripple normal
-          // map (set by the scene)" promised above was never actually wired, so
-          // wherever the long swell fades out — the nearshore especially — the
-          // surface shaded DEAD FLAT (playtest: "water just off land has no
-          // texture"). Three short directional wavelets (~2-6 m) perturb the
-          // normal analytically instead; faded with camera distance so the far
-          // rings can't alias into speckle.
-          float rDist = distance(vOceanWpos, cameraPosition);
-          float rAmp = exp(-rDist / 700.0);
-          if (rAmp > 0.02) {
-            vec2 rp = vOceanWpos.xz;
-            vec2 rg = vec2(0.0);
-            vec2 rd1 = normalize(vec2(1.0, 0.35));
-            vec2 rd2 = normalize(vec2(-0.42, 1.0));
-            vec2 rd3 = normalize(vec2(0.7, -0.74));
-            rg += rd1 * cos(dot(rp, rd1) * 2.86 - uTime * 2.2) * 0.129; // ~2.2 m wavelets
-            rg += rd2 * cos(dot(rp, rd2) * 1.71 - uTime * 1.6) * 0.103; // ~3.7 m
-            rg += rd3 * cos(dot(rp, rd3) * 1.12 + uTime * 1.1) * 0.095; // ~5.6 m
-            vec3 rDelta = vec3(-rg.x, 0.0, -rg.y) * rAmp;
-            normal = normalize(normal + (viewMatrix * vec4(rDelta, 0.0)).xyz);
-          }
-        }`,
-      )
-      .replace(
         "#include <common>",
-        "#include <common>\nuniform vec3 uSky;\nuniform sampler2D uCoast;\nuniform sampler2D uRipple;\nuniform float uTime;\nvarying vec3 vOceanWpos;",
+        "#include <common>\nuniform vec3 uSky;\nuniform sampler2D uCoast;\nuniform sampler2D uRipple;\nuniform float uTime;\nvarying vec3 vOceanWpos;\nmat2 rrot(float a){float s=sin(a),c=cos(a);return mat2(c,-s,s,c);}",
       )
       .replace(
         "#include <normal_fragment_maps>",
         `#include <normal_fragment_maps>
         {
-          // Two world-planar scrolling octaves of the ripple normal keep the
-          // surface textured everywhere the swell has faded flat (far + shallows).
-          vec2 r1 = vOceanWpos.xz / 9.0 + uTime * vec2(0.03, 0.021);
-          vec2 r2 = vOceanWpos.xz / 23.0 - uTime * vec2(0.017, 0.026);
-          vec3 rn = (texture2D(uRipple, r1).xyz + texture2D(uRipple, r2).xyz) - 1.0;
-          normal = normalize(normal + vec3(rn.x, 0.0, rn.y) * 0.30);
+          // v0.0.136: multi-octave ROTATED ripple. The v0.0.135 cosine wavelets
+          // beat into a hard diamond grid/moiré (playtest); removed. Instead the
+          // tiling water_normal is sampled at 3 non-harmonic scales, each rotated
+          // a different odd angle so their repeats never line up into a grid.
+          // The two finer octaves fade out with distance so the far water can't
+          // alias into speckle, and a 4th very-fine octave fades IN only near the
+          // camera for close-up surface chop (playtest: "flat when in the water").
+          vec2 wp = vOceanWpos.xz;
+          float camD = distance(vOceanWpos, cameraPosition);
+          float farFade = 1.0 - smoothstep(300.0, 2600.0, camD);
+          float nearAmp = 1.0 - smoothstep(3.0, 55.0, camD);
+          vec3 rn = vec3(0.0);
+          rn += (texture2D(uRipple, rrot(0.0) * wp / 17.3 + uTime * vec2( 0.021, 0.013)).xyz - 0.5);
+          rn += (texture2D(uRipple, rrot(2.1) * wp /  8.7 - uTime * vec2( 0.017, 0.024)).xyz - 0.5) * (0.8 * farFade);
+          rn += (texture2D(uRipple, rrot(4.3) * wp /  3.9 + uTime * vec2( 0.032,-0.019)).xyz - 0.5) * (0.65 * farFade);
+          rn += (texture2D(uRipple, rrot(1.2) * wp /  1.5 + uTime * vec2(-0.045,0.05 )).xyz - 0.5) * (0.7 * nearAmp);
+          normal = normalize(normal + vec3(rn.x, 0.0, rn.y) * 0.55);
         }`,
       )
       .replace(
