@@ -740,8 +740,12 @@ vec3 triplanar(sampler2D tex, vec3 wp, vec3 n, float scale) {
   // Wet sheen is a BAND at the water's edge, not the whole seabed: it ramps up
   // as the beach nears the waterline, then fades back to matte a few metres
   // under, so the submerged floor doesn't carry a glossy glare.
-  gWet = smoothstep(1.4, -0.8, e) * smoothstep(-4.0, -0.8, e);
-  c = mix(c, c * 0.66, smoothstep(1.3, 0.0, e)); // wet-sand band
+  // v0.0.131: these bands used to ramp from +1.3/+1.4 m — almost 2 m ABOVE the
+  // actual waterline (WATER_Y = -0.4, swell reach ~ -0.15) — so a wide belt of
+  // dark glossy "wet" sand read as water bleeding up the shore. Tightened to a
+  // splash-zone that hugs the real waterline.
+  gWet = smoothstep(0.3, -0.9, e) * smoothstep(-4.0, -0.9, e);
+  c = mix(c, c * 0.66, smoothstep(0.25, -0.45, e)); // wet-sand band
   {
     float d = clamp(-e / 55.0, 0.0, 1.0);
     vec3 reef = s2l(texture2D(tReef, uv / 10.0).rgb);

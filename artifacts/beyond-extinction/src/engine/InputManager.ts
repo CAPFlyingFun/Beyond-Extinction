@@ -226,7 +226,19 @@ export class InputManager {
    * by the run factor while this holds (see PlayerController.update).
    */
   isRunning(): boolean {
-    return this.runToggled || this.isDown("ShiftLeft", "ShiftRight");
+    return !this.staminaBlocked && (this.runToggled || this.isDown("ShiftLeft", "ShiftRight"));
+  }
+
+  /** v0.0.131: sprint suppression while stamina is empty (set by the scene's
+   *  survival stats with hysteresis). Also drops the mobile RUN latch so the
+   *  button can't stay lit while sprinting is impossible. */
+  private staminaBlocked = false;
+  setStaminaBlocked(v: boolean): void {
+    this.staminaBlocked = v;
+    if (v && this.runToggled) {
+      this.runToggled = false;
+      this.fpRunBtn?.classList.remove("is-active");
+    }
   }
 
   /**

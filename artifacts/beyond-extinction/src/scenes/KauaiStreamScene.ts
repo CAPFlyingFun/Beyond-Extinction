@@ -36,6 +36,7 @@ const SUN = new THREE.Vector3(-0.55, 0.72, 0.42).normalize();
 const GRAVITY = 22; // m/s² (snappy game gravity)
 const JUMP_V = 7.5; // m/s → ~1.3 m jump apex
 const WATER_ENTER = 0.35; // water at least this deep starts to slow you
+const COMPANION_MAX_DEPTH = 0.55; // companion refuses water deeper than this (knee/thigh)
 const SWIM_DEPTH = 1.3; // deeper than this → swim; shallower → wade on the bed
 const SWIM_EYE = 0.42; // eye height above the surface while swimming (above the swell)
 const WADE_SLOW = 0.6; // horizontal speed factor while wading
@@ -418,6 +419,7 @@ class KauaiStreamScene implements IScene {
   private feetY = EYE_JACK;
   private vy = 0;
   private airborne = false;
+  private staminaEmpty = false; // sprint gate latch (v0.0.131)
   private playerInWater = false; // feet in a water column this frame (for foot-IK release)
   private prevX = SPAWN.x;
   private prevZ = SPAWN.z;
@@ -816,7 +818,10 @@ class KauaiStreamScene implements IScene {
   private groundCharacter(c: IslandCharacter, at: THREE.Vector2): void {
     const s = this.streamer;
     if (!s || !s.tileReadyAt(at.x, at.y)) return;
-    c.place(at.x, Math.max(s.surfaceHeightAt(at.x, at.y), 0), at.y);
+    // v0.0.131: feet on the BED — the old Math.max(h, 0) clamp stood her ON
+    // the ocean surface whenever the seabed dropped below 0. She may wade
+    // shin-deep (movement blocks anything deeper); the floor is a safety net.
+    c.place(at.x, Math.max(s.surfaceHeightAt(at.x, at.y), WATER_Y - 0.9), at.y);
   }
 
   /** Wire foot IK onto a hero when `?footik=1` is set. The ground sampler reads
@@ -861,10 +866,22 @@ class KauaiStreamScene implements IScene {
       const step = Math.min(dist - STOP, maxSpeed * dt);
       if (step > 1e-4 && dt > 1e-4) {
         const inv = 1 / dist;
-        pos.x += dx * inv * step;
-        pos.y += dz * inv * step;
-        npc.setFacing(yaw);
-        npc.setLocomotion(step / dt, run);
+        // v0.0.131: "companion stays ashore" for real — refuse any step whose
+        // bed sits deeper than knee depth below the sea, so she waits at the
+        // waterline instead of strolling across the ocean after the player.
+        const nx2 = pos.x + dx * inv * step;
+        const nz2 = pos.y + dz * inv * step;
+        const sr = this.streamer;
+        const g2 = sr && sr.tileReadyAt(nx2, nz2) ? sr.surfaceHeightAt(nx2, nz2) : null;
+        if (g2 != null && g2 < WATER_Y - COMPANION_MAX_DEPTH) {
+          npc.setLocomotion(0, false);
+          npc.setFacing(yaw); // waiting at the shore, watching you swim
+        } else {
+          pos.x = nx2;
+          pos.y = nz2;
+          npc.setFacing(yaw);
+          npc.setLocomotion(step / dt, run);
+        }
       } else {
         npc.setLocomotion(0, false);
         npc.setFacing(yaw);
@@ -999,8 +1016,9 @@ class KauaiStreamScene implements IScene {
       this.ctx.uiLayer.appendChild(b);
       return b;
     };
-    const rise = mkDepthBtn("▲ RISE", 118);
-    const dive = mkDepthBtn("▼ DIVE", 52);
+    // v0.0.131: lifted clear of the CRCH/RUN cluster they used to overlap
+    const rise = mkDepthBtn("▲ RISE", 196);
+    const dive = mkDepthBtn("▼ DIVE", 130);
     const bind = (b: HTMLButtonElement, set: (v: boolean) => void) => {
       const down = (e: Event) => {
         e.preventDefault();
@@ -1311,6 +1329,17 @@ class KauaiStreamScene implements IScene {
           crawling: false,
           jumped: false,
         });
+      }
+      // v0.0.131: an empty tank means NO sprint. Hysteresis (block at 0,
+      // release at 15) so the gate can't stutter at the boundary.
+      if (this.stats) {
+        if (this.stats.stamina <= 0 && !this.staminaEmpty) {
+          this.staminaEmpty = true;
+          this.ctx.input.setStaminaBlocked(true);
+        } else if (this.staminaEmpty && this.stats.stamina >= 15) {
+          this.staminaEmpty = false;
+          this.ctx.input.setStaminaBlocked(false);
+        }
       }
       this.islandHud?.setActive(true);
       this.islandHud?.update(dt);
