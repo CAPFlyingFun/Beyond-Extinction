@@ -201,7 +201,7 @@ export function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
     // clear"); the map_fragment grades this UP with depth so deep water still
     // reads as a body of water, and keeps surf/foam near-opaque so the surface
     // never looks like a flat film floating over land.
-    opacity: 0.45,
+    opacity: 0.58,
     envMapIntensity: 0.9,
     normalScale: new THREE.Vector2(0.55, 0.55),
     side: waves ? THREE.DoubleSide : THREE.FrontSide, // see the swell from below
@@ -372,7 +372,7 @@ export function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
           foam = clamp(foam + smoothstep(0.55, 0.95, length(cn.xy)) * 0.45, 0.0, 1.0);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.90, 0.95, 0.97), foam);
 
-          // v0.0.137: clear-water alpha. Base opacity (0.45) is the SHALLOW value —
+          // v0.0.137: clear-water alpha. Base opacity (0.58) is the SHALLOW value —
           // you see straight through to the sand at the waterline. Grade it up
           // with depth so open water offshore still reads as a real body, cap
           // below opaque so it never fully hides the bottom, and force foam/surf
