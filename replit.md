@@ -71,3 +71,19 @@ The `artifacts/beyond-extinction: web` workflow runs `vite` (needs `PORT` and
 - Story canon must be preserved (two coffees, 11:47 PM alarm, the colorless vortex
   that is explicitly *not* a blue portal, the quiet pregnancy beat, the Chapter One
   beach with an unnaturally blue high-oxygen sky).
+
+## Playtest notes (2026-07-20, PC session — parked for later)
+- Jack vs Sarah first-person camera heights intentionally differ by 0.05 m
+  (EYE_JACK 1.7 / EYE_SARAH 1.65, KauaiStreamScene.ts) — flagged during
+  playtest as "off"; if the character MODELS don't actually differ ~5 cm at
+  the eyes, align these to the rigs. Not urgent.
+- Idea: break ground-texture wallpaper repetition by blending 4 smaller
+  texture variants per surface (2×2, "4 images = 1 image") instead of one
+  repeating image. The shader already does dual-scale + brightness-noise
+  anti-tiling; a 4-variant blend would be the next step up. Awaiting go-ahead.
+- Godot build's blown-out white sand/underwater (screenshots): almost
+  certainly the sRGB/linear double-conversion trap — web's s2l() is a NO-OP
+  on purpose (KauaiTileStreamer.ts ~line 665: "texture2D already returns
+  LINEAR — no manual decode needed"). Godot: albedo imports need
+  source_color=true and the ported s2l must stay identity; also check
+  tonemap (AgX/ACES) + sky/sun energy.
