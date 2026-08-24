@@ -1,6 +1,6 @@
 {
   "name": "@workspace/beyond-extinction",
-  "version": "0.0.140",
+  "version": "0.0.141",
   "private": true,
   "type": "module",
   "scripts": {
