@@ -26,24 +26,80 @@ import { EXRLoader } from "three/addons/loaders/EXRLoader.js";
  * Spawn: G5 / Wailua (east coast) — the locked-in Chapter-2 arrival. Ocean is
  * to the east (+X); you face inland (west) toward the interior + summit.
  */
-const EYE_JACK = 1.7; // m — Jack's first-person eye height
-const EYE_SARAH = 1.65; // m — Sarah's first-person eye height
-const CAM_FWD = 0.1; // eye ahead of the head (smaller = closer to the head)
+// ── BODY SCALE — a DIAGNOSTIC, not a gameplay feature ──────────────────────
+//
+// `?scene=antscale` runs this exact scene with the player shrunk to a fire-ant
+// queen's 10 mm, to answer one question that no amount of reasoning settles:
+// does this island still read as an island from 1 cm off the ground?
+//
+// It exists because TRADDOMIUM (the ant game) and this project share the same
+// Kauaʻi DEM and the same NHDPlus hydrography, and a proposal was on the table
+// to adopt Beyond's world layer wholesale for it. The numbers below are tuned
+// for a 1.7 m eye. Some of them are tuned for a 1.7 m eye in ways that are
+// invisible until you are 170 times smaller — the river carve especially, which
+// floors at a 96 m width and 3 m depth so a 36 m terrain mesh can render it
+// (kauaiCarveCore.ts:47-58). At human height that is a stream. Look at it from
+// 10 mm and judge.
+//
+// THESE ARE `let` ON PURPOSE. Every one is a length in metres, they are read at
+// runtime from ~36 sites, and rescaling them in one function beats threading a
+// factor through all of them for a scene that exists to be looked at once.
+// `setBodyScale` is idempotent and only ever called from a scene factory, and
+// only one scene is resident at a time.
+let BODY_SCALE = 1;
+
+/** Metres of real player height per metre of the human-tuned constants. */
+export function bodyScale(): number {
+  return BODY_SCALE;
+}
+
+let EYE_JACK = 1.7; // m — Jack's first-person eye height
+let EYE_SARAH = 1.65; // m — Sarah's first-person eye height
+let CAM_FWD = 0.1; // eye ahead of the head (smaller = closer to the head)
 const SKY = new THREE.Color(0x8fbcd4);
 const SUN = new THREE.Vector3(-0.55, 0.72, 0.42).normalize();
 
 // Player vertical physics.
+// GRAVITY DOES NOT SCALE. It is 9.8 m/s² (dressed up to 22 for feel) whatever
+// size you are, and that asymmetry is the honest half of shrinking a character:
+// a small thing falls at the same rate and therefore falls a very long way in
+// body lengths. Leaving it alone is the point, not an oversight.
 const GRAVITY = 22; // m/s² (snappy game gravity)
-const JUMP_V = 7.5; // m/s → ~1.3 m jump apex
-const WATER_ENTER = 0.35; // water at least this deep starts to slow you
-const COMPANION_MAX_DEPTH = 0.55; // companion refuses water deeper than this (knee/thigh)
-const SWIM_DEPTH = 1.3; // deeper than this → swim; shallower → wade on the bed
-const SWIM_EYE = 0.42; // eye height above the surface while swimming (above the swell)
+let JUMP_V = 7.5; // m/s → ~1.3 m jump apex
+let WATER_ENTER = 0.35; // water at least this deep starts to slow you
+let COMPANION_MAX_DEPTH = 0.55; // companion refuses water deeper than this (knee/thigh)
+let SWIM_DEPTH = 1.3; // deeper than this → swim; shallower → wade on the bed
+let SWIM_EYE = 0.42; // eye height above the surface while swimming (above the swell)
 const WADE_SLOW = 0.6; // horizontal speed factor while wading
 const SWIM_SLOW = 0.45; // horizontal speed factor while swimming
-const DIVE_SPEED = 1.4; // m/s the eye descends/rises while DIVE/RISE is held
-const FLOAT_BOB = 0.04; // ± surface float bob (m) — the buoyant idle rock
-const DIVE_BOB = 0.02; // ± hold-depth bob (m) while submerged (neutral buoyancy)
+let DIVE_SPEED = 1.4; // m/s the eye descends/rises while DIVE/RISE is held
+let FLOAT_BOB = 0.04; // ± surface float bob (m) — the buoyant idle rock
+let DIVE_BOB = 0.02; // ± hold-depth bob (m) while submerged (neutral buoyancy)
+
+/**
+ * Shrink (or restore) the player. Every length that is measured against a BODY
+ * moves; nothing that is measured against the WORLD does.
+ *
+ * Speeds scale with length rather than with the square root of it — a true dynamic
+ * similarity argument would use Froude scaling, and this is a look-at-it test,
+ * not a locomotion study. What matters is that a 10 mm player covers ground at
+ * a rate that lets you inspect a riverbank instead of crossing the island.
+ */
+export function setBodyScale(next: number): void {
+  const k = next / BODY_SCALE;
+  BODY_SCALE = next;
+  EYE_JACK *= k;
+  EYE_SARAH *= k;
+  CAM_FWD *= k;
+  JUMP_V *= k;
+  WATER_ENTER *= k;
+  COMPANION_MAX_DEPTH *= k;
+  SWIM_DEPTH *= k;
+  SWIM_EYE *= k;
+  DIVE_SPEED *= k;
+  FLOAT_BOB *= k;
+  DIVE_BOB *= k;
+}
 const STROKE_INTERVAL = 0.85; // s between swim-stroke SFX while stroking along
 const ZONE_DEBOUNCE = 0.6; // s a new land ambience zone must persist before it commits
 
@@ -519,7 +575,20 @@ class KauaiStreamScene implements IScene {
     // Near 0.107 m (beach/Godot parity): the camera rides at the head, so a tiny
     // near plane keeps the first-person BODY from being sliced away underfoot.
     // Distant terrain is fogged long before depth precision matters.
-    this.camera = new THREE.PerspectiveCamera(62, aspect, 0.107, 22000);
+    //
+    // BOTH PLANES MOVE WITH THE BODY, and the far one is the subtle half. Near
+    // 0.107 m in front of a 10 mm player clips everything within ten body
+    // lengths — you would see sky and distant hills and nothing you could walk
+    // up to, which would look like a broken world rather than a small one. But
+    // dropping near alone to 0.6 mm against a 22 km far plane is a 1 : 35
+    // million depth range, and a 24-bit buffer cannot hold it: every surface
+    // would z-fight, water would strobe against its own bed, and the test would
+    // photograph an artefact of itself. This project has no logarithmic depth
+    // buffer (Renderer.ts), so the far plane comes in instead. Fog already
+    // closes at 17 km, and at 10 mm tall you are not walking to the horizon.
+    const near = 0.107 * BODY_SCALE;
+    const far = BODY_SCALE < 1 ? Math.max(2000 * Math.cbrt(BODY_SCALE), 60) : 22000;
+    this.camera = new THREE.PerspectiveCamera(62, aspect, near, far);
     this.camera.position.set(SPAWN.x, EYE_JACK, SPAWN.z);
   }
 
@@ -633,7 +702,10 @@ class KauaiStreamScene implements IScene {
       // ~3.6 m/s run) time-warps to them WITHOUT exceeding IslandCharacter's warp
       // clamp — i.e. the feet stay planted instead of moonwalking. See the
       // speed-synced locomotion in IslandCharacter.update().
-      moveSpeed: 2.4, // brisk walk
+      // SCALED SO YOU CAN LOOK AT SOMETHING. At 2.4 m/s a 10 mm player crosses
+      // a 96 m river carve in forty seconds and the whole 56 km island in six
+      // hours; at 14 mm/s a riverbank is something you can stand at and study.
+      moveSpeed: 2.4 * BODY_SCALE, // brisk walk
       runMultiplier: 2.5, // ~6.0 m/s run
       crouchMultiplier: 0.5,
       crawlMultiplier: 0.3,
@@ -660,7 +732,7 @@ class KauaiStreamScene implements IScene {
     } else {
       this.sarahPos.set(this.spawnX - 5, this.spawnZ - 1.8);
     }
-    void IslandCharacter.load("Jack", 1.83).then((c) => {
+    void IslandCharacter.load("Jack", 1.83 * BODY_SCALE).then((c) => {
       if (this.disposed) return void c.dispose();
       this.jack = c;
       c.setFacing(Math.PI / 2); // face east, toward the ocean/camera
@@ -669,7 +741,7 @@ class KauaiStreamScene implements IScene {
       this.maybeEnableFootIk(c);
       this.applyRoles();
     });
-    void IslandCharacter.load("Sarah", 1.7).then((c) => {
+    void IslandCharacter.load("Sarah", 1.7 * BODY_SCALE).then((c) => {
       if (this.disposed) return void c.dispose();
       this.sarah = c;
       c.setFacing(this.sarahFacing);
@@ -1906,10 +1978,53 @@ class KauaiStreamScene implements IScene {
   }
 }
 
+// EVERY OTHER ENTRY RESETS THE SCALE. `setBodyScale` is module state, so a
+// visit to `?scene=antscale` followed by a normal start would otherwise leave
+// Jack ten millimetres tall in the real game. Restoring it in the factories —
+// rather than in the scene's dispose — means it is right even if the ant-scale
+// scene is torn down abnormally.
+
 /** Dev / continue entry: straight into first person (no arrival cinematic). */
-export const createKauaiStreamScene: SceneFactory = (ctx) =>
-  new KauaiStreamScene(ctx);
+export const createKauaiStreamScene: SceneFactory = (ctx) => {
+  setBodyScale(1);
+  return new KauaiStreamScene(ctx);
+};
 
 /** Story entry (fresh Chapter-Two arrival): the Day-One journal + flyover reveal. */
-export const createKauaiArrivalScene: SceneFactory = (ctx) =>
-  new KauaiStreamScene(ctx, { cinematic: true });
+export const createKauaiArrivalScene: SceneFactory = (ctx) => {
+  setBodyScale(1);
+  return new KauaiStreamScene(ctx, { cinematic: true });
+};
+
+/**
+ * A fire-ant queen's eye height, in metres.
+ *
+ * TRADDOMIUM's founding queen is 5.5 mm and grows to 10 mm; 10 is the round
+ * number that project settled on for an adult, so it is the number to test at.
+ * Against Jack's 1.7 m eye that is a factor of 170.
+ */
+export const QUEEN_HEIGHT_M = 0.01;
+
+/**
+ * `?scene=antscale` — the same island, the same water, the same carve, seen
+ * from 10 mm off the ground.
+ *
+ * NOTHING ABOUT THE WORLD IS CHANGED HERE. No terrain tweak, no carve tweak, no
+ * water tweak. Only the player shrinks, and the camera and speeds that are
+ * measured against the player shrink with him. That is the whole design: if the
+ * island holds up, it holds up on its own terms and the ant game can adopt it;
+ * if it does not, the failures are Beyond's actual tuning rather than something
+ * introduced to make a point.
+ *
+ * KNOWN LIMITS OF THIS TEST, so nothing here is mistaken for a verdict on the
+ * water. This project renders in ABSOLUTE world coordinates with no floating
+ * origin, and the Wailua spawn is at x = 21,290 m, where float32 resolution is
+ * 1.95 mm. A 10 mm player is about five of those steps tall, so expect the
+ * world to shimmer and snap as you move. That is a precision limit of the
+ * coordinate frame, not a fault in the terrain or the rivers, and it would be
+ * fixed by a floating origin rather than by any change to either.
+ */
+export const createAntScaleScene: SceneFactory = (ctx) => {
+  setBodyScale(QUEEN_HEIGHT_M / 1.7);
+  return new KauaiStreamScene(ctx);
+};

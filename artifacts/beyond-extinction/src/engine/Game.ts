@@ -13,7 +13,11 @@ import { AnimStore } from "./AnimStore";
 import { TerrainEditor } from "./TerrainEditor";
 import { TerrainEdit } from "./TerrainEdit";
 import { DevAccess } from "./DevAccess";
-import { createKauaiStreamScene, createKauaiArrivalScene } from "../scenes/KauaiStreamScene";
+import {
+  createAntScaleScene,
+  createKauaiStreamScene,
+  createKauaiArrivalScene,
+} from "../scenes/KauaiStreamScene";
 import { createWaterLabScene } from "../scenes/WaterLabScene";
 import type { SceneContext, SceneFactory } from "./IScene";
 
@@ -157,14 +161,24 @@ export class Game {
     const params = import.meta.env.DEV ? new URLSearchParams(location.search) : null;
     const skipTo = params?.get("skip") ?? null;
     const sceneTo = params?.get("scene") ?? null;
-    const first =
-      sceneTo === "waterlab"
+    // `?scene=antscale` IS NOT DEV-GATED, deliberately and temporarily. It is a
+    // diagnostic that has to be looked at on a phone, on the deployed build,
+    // and the whole point of it is a judgement made by eye on a real device.
+    // The cost is that it is also an intro skip, which is exactly what the gate
+    // above exists to prevent — so this must be re-gated or removed before this
+    // branch goes anywhere near a release.
+    const antScale =
+      new URLSearchParams(location.search).get("scene") === "antscale";
+    const first = antScale
+      ? createAntScaleScene // ?scene=antscale → the island from 10 mm up
+      : sceneTo === "waterlab"
         ? createWaterLabScene // ?scene=waterlab → isolated 3×3 water R&D testbed
         : skipTo === "island"
           ? createKauaiArrivalScene // ?skip=island → the Chapter-Two arrival cinematic
           : skipTo === "kauai"
             ? createKauaiStreamScene // ?skip=kauai → straight into first person
             : initial;
+
     await this.scenes.goTo(first, false);
     this.running = true;
     this.lastTime = performance.now();
