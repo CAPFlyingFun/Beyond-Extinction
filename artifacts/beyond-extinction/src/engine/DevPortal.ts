@@ -34,6 +34,8 @@ export interface DevPortalActions {
   onKauaiStream?: () => void;
   /** Jump to the WaterLab 3×3 water R&D testbed (free-fly camera). */
   onWaterLab?: () => void;
+  /** Jump to the island at fire-ant scale (10 mm eye) — a diagnostic. */
+  onAntScale?: () => void;
   /** Show a brief confirmation toast (used by the spawn-editing buttons). */
   showToast?: (message: string) => void;
 }
@@ -243,7 +245,8 @@ export class DevPortal {
           <button class="be-dev__tool" data-tool="anim">🦴 Animation Editor</button>
           <button class="be-dev__tool" data-tool="island">🏝️ Skip to Island</button>
           <button class="be-dev__tool" data-tool="kauai">🗺️ Kauaʻi Stream</button>
-          <button class="be-dev__tool" data-tool="waterlab">💧 WaterLab (3×3)</button>${spawnRows}
+          <button class="be-dev__tool" data-tool="waterlab">💧 WaterLab (3×3)</button>
+          <button class="be-dev__tool" data-tool="antscale">🐜 Ant Scale (10 mm)</button>${spawnRows}
         </div>
         <button class="be-dev__key be-dev__key--cancel be-dev__menuclose" type="button">Close</button>
       </div>`;
@@ -256,11 +259,15 @@ export class DevPortal {
     menu.addEventListener("pointerdown", (e) => {
       if (e.target === menu) close();
     });
-    menu.querySelector('[data-tool="markers"]')?.addEventListener("click", () => {
-      close();
-      this.actions.onMarkerEditor();
-    });
-    const terrainBtn = menu.querySelector<HTMLButtonElement>('[data-tool="terrain"]');
+    menu
+      .querySelector('[data-tool="markers"]')
+      ?.addEventListener("click", () => {
+        close();
+        this.actions.onMarkerEditor();
+      });
+    const terrainBtn = menu.querySelector<HTMLButtonElement>(
+      '[data-tool="terrain"]',
+    );
     if (this.actions.onTerrainEditor) {
       terrainBtn?.addEventListener("click", () => {
         close();
@@ -280,7 +287,9 @@ export class DevPortal {
       animBtn.disabled = true;
       animBtn.textContent = "🦴 Animation Editor — soon";
     }
-    const islandBtn = menu.querySelector<HTMLButtonElement>('[data-tool="island"]');
+    const islandBtn = menu.querySelector<HTMLButtonElement>(
+      '[data-tool="island"]',
+    );
     if (this.actions.onSkipToIsland) {
       islandBtn?.addEventListener("click", () => {
         close();
@@ -289,7 +298,9 @@ export class DevPortal {
     } else if (islandBtn) {
       islandBtn.remove();
     }
-    const kauaiBtn = menu.querySelector<HTMLButtonElement>('[data-tool="kauai"]');
+    const kauaiBtn = menu.querySelector<HTMLButtonElement>(
+      '[data-tool="kauai"]',
+    );
     if (this.actions.onKauaiStream) {
       kauaiBtn?.addEventListener("click", () => {
         close();
@@ -298,7 +309,9 @@ export class DevPortal {
     } else if (kauaiBtn) {
       kauaiBtn.remove();
     }
-    const waterlabBtn = menu.querySelector<HTMLButtonElement>('[data-tool="waterlab"]');
+    const waterlabBtn = menu.querySelector<HTMLButtonElement>(
+      '[data-tool="waterlab"]',
+    );
     if (this.actions.onWaterLab) {
       waterlabBtn?.addEventListener("click", () => {
         close();
@@ -306,6 +319,17 @@ export class DevPortal {
       });
     } else if (waterlabBtn) {
       waterlabBtn.remove();
+    }
+    const antBtn = menu.querySelector<HTMLButtonElement>(
+      '[data-tool="antscale"]',
+    );
+    if (this.actions.onAntScale) {
+      antBtn?.addEventListener("click", () => {
+        close();
+        this.actions.onAntScale!();
+      });
+    } else if (antBtn) {
+      antBtn.remove();
     }
     // Spawn tools: run the action, toast the result, and keep the menu open so
     // both Jack and Sarah can be set in one visit.
@@ -315,10 +339,14 @@ export class DevPortal {
     };
     menu
       .querySelector('[data-tool="spawn-jack"]')
-      ?.addEventListener("click", () => runSpawn(SpawnTools.current?.setJackHere));
+      ?.addEventListener("click", () =>
+        runSpawn(SpawnTools.current?.setJackHere),
+      );
     menu
       .querySelector('[data-tool="spawn-sarah"]')
-      ?.addEventListener("click", () => runSpawn(SpawnTools.current?.setSarahHere));
+      ?.addEventListener("click", () =>
+        runSpawn(SpawnTools.current?.setSarahHere),
+      );
     menu
       .querySelector('[data-tool="spawn-reset"]')
       ?.addEventListener("click", () => runSpawn(SpawnTools.current?.reset));

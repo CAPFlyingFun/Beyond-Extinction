@@ -1,7 +1,10 @@
 import * as THREE from "three";
 import type { IScene, SceneContext, SceneFactory } from "../engine/IScene";
 import { PlayerController } from "../engine/PlayerController";
-import { KauaiTileStreamer, type KauaiManifest } from "../engine/KauaiTileStreamer";
+import {
+  KauaiTileStreamer,
+  type KauaiManifest,
+} from "../engine/KauaiTileStreamer";
 import { segForDevice, setSegForDevice } from "../engine/terrainSampling";
 import { KauaiHydro } from "../engine/KauaiHydro";
 import { KauaiWaterSim } from "../engine/KauaiWaterSim";
@@ -121,9 +124,21 @@ function catmull(
   const u2 = u * u;
   const u3 = u2 * u;
   return new THREE.Vector3(
-    0.5 * ((2 * p1.x) + (-p0.x + p2.x) * u + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * u2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * u3),
-    0.5 * ((2 * p1.y) + (-p0.y + p2.y) * u + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * u2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * u3),
-    0.5 * ((2 * p1.z) + (-p0.z + p2.z) * u + (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * u2 + (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * u3),
+    0.5 *
+      (2 * p1.x +
+        (-p0.x + p2.x) * u +
+        (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * u2 +
+        (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * u3),
+    0.5 *
+      (2 * p1.y +
+        (-p0.y + p2.y) * u +
+        (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * u2 +
+        (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * u3),
+    0.5 *
+      (2 * p1.z +
+        (-p0.z + p2.z) * u +
+        (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * u2 +
+        (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * u3),
   );
 }
 
@@ -204,7 +219,12 @@ function oceanWaveGLSL(): string {
  * displacement out beyond a near radius (and in the shallows), so the coarse
  * far rings stay flat and don't alias.
  */
-export function buildOceanGrid(rings: number, sectors: number, r0: number, rMax: number): THREE.BufferGeometry {
+export function buildOceanGrid(
+  rings: number,
+  sectors: number,
+  r0: number,
+  rMax: number,
+): THREE.BufferGeometry {
   const pos: number[] = [0, 0, 0]; // centre vertex
   const ratio = Math.pow(rMax / r0, 1 / (rings - 1));
   for (let i = 0; i < rings; i++) {
@@ -290,7 +310,11 @@ export function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
   // sines swell fades to flat far away and in the shallows, and without this the
   // bare plane reads as glassy "ice". World-planar (sampled by world XZ) so it
   // doesn't swim with the camera-centred grid.
-  const flatN = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1);
+  const flatN = new THREE.DataTexture(
+    new Uint8Array([128, 128, 255, 255]),
+    1,
+    1,
+  );
   flatN.needsUpdate = true;
   const uRipple = { value: flatN as THREE.Texture }; // flat until the ripple loads
   void loadTexture("assets/textures/water_normal.png").then((tex) => {
@@ -347,7 +371,10 @@ export function makeOceanMaterial(waves = false): THREE.MeshStandardMaterial {
         );
     } else {
       sh.vertexShader = sh.vertexShader
-        .replace("#include <common>", "#include <common>\nvarying vec3 vOceanWpos;")
+        .replace(
+          "#include <common>",
+          "#include <common>\nvarying vec3 vOceanWpos;",
+        )
         .replace(
           "#include <project_vertex>",
           `#include <project_vertex>
@@ -497,7 +524,8 @@ class KauaiStreamScene implements IScene {
   // loaded with `?footik=1`, so the shipping default is unchanged while it's
   // reviewed on-device.
   private readonly footIkOn =
-    typeof location !== "undefined" && new URLSearchParams(location.search).get("footik") === "1";
+    typeof location !== "undefined" &&
+    new URLSearchParams(location.search).get("footik") === "1";
   private disposed = false;
   // Vertical physics state (feet world Y + vertical velocity + airborne flag),
   // and last frame's XZ so water can drag the horizontal step.
@@ -562,7 +590,12 @@ class KauaiStreamScene implements IScene {
   private loadEtaMs = 0;
   private uwTint?: HTMLDivElement;
   private typeRaf: number | null = null;
-  private flyoverState: { wps: FlyWp[]; total: number; elapsed: number; resolve: () => void } | null = null;
+  private flyoverState: {
+    wps: FlyWp[];
+    total: number;
+    elapsed: number;
+    resolve: () => void;
+  } | null = null;
   private flyoverSkip = false;
   private skipUnsub?: () => void;
   private jackFeetY = 0;
@@ -587,7 +620,8 @@ class KauaiStreamScene implements IScene {
     // buffer (Renderer.ts), so the far plane comes in instead. Fog already
     // closes at 17 km, and at 10 mm tall you are not walking to the horizon.
     const near = 0.107 * BODY_SCALE;
-    const far = BODY_SCALE < 1 ? Math.max(2000 * Math.cbrt(BODY_SCALE), 60) : 22000;
+    const far =
+      BODY_SCALE < 1 ? Math.max(2000 * Math.cbrt(BODY_SCALE), 60) : 22000;
     this.camera = new THREE.PerspectiveCamera(62, aspect, near, far);
     this.camera.position.set(SPAWN.x, EYE_JACK, SPAWN.z);
   }
@@ -668,7 +702,9 @@ class KauaiStreamScene implements IScene {
       const res = await fetch(assetUrl("assets/terrain/kauai/manifest.json"));
       const manifest = (await res.json()) as KauaiManifest;
       setSegForDevice(segForDevice()); // Godot-parity tip: denser grid on desktop
-      this.streamer = new KauaiTileStreamer(this.scene, manifest, { radius: 2 });
+      this.streamer = new KauaiTileStreamer(this.scene, manifest, {
+        radius: 2,
+      });
       // Fresh arrival forces the spawn tile in first (see runArrival); dev/continue
       // kicks the whole ring immediately for an instant drop into first person.
       if (!this.cinematic) this.streamer.update(0, this.spawnX, this.spawnZ);
@@ -767,8 +803,16 @@ class KauaiStreamScene implements IScene {
         footIkOn: this.footIkOn,
         companion: () => ({
           chasing: this.companionChasing,
-          sarah: { x: this.sarahPos.x, z: this.sarahPos.y, yaw: this.sarah?.group.rotation.y ?? 0 },
-          jack: { x: this.jackPos.x, z: this.jackPos.y, yaw: this.jack?.group.rotation.y ?? 0 },
+          sarah: {
+            x: this.sarahPos.x,
+            z: this.sarahPos.y,
+            yaw: this.sarah?.group.rotation.y ?? 0,
+          },
+          jack: {
+            x: this.jackPos.x,
+            z: this.jackPos.y,
+            yaw: this.jack?.group.rotation.y ?? 0,
+          },
         }),
         phase: () => this.phase,
         cinematic: this.cinematic,
@@ -835,7 +879,8 @@ class KauaiStreamScene implements IScene {
         assetUrl("assets/hdri/daysky.exr"),
         (exr) => resolve(exr),
         (ev) => {
-          if (ev.total > 0) this.skyProgress = Math.min(1, ev.loaded / ev.total);
+          if (ev.total > 0)
+            this.skyProgress = Math.min(1, ev.loaded / ev.total);
         },
         (err) => reject(err),
       );
@@ -875,7 +920,10 @@ class KauaiStreamScene implements IScene {
   /** Swap which character the first-person camera is bound to. The outgoing body
    *  is left standing (as an NPC) where the player currently is. */
   switchCharacter(): void {
-    const here = new THREE.Vector2(this.camera.position.x, this.camera.position.z);
+    const here = new THREE.Vector2(
+      this.camera.position.x,
+      this.camera.position.z,
+    );
     if (this.active === "Jack") this.jackPos.copy(here);
     else this.sarahPos.copy(here);
     this.active = this.active === "Jack" ? "Sarah" : "Jack";
@@ -893,7 +941,9 @@ class KauaiStreamScene implements IScene {
         const x = +this.camera.position.x.toFixed(1);
         const z = +this.camera.position.z.toFixed(1);
         // placeAt uses yaw = degToRad(-facing), so facing = -deg(yaw).
-        const facing = +(-THREE.MathUtils.radToDeg(this.player?.yaw ?? 0)).toFixed(1);
+        const facing = +(-THREE.MathUtils.radToDeg(
+          this.player?.yaw ?? 0,
+        )).toFixed(1);
         SpawnStore.setJack({ x, z, rot: facing });
         return `Jack start saved (${x}, ${z})`;
       },
@@ -973,7 +1023,8 @@ class KauaiStreamScene implements IScene {
         const nx2 = pos.x + dx * inv * step;
         const nz2 = pos.y + dz * inv * step;
         const sr = this.streamer;
-        const g2 = sr && sr.tileReadyAt(nx2, nz2) ? sr.surfaceHeightAt(nx2, nz2) : null;
+        const g2 =
+          sr && sr.tileReadyAt(nx2, nz2) ? sr.surfaceHeightAt(nx2, nz2) : null;
         if (g2 != null && g2 < WATER_Y - COMPANION_MAX_DEPTH) {
           npc.setLocomotion(0, false);
           npc.setFacing(yaw); // waiting at the shore, watching you swim
@@ -1004,7 +1055,11 @@ class KauaiStreamScene implements IScene {
    *   • dry land by elevation → beach → jungle-light → jungle-deep → highland →
    *     crags → volcano (summit)
    */
-  private ambientZoneFor(ground: number, depth: number, submerged: boolean): string {
+  private ambientZoneFor(
+    ground: number,
+    depth: number,
+    submerged: boolean,
+  ): string {
     if (submerged) return "amb-underwater";
     if (depth > WATER_ENTER) return ground <= 2 ? "amb-ocean" : "amb-swamp";
     if (ground < 6) return "amb-beach";
@@ -1022,7 +1077,12 @@ class KauaiStreamScene implements IScene {
    * single music channel means only one bed sounds at a time — exactly the
    * ocean-gives-way-to-jungle behaviour we want.
    */
-  private updateAmbience(ground: number, depth: number, submerged: boolean, dt: number): void {
+  private updateAmbience(
+    ground: number,
+    depth: number,
+    submerged: boolean,
+    dt: number,
+  ): void {
     const zone = this.ambientZoneFor(ground, depth, submerged);
     if (zone === this.ambZone) {
       this.pendingZone = "";
@@ -1163,7 +1223,8 @@ class KauaiStreamScene implements IScene {
       getObjective: () => this.objectiveText,
       setFrozen: (frozen) => this.ctx.input.setEnabled(!frozen),
       canOpen: () => this.phase === "play" && !this.disposed,
-      getRole: () => (this.active === "Jack" ? "JACK · Survivor" : "SARAH · Lead Scientist"),
+      getRole: () =>
+        this.active === "Jack" ? "JACK · Survivor" : "SARAH · Lead Scientist",
       playSfx: (n) => this.ctx.audio.playSfx(n),
     });
 
@@ -1185,7 +1246,9 @@ class KauaiStreamScene implements IScene {
       },
       onMap: () => {
         this.ctx.audio.playSfx("ui-select");
-        this.ctx.overlays.showToast("No map yet — you'll need to find one on the island.");
+        this.ctx.overlays.showToast(
+          "No map yet — you'll need to find one on the island.",
+        );
       },
     });
     this.islandHud.setActive(this.phase === "play");
@@ -1221,7 +1284,8 @@ class KauaiStreamScene implements IScene {
       // scrolling ripple normals, not from moving the plane up and down.
       this.waterT += dt;
       const tide = play
-        ? 0.6 * Math.sin(this.waterT * 0.25) + 0.4 * Math.sin(this.waterT * 0.11 + 1.3)
+        ? 0.6 * Math.sin(this.waterT * 0.25) +
+          0.4 * Math.sin(this.waterT * 0.11 + 1.3)
         : 0;
       const waterY = WATER_Y + TIDE_AMP * tide; // swim/wade surface only (NOT the plane)
 
@@ -1303,7 +1367,8 @@ class KauaiStreamScene implements IScene {
           this.sub = Math.max(-SWIM_EYE, Math.min(subMax, this.sub));
 
           const diving = this.sub > 0.02; // head under the surface → hold-depth bob
-          const bob = (diving ? DIVE_BOB : FLOAT_BOB) * Math.sin(this.waterT * 2.2);
+          const bob =
+            (diving ? DIVE_BOB : FLOAT_BOB) * Math.sin(this.waterT * 2.2);
           const target = surfY - this.sub + bob - this.eye;
           this.feetY += (target - this.feetY) * Math.min(1, dt * 6);
           this.vy = 0;
@@ -1355,11 +1420,17 @@ class KauaiStreamScene implements IScene {
         if (this.uwTint) {
           // Depth-driven darkening: barely-there just under the surface (clear,
           // sunlit shallows), ramping up the deeper you dive — like real water.
-          const tgt = submerged ? Math.min(0.34, 0.02 + Math.max(0, this.sub) * 0.05) : 0;
+          const tgt = submerged
+            ? Math.min(0.34, 0.02 + Math.max(0, this.sub) * 0.05)
+            : 0;
           const cur = parseFloat(this.uwTint.style.opacity || "0");
-          this.uwTint.style.opacity = (cur + (tgt - cur) * Math.min(1, dt * 6)).toFixed(3);
+          this.uwTint.style.opacity = (
+            cur +
+            (tgt - cur) * Math.min(1, dt * 6)
+          ).toFixed(3);
         }
-        if (this.wasSubmerged && !submerged) this.ctx.audio.playSfx("breath-gasp");
+        if (this.wasSubmerged && !submerged)
+          this.ctx.audio.playSfx("breath-gasp");
         if (this.wasInWater && !inWater) this.ctx.audio.playSfx("splash-exit");
         this.updateAmbience(ground, depth, submerged, dt);
         this.wasSwimming = swimming;
@@ -1387,7 +1458,10 @@ class KauaiStreamScene implements IScene {
       // prevX/prevZ are advanced below.
       const bodySpeed =
         dt > 1e-4
-          ? Math.hypot(this.camera.position.x - this.prevX, this.camera.position.z - this.prevZ) / dt
+          ? Math.hypot(
+              this.camera.position.x - this.prevX,
+              this.camera.position.z - this.prevZ,
+            ) / dt
           : 0;
       this.prevX = this.camera.position.x;
       this.prevZ = this.camera.position.z;
@@ -1406,9 +1480,15 @@ class KauaiStreamScene implements IScene {
       if (activeChar && p) {
         activeChar.place(bodyX, this.feetY, bodyZ);
         activeChar.setBodyYaw(p.yaw);
-        activeChar.setLocomotion(moved?.moving ? bodySpeed : 0, this.ctx.input.isRunning());
+        activeChar.setLocomotion(
+          moved?.moving ? bodySpeed : 0,
+          this.ctx.input.isRunning(),
+        );
         // Foot IK lets go while the player is off the floor (jumping) or in water.
-        activeChar.setStance({ airborne: this.airborne, inWater: this.playerInWater });
+        activeChar.setStance({
+          airborne: this.airborne,
+          inWater: this.playerInWater,
+        });
         this.camera.position.x -= Math.sin(p.yaw) * CAM_FWD;
         this.camera.position.z -= Math.cos(p.yaw) * CAM_FWD;
       }
@@ -1446,7 +1526,9 @@ class KauaiStreamScene implements IScene {
       this.islandHud?.update(dt);
 
       if (this.hud) {
-        const col = String.fromCharCode(65 + Math.min(7, Math.max(0, Math.round(x / 7000 + 3.5))));
+        const col = String.fromCharCode(
+          65 + Math.min(7, Math.max(0, Math.round(x / 7000 + 3.5))),
+        );
         const row = Math.min(8, Math.max(1, Math.round(z / 7000 + 3.5) + 1));
         const elev = Math.round(s.heightAt(x, z));
         this.hud.textContent = s.tileReadyAt(x, z)
@@ -1465,7 +1547,10 @@ class KauaiStreamScene implements IScene {
     // Slide the window toward the player once they've drifted a few hundred metres
     // (each shift re-samples the bed, so we don't do it every step). The 2.56 km
     // window keeps the player well inside it between shifts.
-    if (this.simReady && (fx - this.simCenter.x) ** 2 + (fz - this.simCenter.y) ** 2 > 400 * 400) {
+    if (
+      this.simReady &&
+      (fx - this.simCenter.x) ** 2 + (fz - this.simCenter.y) ** 2 > 400 * 400
+    ) {
       sim.recenter(fx, fz, s);
       this.simCenter.set(fx, fz);
     }
@@ -1473,7 +1558,8 @@ class KauaiStreamScene implements IScene {
     if (!sim.ready) sim.sampleTerrain(s);
     this.simReady = sim.ready;
     if (this.simReady) {
-      if (this.simCenter.x === 0 && this.simCenter.y === 0) this.simCenter.set(fx, fz);
+      if (this.simCenter.x === 0 && this.simCenter.y === 0)
+        this.simCenter.set(fx, fz);
       if (!this.simSpunUp) {
         sim.update(600); // one-time burst so the valleys are wet on arrival
         this.simSpunUp = true;
@@ -1492,7 +1578,11 @@ class KauaiStreamScene implements IScene {
    *  is the constant base (WATER_Y) — the coast mask owns the waterline. */
   private followWater(planeY: number): void {
     if (!this.water) return;
-    this.water.position.set(this.camera.position.x, planeY, this.camera.position.z);
+    this.water.position.set(
+      this.camera.position.x,
+      planeY,
+      this.camera.position.z,
+    );
     const uTime = (this.water.material as THREE.Material).userData.uTime as
       | { value: number }
       | undefined;
@@ -1651,7 +1741,8 @@ class KauaiStreamScene implements IScene {
     if (pct >= 100) {
       this.loadLabel.textContent = "READY";
       // Map's in but the baked opening is still playing → offer to skip it.
-      if (this.skipBtn && this.openingAudioActive) this.skipBtn.style.display = "";
+      if (this.skipBtn && this.openingAudioActive)
+        this.skipBtn.style.display = "";
       return;
     }
     const eta = this.estimateEtaMs(clamped);
@@ -1680,7 +1771,8 @@ class KauaiStreamScene implements IScene {
     const remaining = (1 - frac) / rate;
     if (!Number.isFinite(remaining) || remaining <= 0) return null;
     const capped = Math.min(remaining, 9 * 60_000); // never show an absurd ETA
-    this.loadEtaMs = this.loadEtaMs > 0 ? this.loadEtaMs * 0.7 + capped * 0.3 : capped;
+    this.loadEtaMs =
+      this.loadEtaMs > 0 ? this.loadEtaMs * 0.7 + capped * 0.3 : capped;
     return this.loadEtaMs;
   }
 
@@ -1692,9 +1784,12 @@ class KauaiStreamScene implements IScene {
     const s = this.streamer;
     const manifestReady = !!s; // the streamer only exists once the manifest decoded
     const spawnReady = !!s && s.tileReadyAt(this.spawnX, this.spawnZ);
-    const ls = s ? s.loadState(this.spawnX, this.spawnZ) : { ready: 0, total: 1 };
+    const ls = s
+      ? s.loadState(this.spawnX, this.spawnZ)
+      : { ready: 0, total: 1 };
     const ringFrac = ls.total > 0 ? ls.ready / ls.total : 0;
-    const treesReady = !!this.trees?.isReady && (this.trees?.cellCount ?? 0) > 0;
+    const treesReady =
+      !!this.trees?.isReady && (this.trees?.cellCount ?? 0) > 0;
     const heroesReady =
       !!this.jack &&
       !!this.sarah &&
@@ -1731,14 +1826,20 @@ class KauaiStreamScene implements IScene {
     const MAX_MS = 120000; // slow connections need the terrain fully in before the camera starts
     for (;;) {
       if (this.disposed) return;
-      const ls = s ? s.loadState(this.spawnX, this.spawnZ) : { ready: 0, total: 1 };
+      const ls = s
+        ? s.loadState(this.spawnX, this.spawnZ)
+        : { ready: 0, total: 1 };
       const tilesReady = ls.total > 0 && ls.ready >= ls.total;
-      const treesReady = !!this.trees?.isReady && (this.trees?.cellCount ?? 0) > 0;
+      const treesReady =
+        !!this.trees?.isReady && (this.trees?.cellCount ?? 0) > 0;
       const heroesReady =
         !!this.jack &&
         !!this.sarah &&
         (s?.tileReadyAt(this.jackPos.x, this.jackPos.y) ?? false);
-      if ((tilesReady && treesReady && heroesReady) || performance.now() - started > MAX_MS) {
+      if (
+        (tilesReady && treesReady && heroesReady) ||
+        performance.now() - started > MAX_MS
+      ) {
         this.loadFracMax = 1;
         this.setLoadProgress(1);
         break;
@@ -1884,7 +1985,10 @@ class KauaiStreamScene implements IScene {
 
   /** Sample the flight path at time `t` (uniform Catmull-Rom through the four
    *  surrounding waypoints — both camera position and look target). */
-  private flySample(wps: FlyWp[], t: number): { p: THREE.Vector3; l: THREE.Vector3 } {
+  private flySample(
+    wps: FlyWp[],
+    t: number,
+  ): { p: THREE.Vector3; l: THREE.Vector3 } {
     let acc = 0;
     let i = 1;
     while (i < wps.length - 1 && t > acc + wps[i].d) {

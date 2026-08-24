@@ -108,6 +108,7 @@ export class Game {
       onSkipToIsland: () => this.skipToIsland(),
       onKauaiStream: () => this.skipToKauai(),
       onWaterLab: () => this.skipToWaterLab(),
+      onAntScale: () => this.skipToAntScale(),
       showToast: (m) => this.overlays.showToast(m),
     });
     // The inventory's DEV tab opens the same PIN gate directly (no 10s hold).
@@ -158,26 +159,29 @@ export class Game {
     // player on the live site can't URL-skip the intro; on the deployed build
     // the same jump is still reachable through the PIN-gated Dev menu's
     // "Skip to Island".
-    const params = import.meta.env.DEV ? new URLSearchParams(location.search) : null;
+    const params = import.meta.env.DEV
+      ? new URLSearchParams(location.search)
+      : null;
     const skipTo = params?.get("skip") ?? null;
     const sceneTo = params?.get("scene") ?? null;
-    // `?scene=antscale` IS NOT DEV-GATED, deliberately and temporarily. It is a
-    // diagnostic that has to be looked at on a phone, on the deployed build,
-    // and the whole point of it is a judgement made by eye on a real device.
-    // The cost is that it is also an intro skip, which is exactly what the gate
-    // above exists to prevent — so this must be re-gated or removed before this
-    // branch goes anywhere near a release.
-    const antScale =
-      new URLSearchParams(location.search).get("scene") === "antscale";
-    const first = antScale
-      ? createAntScaleScene // ?scene=antscale → the island from 10 mm up
-      : sceneTo === "waterlab"
-        ? createWaterLabScene // ?scene=waterlab → isolated 3×3 water R&D testbed
-        : skipTo === "island"
-          ? createKauaiArrivalScene // ?skip=island → the Chapter-Two arrival cinematic
-          : skipTo === "kauai"
-            ? createKauaiStreamScene // ?skip=kauai → straight into first person
-            : initial;
+    // `?scene=antscale` IS DEV-GATED LIKE THE REST OF THEM, because it no
+    // longer needs not to be. It shipped ungated for one commit so the scene
+    // could be judged by eye on a phone against the deployed build — the only
+    // way that judgement can be made — and the cost was that it doubled as an
+    // intro skip, which is precisely what this gate exists to prevent. The
+    // PIN-gated Dev menu now carries "🐜 Ant Scale (10 mm)", so the live-build
+    // route exists behind the same protection as Skip to Island and WaterLab,
+    // and the hole can close.
+    const first =
+      sceneTo === "antscale"
+        ? createAntScaleScene // ?scene=antscale → the island from 10 mm up
+        : sceneTo === "waterlab"
+          ? createWaterLabScene // ?scene=waterlab → isolated 3×3 water R&D testbed
+          : skipTo === "island"
+            ? createKauaiArrivalScene // ?skip=island → the Chapter-Two arrival cinematic
+            : skipTo === "kauai"
+              ? createKauaiStreamScene // ?skip=kauai → straight into first person
+              : initial;
 
     await this.scenes.goTo(first, false);
     this.running = true;
@@ -200,6 +204,17 @@ export class Game {
     this.animEditor.close();
     this.terrainEditor.close();
     void this.scenes.goTo(createKauaiStreamScene);
+  }
+
+  /**
+   * Jump to the island at fire-ant scale — 10 mm eye, everything else this
+   * project's own tuning, untouched. See KauaiStreamScene's `setBodyScale`.
+   */
+  private skipToAntScale(): void {
+    this.markerEditor.close();
+    this.animEditor.close();
+    this.terrainEditor.close();
+    void this.scenes.goTo(createAntScaleScene);
   }
 
   /** Jump to the WaterLab 3×3 water R&D testbed (Dev menu shortcut). */
@@ -233,7 +248,9 @@ export class Game {
     const active = this.scenes.active;
     if (active) {
       const cam =
-        this.terrainEditor.overrideCamera() ?? this.markerEditor.overrideCamera() ?? active.camera;
+        this.terrainEditor.overrideCamera() ??
+        this.markerEditor.overrideCamera() ??
+        active.camera;
       this.renderer.render(active.scene, cam);
       active.renderOverlays?.(this.renderer.renderer);
     }
