@@ -58,6 +58,14 @@ import { SaveManager } from "../engine/SaveManager";
 import { MarkerStore } from "../engine/MarkerStore";
 import { spawnSceneMarkers } from "../engine/MarkerEditor";
 import { AnimStore } from "../engine/AnimStore";
+import {
+  advancePrologueQuest,
+  initialPrologueQuestState,
+  prologuePhaseFor,
+  prologueQuestStateForResume,
+  type PrologueQuestEvent,
+  type PrologueQuestState,
+} from "./prologueQuestFlow";
 
 /**
  * Total run-time (ms) of the opening narration timeline — the baked VO lengths
@@ -118,6 +126,8 @@ type Phase =
   | "sarah-power" // PLAYER controls Sarah: cross to the power unit and restore
   | "cutscene" // closing pull-to-core tableau
   | "done";
+
+type ResumePhase = Extract<Phase, "coffee" | "to-glass" | "to-badge" | "to-sarah">;
 
 /**
  * The prologue's ordered objective beats, keyed by stable id — the exact
@@ -222,10 +232,11 @@ class PrologueCafeteriaScene implements IScene {
   private mainLights: THREE.Light[] = [];
 
   private phase: Phase = "coffee";
+  private questFlow: PrologueQuestState = initialPrologueQuestState();
   // The walking beat to resume at when the player picked "Continue" — resolved
   // from the pending save snapshot in enter(). null = a fresh run (play the cold
   // open + journal narration normally).
-  private resumeAt: Phase | null = null;
+  private resumeAt: ResumePhase | null = null;
   private coffeeCount = 0;
   private interactables: THREE.Object3D[] = [];
   private unsubClick?: () => void;
@@ -676,6 +687,8 @@ class PrologueCafeteriaScene implements IScene {
     // Interaction.
     this.unsubClick = this.ctx.input.onClick(() => this.handleClick());
 
+    this.questFlow = initialPrologueQuestState();
+    this.coffeeCount = 0;
     this.phase = "coffee";
     this.ctx.quest.configure(prologueObjectives);
 
@@ -2885,6 +2898,29 @@ class PrologueCafeteriaScene implements IScene {
     this.checkpoint();
   }
 
+  /** Advance the pure lab quest reducer, then mirror its stable state into the
+   * scene and QuestManager. Async pacing, audio and world animation stay here;
+   * ordering and duplicate rejection live in prologueQuestFlow.ts. */
+  private advanceQuest(event: PrologueQuestEvent): boolean {
+    const previous = this.questFlow;
+    const next = advancePrologueQuest(previous, event);
+    if (next === previous) return false;
+
+    this.questFlow = next;
+    this.coffeeCount = next.coffeeCount;
+    this.phase = prologuePhaseFor(next);
+
+    if (next.step !== previous.step) {
+      this.currentFpTarget = null;
+      if (next.step === "complete") {
+        this.ctx.quest.complete(previous.step);
+      } else {
+        this.ctx.quest.complete(previous.step, { nextId: next.step });
+      }
+    }
+    return true;
+  }
+
   // ---------- Save checkpoints & resume ----------
 
   /**
@@ -2941,7 +2977,7 @@ class PrologueCafeteriaScene implements IScene {
    * the scripted accident/cutscene fold back to the last walkable beat (the
    * player re-plays that short stretch rather than resuming inside a cutscene).
    */
-  private resolveResumePhase(saved: string | undefined): Phase {
+  private resolveResumePhase(saved: string | undefined): ResumePhase {
     switch (saved) {
       case "to-glass":
       case "knock":
@@ -2967,11 +3003,12 @@ class PrologueCafeteriaScene implements IScene {
    * open. Positions are nudged onto open floor so a resume can never wedge the
    * player inside a collider.
    */
-  private resumeAtPhase(phase: Phase): void {
+  private resumeAtPhase(phase: ResumePhase): void {
+    this.questFlow = prologueQuestStateForResume(phase);
+    this.coffeeCount = this.questFlow.coffeeCount;
     // Beats from to-glass onward all follow collecting both coffees.
     const collectedCoffee = phase === "to-glass" || phase === "to-badge" || phase === "to-sarah";
     if (collectedCoffee) {
-      this.coffeeCount = 2;
       for (const s of this.coffeeStations) s.parent?.remove(s);
       this.coffeeStations = [];
       this.spawnCoffee(0);
@@ -3036,15 +3073,7 @@ class PrologueCafeteriaScene implements IScene {
     this.camera.updateProjectionMatrix();
     this.cameraDirector.cut();
 
-    const objective =
-      phase === "to-glass"
-        ? "reach-lab"
-        : phase === "to-badge"
-          ? "find-badge"
-          : phase === "to-sarah"
-            ? "reach-sarah"
-            : "coffee-1";
-    this.ctx.quest.activate(objective);
+    this.ctx.quest.activate(this.questFlow.step);
     this.ctx.overlays.showHint(this.phaseLabel().replace("Prologue — ", ""));
   }
 
@@ -3502,6 +3531,9 @@ class PrologueCafeteriaScene implements IScene {
   private pickUpCoffee(station: THREE.Object3D): void {
     if (this.coffeeCount >= 2) return;
     const idx = (station.userData.index as number) ?? this.coffeeCount;
+    if ((idx !== 0 && idx !== 1) || !this.advanceQuest({ type: "TAKE_COFFEE", index: idx })) {
+      return;
+    }
     // Plant Jack and turn him to the cup he's collecting — no walking between
     // cups. (The pickup "reach" gesture is intentionally disabled for now; the
     // shared gesture system stays wired via playGesture for a future clip.)
@@ -3513,17 +3545,11 @@ class PrologueCafeteriaScene implements IScene {
     station.parent?.remove(station);
     this.coffeeStations = this.coffeeStations.filter((s) => s !== station);
     this.spawnCoffee(idx);
-    this.coffeeCount++;
     PlayerInventory.hold("coffee"); // both cups tracked in held_items
     this.ctx.overlays.hideHint();
-    if (this.coffeeCount === 1) {
-      this.ctx.quest.complete("coffee-1", { nextId: "coffee-2" });
-    } else {
+    if (this.coffeeCount === 2) {
       // Both cups in hand: stay in first person and head for Lab Seven. Next stop
       // is the badge reader at the glass door — which will deny access (no badge).
-      this.phase = "to-glass";
-      this.currentFpTarget = null;
-      this.ctx.quest.complete("coffee-2", { nextId: "reach-lab" });
       this.ctx.overlays.showHint("Take the coffees to Lab Seven — badge in at the door");
       this.checkpoint();
     }
@@ -3537,15 +3563,13 @@ class PrologueCafeteriaScene implements IScene {
    * the glass door permanently.
    */
   private async onUseBadgeReader(): Promise<void> {
-    if (PlayerInventory.hasBadge) {
+    if (this.questFlow.hasBadge) {
+      if (!this.advanceQuest({ type: "USE_READER" })) return;
       // Valid scan: green light, permanent open, on to Sarah.
       this.ctx.audio.playSfx("badge-accept");
       if (this.badgeReaderLight) this.badgeReaderLight.emissive.setHex(0x2ad24a);
       this.glassDoor?.openPermanently();
-      this.ctx.quest.complete("scan-badge", { nextId: "reach-sarah" });
       this.ctx.overlays.showToast("ACCESS GRANTED");
-      this.phase = "to-sarah";
-      this.currentFpTarget = null;
       this.checkpoint();
       return;
     }
@@ -3561,10 +3585,11 @@ class PrologueCafeteriaScene implements IScene {
     await this.wait(1400);
     if (this.disposed) return;
     if (this.badgeReaderLight) this.badgeReaderLight.emissiveIntensity = 2.5;
-    this.ctx.quest.complete("reach-lab", { nextId: "knock" });
+    if (!this.advanceQuest({ type: "USE_READER" })) {
+      this.ctx.input.setEnabled(true);
+      return;
+    }
     this.ctx.overlays.showHint("Access denied. Knock on the lab door");
-    this.phase = "knock";
-    this.currentFpTarget = null;
     this.ctx.input.setEnabled(true);
   }
 
@@ -3590,11 +3615,11 @@ class PrologueCafeteriaScene implements IScene {
     } finally {
       if (!this.disposed) {
         this.ctx.dialogue.hideSubtitle();
-        this.ctx.quest.complete("knock", { nextId: "find-badge" });
-        this.ctx.overlays.showHint("Find your badge — check the server room");
-        this.phase = "to-badge";
+        if (this.advanceQuest({ type: "KNOCK" })) {
+          this.ctx.overlays.showHint("Find your badge — check the server room");
+          this.checkpoint();
+        }
         this.ctx.input.setEnabled(true);
-        this.checkpoint();
       }
     }
   }
@@ -3636,7 +3661,7 @@ class PrologueCafeteriaScene implements IScene {
 
   /** USE on the dropped badge: has_badge = true and the badge prop disappears. */
   private onPickUpBadge(): void {
-    if (PlayerInventory.hasBadge) return;
+    if (PlayerInventory.hasBadge || !this.advanceQuest({ type: "TAKE_BADGE" })) return;
     PlayerInventory.hasBadge = true;
     PlayerInventory.hold("badge");
     this.ctx.audio.playSfx("badge-pickup");
@@ -3644,8 +3669,6 @@ class PrologueCafeteriaScene implements IScene {
       this.badgeProp.parent?.remove(this.badgeProp);
       this.badgeProp = undefined;
     }
-    this.currentFpTarget = null;
-    this.ctx.quest.complete("find-badge", { nextId: "scan-badge" });
     this.ctx.overlays.showHint("Badge found. Return to the Lab Seven door and scan in");
     // The "There it is..." line already fired on proximity; matching Godot, the
     // glass-door reader stays LOCKED until it finishes — the player can walk back
@@ -3671,7 +3694,7 @@ class PrologueCafeteriaScene implements IScene {
     try {
       if (this.badgeFoundVo) await this.badgeFoundVo;
     } finally {
-      if (!this.disposed) this.phase = "to-glass";
+      if (!this.disposed) this.advanceQuest({ type: "BADGE_LINE_FINISHED" });
     }
   }
 
@@ -3686,9 +3709,8 @@ class PrologueCafeteriaScene implements IScene {
    * two-shot beat, then the accident begins (see runAccidentSequence).
    */
   private async triggerReachSarah(): Promise<void> {
-    this.ctx.quest.complete("reach-sarah");
+    if (!this.advanceQuest({ type: "REACH_SARAH" })) return;
     this.ctx.overlays.hideHint();
-    this.phase = "accident";
     this.sarahNav.stop();
     this.faceTowards(this.sarah, this.jack.position);
     // Keep JACK'S FIRST-PERSON camera for the whole exchange (Godot keeps the
