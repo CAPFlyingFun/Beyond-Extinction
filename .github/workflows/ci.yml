@@ -1,6 +1,6 @@
 name: CI
 
-# Typecheck + build gate. Runs on every push and PR so a broken commit is
+# Tests + typecheck + build gate. Runs on every push and PR so a broken commit is
 # caught here instead of only failing the Pages deploy (or, worse, shipping
 # a blank/broken site). Deployment itself stays in deploy-pages.yml.
 on:
@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   verify:
-    name: Typecheck & build
+    name: Tests, typecheck & build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -38,6 +38,9 @@ jobs:
 
       - name: Typecheck
         run: pnpm --filter @workspace/beyond-extinction run typecheck
+
+      - name: Regression tests
+        run: pnpm --filter @workspace/beyond-extinction run test
 
       - name: Build (GitHub Pages target)
         run: pnpm --filter @workspace/beyond-extinction run build:github
