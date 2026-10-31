@@ -42,7 +42,13 @@ export function initialPrologueQuestState(): PrologueQuestState {
 
 export function prologueQuestStateForResume(
   phase: "coffee" | "to-glass" | "to-badge" | "to-sarah",
+  hasSavedBadge = false,
 ): PrologueQuestState {
+  // A reload cannot resume an in-flight voice. Keep the collected badge and
+  // resume at its next stable interaction, with the door still awaiting a scan.
+  if (hasSavedBadge && (phase === "to-glass" || phase === "to-badge")) {
+    return { step: "scan-badge", coffeeCount: 2, hasBadge: true, readerEnabled: true };
+  }
   switch (phase) {
     case "coffee":
       return initialPrologueQuestState();

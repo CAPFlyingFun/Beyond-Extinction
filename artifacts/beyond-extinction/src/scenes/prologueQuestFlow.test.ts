@@ -94,6 +94,22 @@ test("resume phases restore the matching stable quest state", () => {
   });
 });
 
+test("a saved badge resumes at the reader without replaying the search", () => {
+  // Pickup keeps to-badge until the voice finishes; afterward saves use to-glass.
+  for (const phase of ["to-badge", "to-glass"] as const) {
+    const resumed = prologueQuestStateForResume(phase, true);
+    assert.deepEqual(resumed, {
+      step: "scan-badge",
+      coffeeCount: 2,
+      hasBadge: true,
+      readerEnabled: true,
+    });
+    assert.equal(prologuePhaseFor(resumed), "to-glass");
+    assert.strictEqual(advancePrologueQuest(resumed, { type: "TAKE_BADGE" }), resumed);
+    assert.equal(advancePrologueQuest(resumed, { type: "USE_READER" }).step, "reach-sarah");
+  }
+});
+
 test("duplicate interactions are ignored and the badge line gates the reader", () => {
   const afterFirstCoffee = advancePrologueQuest(initialPrologueQuestState(), {
     type: "TAKE_COFFEE",

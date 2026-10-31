@@ -237,6 +237,7 @@ class PrologueCafeteriaScene implements IScene {
   // from the pending save snapshot in enter(). null = a fresh run (play the cold
   // open + journal narration normally).
   private resumeAt: ResumePhase | null = null;
+  private resumeHasBadge = false;
   private coffeeCount = 0;
   private interactables: THREE.Object3D[] = [];
   private unsubClick?: () => void;
@@ -470,6 +471,7 @@ class PrologueCafeteriaScene implements IScene {
     const resume = SaveManager.consumeResume();
     if (resume && resume.scene === "prologue") {
       this.resumeAt = this.resolveResumePhase(resume.phase);
+      this.resumeHasBadge = resume.inventory.hasBadge;
     }
 
     const scene = this.scene;
@@ -3004,7 +3006,8 @@ class PrologueCafeteriaScene implements IScene {
    * player inside a collider.
    */
   private resumeAtPhase(phase: ResumePhase): void {
-    this.questFlow = prologueQuestStateForResume(phase);
+    this.questFlow = prologueQuestStateForResume(phase, this.resumeHasBadge);
+    if (this.questFlow.step === "scan-badge") phase = "to-glass";
     this.coffeeCount = this.questFlow.coffeeCount;
     // Beats from to-glass onward all follow collecting both coffees.
     const collectedCoffee = phase === "to-glass" || phase === "to-badge" || phase === "to-sarah";
@@ -3020,8 +3023,8 @@ class PrologueCafeteriaScene implements IScene {
       // The reader already denied access once, so re-scanning goes to the knock.
       this.glassDenied = true;
     }
-    if (phase === "to-sarah") {
-      // Badge found and scanned: remove the prop, hold it, and open the door.
+    if (this.questFlow.hasBadge) {
+      // Restore a collected badge even when the player saved before scanning it.
       PlayerInventory.hasBadge = true;
       PlayerInventory.hold("badge");
       if (this.badgeProp) {
@@ -3030,7 +3033,7 @@ class PrologueCafeteriaScene implements IScene {
       }
       this.glassDenied = true;
       this.badgeSpotted = true;
-      this.glassDoor?.openPermanently();
+      if (phase === "to-sarah") this.glassDoor?.openPermanently();
     }
 
     // Drop the player at a sensible spot facing their next objective.
